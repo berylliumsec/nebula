@@ -17,7 +17,9 @@ from nebula.v3.database import (
     RuntimeCapacityReservationRow,
 )
 from nebula.v3.deployment_protocol import WorkerIdentity
+from nebula.v3.deployments import API_DRAIN_BOUND_MS, API_DRAIN_GRACE_MS
 from nebula.v3.runtime_coordination import CoordinationConflict, OperationRejected
+from nebula.v3.runtime_worker import WORKER_GRACEFUL_SHUTDOWN_SECONDS
 from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_deployment_lifecycle import host as host
 from tests.v3.test_runtime_coordination import location as location
@@ -264,3 +266,157 @@ async def test_unresolved_same_version_candidate_is_not_retired_or_spawned(
         await root.prepare_api("v2")
     assert not f.retired and f.spawned == [old.runtime_id, current.runtime_id]
     assert f.admitted == admitted
+
+
+def started(root):
+    root.closed, root.started, root._shutdown_committed = False, True, False
+    return root
+
+
+async def age_drain(coordinator, runtime_id, milliseconds):
+    async with coordinator.coordination._write() as session:
+        row = await session.get(RuntimeProcessRow, runtime_id)
+        row.updated_at_ms -= milliseconds
+
+
+async def test_replaced_api_with_open_stream_is_retired_after_drain_grace(
+    inert_supervisor,
+):
+    f = inert_supervisor
+    root = started(f.root)
+    coordinator = root.coordinator
+    streams: dict[str, str] = {}
+
+    async def discard(endpoint):
+        # The supervisor proxy closes relayed streams so clients reconnect.
+        if endpoint in streams:
+            streams[endpoint] = "closed"
+
+    root.proxy = SimpleNamespace(discard_endpoint=discard)
+    old = await root.prepare_api("v1")
+    await promote(root, old)
+    streams[old.endpoint] = "open"
+    current = await root.prepare_api("v2")
+    await promote(root, current)
+
+    # Within its grace the replaced API keeps its stream and health is ready.
+    assert await root.retire_drained_apis() == []
+    assert streams[old.endpoint] == "open" and not f.retired
+    status = await coordinator.status()
+    assert status.health == "ready"
+    assert {row.runtime_id: row.state for row in status.processes}[
+        old.runtime_id
+    ] == "draining"
+
+    await age_drain(coordinator, old.runtime_id, API_DRAIN_GRACE_MS + 1_000)
+    assert await root.retire_drained_apis() == [old.runtime_id]
+    assert f.retired == [old.runtime_id]
+    assert streams[old.endpoint] == "closed"
+    async with coordinator.database.session() as session:
+        assert (await session.get(RuntimeProcessRow, old.runtime_id)).state == (
+            "retired"
+        )
+        assert (
+            await session.get(DeploymentHostRow, "host")
+        ).api_runtime_id == current.runtime_id
+    assert (await coordinator.status()).health == "ready"
+    # The promoted API is never a drain candidate, however old its row is.
+    await age_drain(coordinator, current.runtime_id, API_DRAIN_GRACE_MS * 10)
+    assert await root.retire_drained_apis() == []
+
+
+async def test_draining_api_does_not_degrade_health_within_its_bound(
+    inert_supervisor,
+):
+    f = inert_supervisor
+    root = f.root
+    coordinator = root.coordinator
+    old = await root.prepare_api("v1")
+    await promote(root, old)
+    await promote(root, await root.prepare_api("v2"))
+    # A replaced API winding down may stop renewing its lease.
+    async with coordinator.coordination._write() as session:
+        runtime = await session.get(RuntimeInstanceRow, old.runtime_id)
+        runtime.lease_expires_at_ms = 0
+    assert (await coordinator.status()).health == "ready"
+    # Past the bound, a replaced API still resident means retirement failed.
+    await age_drain(coordinator, old.runtime_id, API_DRAIN_BOUND_MS + 1_000)
+    assert (await coordinator.status()).health == "degraded"
+
+
+async def test_refused_drain_retirement_keeps_the_api_for_a_later_pass(
+    inert_supervisor,
+):
+    f = inert_supervisor
+    root = started(f.root)
+    coordinator = root.coordinator
+    old = await root.prepare_api("v1")
+    await promote(root, old)
+    await promote(root, await root.prepare_api("v2"))
+    await age_drain(coordinator, old.runtime_id, API_DRAIN_GRACE_MS + 1_000)
+
+    async def slow(runtime_id):
+        raise TimeoutError
+
+    root.host.retire = slow
+    assert await root.retire_drained_apis() == []
+    async with coordinator.database.session() as session:
+        assert (await session.get(RuntimeProcessRow, old.runtime_id)).state == (
+            "draining"
+        )
+
+
+async def test_worker_server_exits_with_an_open_event_stream(tmp_path):
+    """A replaced API's open SSE stream cannot hold its process past shutdown."""
+    import time
+
+    import httpx
+    import uvicorn
+
+    opened = asyncio.Event()
+
+    async def app(scope, receive, send):
+        assert scope["type"] == "http"
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {"type": "http.response.body", "body": b": open\n\n", "more_body": True}
+        )
+        opened.set()
+        while True:
+            await asyncio.sleep(0.1)
+            await send(
+                {"type": "http.response.body", "body": b": ping\n\n", "more_body": True}
+            )
+
+    socket = str(tmp_path / "api.sock")
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            uds=socket,
+            lifespan="off",
+            access_log=False,
+            log_level="error",
+            timeout_graceful_shutdown=WORKER_GRACEFUL_SHUTDOWN_SECONDS,
+        )
+    )
+    serving = asyncio.create_task(server.serve())
+    async with httpx.AsyncClient(
+        transport=httpx.AsyncHTTPTransport(uds=socket), base_url="http://api"
+    ) as client:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        async with client.stream("GET", "/events") as response:
+            await opened.wait()
+            stopping = time.monotonic()
+            server.should_exit = True
+            await asyncio.wait_for(
+                serving, timeout=WORKER_GRACEFUL_SHUTDOWN_SECONDS + 5
+            )
+            assert time.monotonic() - stopping < WORKER_GRACEFUL_SHUTDOWN_SECONDS + 5
+            assert response.status_code == 200
