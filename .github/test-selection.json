@@ -1,39 +1,24 @@
 {
-  "change_digest": "ebc321ecddbc53cc786746425a52d4dc827b7dcba97f908538b2081bda1b5057",
-  "reviewed_by": "Claude Code, at the operator's request: stop the provider routing loop from rewording commands a project hook keeps denying",
-  "reason": "Live Core logged 844 native hook denials across 326 provider turns, up to 16 in one turn: the search-routing hook blocks shell find/grep/tree and the model rewords the command, while every call that runs resets the routing deviation count. A hook manifest can now declare route_to tool names; the denial names them (problem, next_action, use_instead), and without route_to the text is unchanged. The routing loop counts completed denials per hook per turn (serial and parallel waves) and the third denial by the same hook ends routing through the existing deviation-limit path. Selected: the new focused tests, the routing/tolerance and tool-loop suites, the native hook suite, the seven project-hook tests of the automation broker suite by node ID (the fixture hook now declares route_to), chat, and the other tests/v3 files matching _ROUTING_DEVIATION_LIMIT, deviation or NativeHook.",
-  "exclusions": "No UI or settings change, so no frontend, Playwright or LAN Core run. tests/v3/test_universal_agent_tools.py is excluded (it matched only the NativeHook grep and has 17 failures already on origin/main from un-awaited coroutine rot); test_automation_runtime.py is selected only for its project-hook tests, since 4 of its host-mode and network-scope tests already fail on origin/main. test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] also fails on pristine origin/main. CI run 44859045248 then showed two more environment-only failures: test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] (NEBULA_V3_DB_ADMIN_RESERVE unset in CI; also red on main) and test_automation_runtime.py::test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io (needs the protected host memory runner, absent in CI). test_runtime_orphan_recovery.py (which only made CI start PostgreSQL; this change does not touch recovery) and that host-runner test are no longer selected.",
+  "change_digest": "bf8936b3ff253908a0723b7228d934fb96a68ab6edff3bd2b77e24f7227f776d",
+  "reviewed_by": "Claude Code, at the operator's request: fix auto-resumed provider turns failing with 'problem' after a worker crash",
+  "reason": "Live Core 2c1c67c: 21 of ~44 turns auto-resumed after worker 332fadd7's LeaseLost failed with error 'problem' (str of KeyError). The ledger appends a step's started intent before the broker creates its ToolCall; a crash between the two leaves a 'running' step with no ToolCall, which crash recovery (built only from ToolCall rows) never settles. When the checkpoint later folds that step, _write_checkpoint deletes failure['problem'] after matching None == None and raises. Fix: restart recovery settles intent-only running steps (reads as rerunnable, others as outcome unknown, never as not having happened), _failure_facts classifies a folded running step as outcome_unknown, and the checkpoint only deletes a problem that exists. Selected: the restart recovery lifecycle suite (with two new regression tests that fail on origin/main with the live KeyError) and the checkpoint/compaction suites that exercise _write_checkpoint and _failure_facts.",
+  "exclusions": "Backend-only recovery and ledger change with no UI, settings or API shape change, so no frontend, Playwright, native or LAN Core run. The 20 restart/recovery tests in tests/v3/test_chat.py (-k 'restart or recover') passed locally; the file is not selected whole because test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] is already red on origin/main in CI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 372,
+    "python": 49,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_hook_denial_routing.py",
-    "tests/v3/test_chat_routing_tolerance.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_malformed_tool_call_feedback.py",
-    "tests/v3/test_specialist_routing_tolerance.py",
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
-    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
-    "tests/v3/test_automation_runtime.py::test_inherited_blocking_before_hook_denies_nested_workspace_command",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_process_write_without_parent_context",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_startup_unreadable_rows.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_api.py"
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_midturn_compaction.py",
+    "tests/v3/test_tool_history_memory.py",
+    "tests/v3/test_turn_prompt_cache.py"
   ],
   "frontend": [],
   "native": [],
