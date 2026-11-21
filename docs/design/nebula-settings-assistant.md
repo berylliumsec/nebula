@@ -1279,7 +1279,8 @@ returns to the board. In the brief, **Approve** and **Deny** answer a pending
 approval with the exact request shown; **Stop** stops a working chat's response
 after confirmation; **Pause goal** and **Resume goal** change its goal; **Ask
 Butler about this** quotes that chat into the open idle thread of its project,
-or starts a new thread there; and
+or starts a new thread there (if that thread is still answering, it switches
+to **Reply in this thread** when Butler finishes, unless you chose); and
 **Open full chat** shows the transcript in a pop-up over Butler mode (scroll
 it, then click outside or press Esc to return; **Open in workbench** leaves for
 the full chat). The pop-up reads the newest messages and older ones on request,
@@ -1352,6 +1353,24 @@ Under Delegate or Act authority Core begins the goal chat at once and returns
 Core refuses (for example a hold), the draft stays and the receipt says why.
 Board cards carry `started_by: butler` for chats Butler began. Watch and Steer
 always leave the draft for the operator.
+
+### Resuming idle goals from the Butler board
+
+**Resume all idle** (beside the search) resumes idle goals in bulk. It reads
+every paused or blocked goal Core lists across projects, matching the search
+when one is set, not only the cards on screen. It then asks to confirm with the
+count ("Resume 47 idle goals?"). To resume a chosen set instead, tick the
+checkbox on each paused or blocked Idle card, or use **Select all** in a
+project's Idle section, which ticks every resumable idle goal Core lists in that
+project. A bar then shows "N selected" with **Clear** and **Resume N**; Esc also
+clears the selection, which is kept on this device only until reload. Proposed
+goals (drafts Butler suggested) have no checkbox and are never started by
+these controls; use **Start** on their card. Each goal resumes through Core's
+own goal action, so a project hold, a spent budget, unavailable harness usage
+or an interrupted response awaiting recovery still refuses it. A status line
+counts progress ("Resuming 12 of 47…") and then reports the result ("Resumed
+45 of 47. 2 stayed idle; their cards say why."). Each refused card shows
+"Not resumed:" with Core's reason and stays ticked so it can be retried.
 
 ## Closing the desktop and shutting down Core
 

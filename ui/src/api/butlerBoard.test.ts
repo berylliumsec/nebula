@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_PROJECTS, boardElapsed, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
+import { ALL_PROJECTS, boardElapsed, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
 import type { ApiClient } from "./client";
 
 function item(overrides: Partial<ButlerBoardItem>): ButlerBoardItem {
@@ -134,5 +134,45 @@ describe("Butler board reads", () => {
     expect(requestIfChanged).toHaveBeenCalledWith("butler/board?section=completed&project_id=p+1&offset=50&limit=50", '"b"', { signal: undefined });
     expect(await listButlerThreadsIfChanged(api, '"t"')).toBeUndefined();
     expect(requestIfChanged).toHaveBeenLastCalledWith("butler/threads", '"t"', { signal: undefined });
+  });
+});
+
+describe("resuming idle goals", () => {
+  it("counts only paused or blocked idle goals as resumable", () => {
+    expect(isResumableIdle(item({ section: "idle", goal: { objective: "x", status: "paused", currentStep: 0, planLength: 1 } }))).toBe(true);
+    expect(isResumableIdle(item({ section: "idle", goal: { objective: "x", status: "blocked", currentStep: 0, planLength: 1 } }))).toBe(true);
+    expect(isResumableIdle(item({ section: "idle", goal: { objective: "x", status: "draft", currentStep: 0, planLength: 1 } }))).toBe(false);
+    expect(isResumableIdle(item({ section: "idle", attention: { kind: "proposal", summary: "" }, goal: { objective: "x", status: "paused", currentStep: 0, planLength: 1 } }))).toBe(false);
+    expect(isResumableIdle(item({ section: "active", goal: { objective: "x", status: "running", currentStep: 0, planLength: 1 } }))).toBe(false);
+  });
+
+  it("pages through Core's whole idle section", async () => {
+    const wire = (id: string, status: string) => ({ session_id: id, title: id, project: { id: "p1", name: "R" }, section: "idle", state: "idle", backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:00:00Z", goal: { objective: "x", status, current_step: 0, plan_length: 1, revision: 2 } });
+    const requestIfChanged = vi.fn()
+      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("a", "paused"), wire("b", "draft")], next_offset: 200, truncated: false } })
+      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("c", "blocked"), wire("a", "paused")], next_offset: null, truncated: false } });
+    const found = await listResumableIdle({ requestIfChanged } as unknown as ApiClient, { q: "fuzz", projectId: "p1" });
+    expect(found.map((entry) => entry.sessionId)).toEqual(["a", "c"]);
+    expect(requestIfChanged.mock.calls.map(([path]) => path)).toEqual([
+      "butler/board?q=fuzz&section=idle&project_id=p1&limit=200",
+      "butler/board?q=fuzz&section=idle&project_id=p1&offset=200&limit=200",
+    ]);
+  });
+
+  it("re-reads a goal whose revision moved and reports Core's refusals", async () => {
+    const writeChatGoal = vi.fn(async (sessionId: string, body: { expectedRevision: number }) => {
+      if (sessionId === "moved" && body.expectedRevision === 1) throw Object.assign(new Error("goal changed on another device; reload before retrying"), { status: 409 });
+      if (sessionId === "held") throw Object.assign(new Error("A project hold paused this goal"), { status: 409 });
+    });
+    const getChatGoal = vi.fn(async () => ({ revision: 5 }));
+    const api = { writeChatGoal, getChatGoal } as unknown as ApiClient;
+    const goal = (revision?: number) => ({ objective: "x", status: "paused", currentStep: 0, planLength: 1, revision });
+    const progress: number[] = [];
+    const outcomes = await resumeIdleGoals(api, [{ sessionId: "moved", goal: goal(1) }, { sessionId: "held", goal: goal(3) }, { sessionId: "fresh", goal: goal(undefined) }], (done) => progress.push(done), 1);
+    expect(outcomes).toEqual([{ sessionId: "moved" }, { sessionId: "held", error: "A project hold paused this goal" }, { sessionId: "fresh" }]);
+    expect(writeChatGoal).toHaveBeenCalledWith("moved", { expectedRevision: 5, action: "resume" });
+    expect(writeChatGoal).toHaveBeenCalledWith("fresh", { expectedRevision: 5, action: "resume" });
+    expect(writeChatGoal.mock.calls.filter(([id]) => id === "held")).toHaveLength(1);
+    expect(progress).toEqual([1, 2, 3]);
   });
 });

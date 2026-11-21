@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, Square, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, Square, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { ALL_PROJECTS, SECTION_LABEL, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSection, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
+import { ALL_PROJECTS, SECTION_LABEL, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSection, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
@@ -118,6 +118,12 @@ export function ButlerModePage() {
   const [approval] = useState<{ id: string; value?: Approval; error?: string }>();
   const [deciding, setDeciding] = useState<string>();
   const [actionNote, setActionNote] = useState<Record<string, string>>({});
+  // Idle goals ticked for resuming, on this device only; Select all remembers what it ticked per group.
+  const [selected, setSelected] = useState<Map<string, ButlerBoardItem>>(new Map());
+  const [selectedAll, setSelectedAll] = useState<Record<string, string[]>>({});
+  const [selecting, setSelecting] = useState<string>();
+  const [resumeRun, setResumeRun] = useState<{ done: number; total: number }>();
+  const [resumeSummary, setResumeSummary] = useState<{ text: string; failed: boolean }>();
 
   const [threads, setThreads] = useState<ButlerThread[]>([]);
   const [threadsError, setThreadsError] = useState("");
@@ -131,6 +137,9 @@ export function ButlerModePage() {
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<"new" | "reply">("new");
   const [about, setAbout] = useState<ButlerBoardItem>();
+  // "Ask about" fell back to a new thread only because this open thread was
+  // still answering; once it settles, the question goes to it instead.
+  const [aboutWaitsFor, setAboutWaitsFor] = useState<string>();
   // The operator's pick for new threads; until then they start in the origin project.
   const [projectChoice, setNewThreadProject] = useState<string>();
   const newThreadProject = projectChoice ?? originProject;
@@ -270,6 +279,7 @@ export function ButlerModePage() {
       return next;
     }, { replace: false });
     setTarget(sessionId ? "reply" : "new");
+    setAboutWaitsFor(undefined);
   }, [setParams]);
 
   const setPhoneTab = (tab: "board" | "threads") => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); if (tab === "board") next.delete("thread"); return next; });
@@ -452,6 +462,88 @@ export function ButlerModePage() {
     }
   };
 
+  const toggleSelected = (item: ButlerBoardItem) => setSelected((current) => {
+    const next = new Map(current);
+    if (next.has(item.sessionId)) next.delete(item.sessionId); else next.set(item.sessionId, item);
+    return next;
+  });
+  const clearSelected = () => { setSelected(new Map()); setSelectedAll({}); };
+  const allSelectedIn = (groupKey: string) => (selectedAll[groupKey]?.length ?? 0) > 0 && selectedAll[groupKey].every((id) => selected.has(id));
+  // Select all reads Core's full idle list for the group, not only the cards the poll returned.
+  const toggleSelectAll = async (groupKey: string) => {
+    if (!api) return;
+    if (allSelectedIn(groupKey)) {
+      const ids = new Set(selectedAll[groupKey]);
+      setSelected((current) => new Map([...current].filter(([id]) => !ids.has(id))));
+      setSelectedAll((current) => { const next = { ...current }; delete next[groupKey]; return next; });
+      return;
+    }
+    setSelecting(groupKey);
+    try {
+      const items = await listResumableIdle(api, { q: query, projectId: groupKey === ALL_PROJECTS ? undefined : groupKey });
+      setSelected((current) => { const next = new Map(current); for (const item of items) next.set(item.sessionId, item); return next; });
+      setSelectedAll((current) => ({ ...current, [groupKey]: items.map((item) => item.sessionId) }));
+      if (!items.length) setResumeSummary({ text: "No paused or blocked goals to select here.", failed: false });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.resume_list_failed", "Butler mode could not list idle goal chats to select.", caught, "butler_mode");
+      setResumeSummary({ text: `${caught instanceof Error ? caught.message : "Core could not list idle goal chats."} Retry Select all.`, failed: true });
+    } finally {
+      setSelecting(undefined);
+    }
+  };
+  // Resume goals one Core action each; a goal Core refuses keeps its reason on its card.
+  const runResume = async (items: ButlerBoardItem[]) => {
+    if (!api || !items.length || resumeRun) return;
+    setResumeSummary(undefined);
+    setResumeRun({ done: 0, total: items.length });
+    const outcomes = await resumeIdleGoals(api, items, (done) => setResumeRun({ done, total: items.length }));
+    const failed = outcomes.filter((outcome) => outcome.error);
+    const resumed = new Set(outcomes.filter((outcome) => !outcome.error).map((outcome) => outcome.sessionId));
+    setActionNote((current) => {
+      const next = { ...current };
+      for (const id of resumed) delete next[id];
+      for (const outcome of failed) next[outcome.sessionId] = `Not resumed: ${outcome.error}`;
+      return next;
+    });
+    setSelected((current) => new Map([...current].filter(([id]) => !resumed.has(id))));
+    if (failed.length) void logCaughtDiagnostic("interface.butler_mode.resume_refused", "Core did not resume some idle goal chats.", new Error(`${failed.length} of ${items.length} goals not resumed: ${failed[0].error}`), "butler_mode");
+    setResumeSummary(failed.length
+      ? { text: `Resumed ${resumed.size} of ${items.length}. ${failed.length} stayed idle; ${failed.length === 1 ? "its card says" : "their cards say"} why.`, failed: true }
+      : { text: `Resumed ${resumed.size} ${resumed.size === 1 ? "goal" : "goals"}.`, failed: false });
+    setResumeRun(undefined);
+    boardEtag.current = undefined;
+    boardPoll.current?.poke();
+  };
+  const resumeAllIdle = async () => {
+    if (!api || resumeRun) return;
+    setSelecting(ALL_PROJECTS);
+    let items: ButlerBoardItem[];
+    try {
+      items = await listResumableIdle(api, { q: query });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.resume_list_failed", "Butler mode could not list idle goal chats to resume.", caught, "butler_mode");
+      setResumeSummary({ text: `${caught instanceof Error ? caught.message : "Core could not list idle goal chats."} Retry Resume all idle.`, failed: true });
+      return;
+    } finally {
+      setSelecting(undefined);
+    }
+    if (!items.length) { setResumeSummary({ text: query.trim() ? "No paused or blocked goals match the search." : "No paused or blocked goals to resume.", failed: false }); return; }
+    const projectCount = new Set(items.map((item) => item.project.id)).size;
+    const goals = `${items.length} paused or blocked ${items.length === 1 ? "goal" : "goals"}`;
+    const approved = await confirm({
+      title: `Resume ${items.length} idle ${items.length === 1 ? "goal" : "goals"}?`,
+      message: `${goals}${query.trim() ? ` matching “${query.trim()}”` : ""}${projectCount > 1 ? ` in ${projectCount} projects` : ""} start working again and use their budgets. Proposed goals are not started.`,
+      confirmLabel: `Resume ${items.length}`,
+    });
+    if (approved) await runResume(items);
+  };
+  useEffect(() => {
+    if (!selected.size) return;
+    const onKey = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape" && !event.defaultPrevented && !resumeRun) clearSelected(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size, resumeRun]);
+
   const [proposalBusy, setProposalBusy] = useState<string>();
   const startProposal = async (sessionId: string) => {
     if (!api) return;
@@ -503,13 +595,26 @@ export function ButlerModePage() {
   const briefIdRef = useRef(briefId);
   briefIdRef.current = briefId;
 
+  useEffect(() => {
+    if (!aboutWaitsFor) return;
+    if (!about || openThreadId !== aboutWaitsFor) { setAboutWaitsFor(undefined); return; }
+    const open = threads.find((thread) => thread.sessionId === aboutWaitsFor);
+    if (!open) return;
+    const answering = streams.current.has(open.sessionId) || Boolean(live[open.sessionId] && !live[open.sessionId].error);
+    if (askAboutTarget(open, about, answering) !== "reply") return;
+    setTarget("reply");
+    setAboutWaitsFor(undefined);
+  }, [about, aboutWaitsFor, live, openThreadId, threads]);
+
   const askAbout = (item: ButlerBoardItem) => {
     if (projectThreadId) updateParams((next) => next.delete("pthread"));
     setAbout(item);
     // Quote into the open thread when it can take it; otherwise start one.
     const open = threads.find((thread) => thread.sessionId === openThreadId);
     const answering = Boolean(open && (streams.current.has(open.sessionId) || (live[open.sessionId] && !live[open.sessionId].error)));
-    setTarget(askAboutTarget(open, item, answering));
+    const next = askAboutTarget(open, item, answering);
+    setTarget(next);
+    setAboutWaitsFor(open && next === "new" && open.project.id === item.project.id ? open.sessionId : undefined);
     setNewThreadProject(item.project.id);
     if (compact) setPhoneTab("threads");
     window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -597,18 +702,26 @@ export function ButlerModePage() {
   };
 
   const states = board?.states;
-  const card = (item: ButlerBoardItem) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} />;
+  const card = (item: ButlerBoardItem) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} selectable={isResumableIdle(item)} selected={selected.has(item.sessionId)} selectDisabled={Boolean(resumeRun)} onSelect={() => toggleSelected(item)} />;
   // One section of a project (or of every project, grouped by status): Completed starts collapsed.
   const sectionView = (group: ButlerBoardGroup, entry: ButlerBoardSectionGroup) => {
     const open = boardSectionOpen(sectionOpen, group.key, entry.section);
     const page = entry.section === "completed" ? completed[group.key] : undefined;
+    const groupSelected = entry.section === "idle" ? [...selected.values()].filter((item) => group.key === ALL_PROJECTS || item.project.id === group.key).length : 0;
     return <div key={entry.section} className={styles.boardSection} data-section={entry.section}>
-      <button type="button" className={styles.sectionHead} aria-expanded={open} onClick={() => toggleSection(group.key, entry.section)}>
-        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-        <i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />
-        <span className={styles.sectionLabel}>{SECTION_LABEL[entry.section]}</span>
-        <span className={styles.muted}>{entry.count.toLocaleString()}</span>
-      </button>
+      <div className={styles.sectionBar}>
+        <button type="button" className={styles.sectionHead} aria-expanded={open} onClick={() => toggleSection(group.key, entry.section)}>
+          {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+          <i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />
+          <span className={styles.sectionLabel}>{SECTION_LABEL[entry.section]}</span>
+          <span className={styles.muted}>{entry.count.toLocaleString()}</span>
+          {groupSelected > 0 && <span className={styles.muted}>· {groupSelected.toLocaleString()} selected</span>}
+        </button>
+        {entry.section === "idle" && open && entry.count > 0 && <label className={styles.selectAll}>
+          <input type="checkbox" checked={allSelectedIn(group.key)} disabled={selecting !== undefined || Boolean(resumeRun)} onChange={() => void toggleSelectAll(group.key)} aria-label={group.label ? `Select all paused or blocked goals in ${group.label}` : "Select all paused or blocked goals"} />
+          {selecting === group.key ? "Selecting…" : "Select all"}
+        </label>}
+      </div>
       {open && <>
         {entry.items.length > 0 && <div className={styles.cards}>{entry.items.map(card)}</div>}
         {page?.error && <div className={styles.error} role="alert">{page.error} <button type="button" className={styles.link} onClick={() => void loadCompleted(group.key, page.items.length, coreCompleted(group.key))}>Retry</button></div>}
@@ -636,8 +749,13 @@ export function ButlerModePage() {
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && search) { event.preventDefault(); setSearch(""); } }} placeholder="Search projects and chats" aria-label="Search projects and chats" />
         {searching && <button type="button" className={styles.clearSearch} aria-label="Clear search" title="Clear search" onClick={() => setSearch("")}><X size={14} aria-hidden="true" /></button>}
       </label>
+      {(board?.counts.idle ?? 0) > 0 && <button type="button" className={styles.secondary} disabled={selecting !== undefined || Boolean(resumeRun)} onClick={() => void resumeAllIdle()}>
+        <Play size={13} aria-hidden="true" /> {selecting === ALL_PROJECTS ? "Reading idle goals…" : "Resume all idle"}
+      </button>}
       {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} goal chats; search to narrow.</span>}
     </div>
+    {resumeRun && <p className={styles.resumeStatus} role="status">Resuming {resumeRun.done.toLocaleString()} of {resumeRun.total.toLocaleString()}…</p>}
+    {!resumeRun && resumeSummary && <p className={styles.resumeStatus} role="status" data-failed={resumeSummary.failed ? "true" : undefined}>{resumeSummary.text} <button type="button" className={styles.link} onClick={() => setResumeSummary(undefined)}>Dismiss</button></p>}
     {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "goal chat" : "goal chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
     {boardError && <div className={styles.error} role="alert">{boardError} The board retries on its own.</div>}
     {!board && !boardError && <p className={styles.muted}>Reading every project's goal chats…</p>}
@@ -658,6 +776,13 @@ export function ButlerModePage() {
         {open && sections.map((entry) => sectionView(group, entry))}
       </div>;
     })}
+    {selected.size > 0 && <div className={styles.selectionBar} role="region" aria-label="Selected idle goals">
+      <span className={styles.selectionCount}>{selected.size.toLocaleString()} selected</span>
+      <button type="button" className={styles.link} disabled={Boolean(resumeRun)} onClick={clearSelected}>Clear</button>
+      <button type="button" className={styles.primary} disabled={Boolean(resumeRun)} onClick={() => void runResume([...selected.values()])}>
+        <Play size={13} aria-hidden="true" /> {resumeRun ? `Resuming ${resumeRun.done} of ${resumeRun.total}…` : `Resume ${selected.size.toLocaleString()}`}
+      </button>
+    </div>}
   </section>;
 
   // Projects with chats that need the operator or are working come first; the
@@ -764,10 +889,10 @@ export function ButlerModePage() {
           : <button type="submit" className={styles.send} aria-label={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} title={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} disabled={!draft.trim() || starting || !api}><ArrowUp size={16} aria-hidden="true" /></button>}
       </div>
       <div className={styles.targets}>
-        <button type="button" className={styles.target} aria-pressed={target === "new"} onClick={() => setTarget("new")}>New thread</button>
-        {openThreadSummary && <button type="button" className={styles.target} aria-pressed={target === "reply"} onClick={() => setTarget("reply")}>Reply in this thread</button>}
+        <button type="button" className={styles.target} aria-pressed={target === "new"} onClick={() => { setTarget("new"); setAboutWaitsFor(undefined); }}>New thread</button>
+        {openThreadSummary && <button type="button" className={styles.target} aria-pressed={target === "reply"} onClick={() => { setTarget("reply"); setAboutWaitsFor(undefined); }}>Reply in this thread</button>}
         {target === "new" && <label className={styles.projectPick}><span className={styles.muted}>in</span>
-          <select value={newThreadProject ?? ""} onChange={(event) => { setNewThreadProject(event.target.value); if (about && about.project.id !== event.target.value) setAbout(undefined); }} aria-label="Project for the new thread">
+          <select value={newThreadProject ?? ""} onChange={(event) => { setNewThreadProject(event.target.value); setAboutWaitsFor(undefined); if (about && about.project.id !== event.target.value) setAbout(undefined); }} aria-label="Project for the new thread">
             {visibleProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
         </label>}
@@ -899,7 +1024,7 @@ export function ButlerModePage() {
   </div>;
 }
 
-function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, onDecide, onStop, onAsk, onOpen, showProject }: {
+function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, onDecide, onStop, onAsk, onOpen, showProject, selectable, selected, selectDisabled, onSelect }: {
   item: ButlerBoardItem;
   clock: number;
   expanded: boolean;
@@ -912,19 +1037,29 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   onAsk: () => void;
   onOpen: () => void;
   showProject: boolean;
+  selectable: boolean;
+  selected: boolean;
+  selectDisabled: boolean;
+  onSelect: () => void;
 }) {
   const elapsed = boardElapsed(item.section !== "active" || item.state === "idle" || item.state === "failed" ? item.updatedAt : item.turnStartedAt ?? item.updatedAt, clock);
   const runtime = [showProject ? item.project.name : undefined, item.model, item.isSubagent ? "Subagent" : undefined, item.proposedBy ? "Proposed by Butler" : item.startedBy ? "Started by Butler" : undefined].filter(Boolean).join(" · ");
   const goal = item.goal ? `Goal ${Math.min(item.goal.currentStep + 1, Math.max(item.goal.planLength, 1))}/${Math.max(item.goal.planLength, 1)} · ${item.goal.status}` : undefined;
   const pendingApproval = item.attention?.kind === "approval" && approval?.id === item.attention.actionId ? approval : undefined;
   // The section's name is in the label too: the dot's colour and shape are not the only cue.
-  return <article className={styles.card} data-section={item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} aria-label={`${item.title}: ${boardStatusLabel(item)}, ${SECTION_LABEL[item.section]}`}>
+  return <article className={styles.card} data-section={item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} aria-label={`${item.title}: ${boardStatusLabel(item)}, ${SECTION_LABEL[item.section]}`}>
+    <div className={styles.cardRow}>
+    {selectable && <label className={styles.cardSelect} title={selected ? "Deselect" : "Select to resume"}>
+      <input type="checkbox" checked={selected} disabled={selectDisabled} onChange={onSelect} aria-label={`Select ${item.title} to resume`} />
+    </label>}
     <button type="button" className={styles.cardSummary} aria-expanded={expanded} onClick={onToggle}>
       <span className={styles.cardHead}><i className={styles.sectionDot} data-section={item.section} data-goal={item.goal?.status} aria-hidden="true" /><span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
       {runtime && <span className={styles.cardMeta}>{runtime}</span>}
       {item.now && <span className={styles.cardNow} data-state={item.state}>{item.now}</span>}
       {goal && !expanded && <span className={styles.cardMeta}>{goal}</span>}
+      {note && !expanded && <span className={styles.cardNote} role="status" data-failed={note.startsWith("Not resumed") ? "true" : undefined}>{note}</span>}
     </button>
+    </div>
     {expanded && <div className={styles.cardDetail}>
       {item.goal && <p className={styles.cardMeta}>{goal} · {item.goal.objective}</p>}
       {item.attention?.kind === "approval" && <div className={styles.approval}>

@@ -19,6 +19,7 @@ import { withOwnedCleanup } from "./fixtures/owned-cleanup";
  * survives a reload through its URL; "Ask Butler about this" starts a thread
  * in the card's project; Stop on a card ends the chat's response, which
  * pauses its goal, and the board moves it to Idle once Core reports it.
+ * A ticked idle card and Resume all idle resume it through Core again.
  */
 
 interface TestCore {
@@ -308,7 +309,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
         expect(written.ok(), await written.text()).toBe(true);
       };
       const workId = await goalChat("Fuzz parser");
-      await goalChat("Triage crash logs", {proposed_by_butler: true});
+      const proposalId = await goalChat("Triage crash logs", {proposed_by_butler: true});
       await goalAction(await goalChat("Dropped idea"), "cancel");
       const plain = await api.post("chat/completions", {headers: {"Idempotency-Key": `butler-mode-plain-${Date.now()}`}, timeout: 120_000, data: {
         engagement_id: bounty, provider_id: model.id, model: "security-model", tools_enabled: false, include_knowledge: false,
@@ -371,7 +372,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       expect(boardRead.items.map(item => item.session_id)).not.toContain(plainId);
       const projectHead = bountyGroup.getByRole("button", {name: /^Bounty fixture/});
       for (const text of ["3 goals", "1 active", "1 idle", "1 completed"]) await expect(projectHead).toContainText(text);
-      const sectionHead = (name: string) => bountyGroup.locator(`div[data-section="${name}"] > button`);
+      const sectionHead = (name: string) => bountyGroup.locator(`div[data-section="${name}"] > div > button`);
       await expect(sectionHead("active")).toHaveAttribute("aria-expanded", "true");
       await expect(sectionHead("active")).toContainText("Active1");
       await expect(sectionHead("idle")).toHaveAttribute("aria-expanded", "true");
@@ -486,10 +487,13 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const aboutThread = (await (await api.get("butler/threads")).json() as Threads).items.find(item => item.title === PROMPTS.about);
       expect(aboutThread?.project.id).toBe(bounty);
       // Asking about the same chat again quotes it into the open thread (same project).
+      // Asked right after the answer appears, the thread may still be
+      // settling: the composer starts a new thread, then switches to Reply
+      // once Core reports the thread idle.
       await showBoard(page);
       if (!await brief.isVisible()) await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
       await brief.getByRole("button", {name: "Ask Butler about this"}).click();
-      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true");
+      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
       await composer.fill("QUOTE-FOLLOW-UP Is it still running?");
       await page.getByRole("button", {name: "Send reply"}).click();
       await expect.poll(() => stub.prompts().find(prompt => prompt.endsWith("QUOTE-FOLLOW-UP Is it still running?")) ?? "", {timeout: 60_000})
@@ -512,6 +516,45 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect.poll(async () => ((await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json()) as Activity)
         .find(item => item.session_id === workId)?.state, {timeout: 60_000}).toBe("idle");
       expect((await (await api.get(`chat/sessions/${workId}/goal`)).json() as {status: string}).status).toBe("paused");
+
+      // Resume idle goals: a proposed goal has no checkbox; a ticked paused card
+      // resumes through Core, then Resume all idle reads Core's list and confirms.
+      const goalStatus = async () => (await (await api.get(`chat/sessions/${workId}/goal`)).json() as {status: string}).status;
+      // A running goal bumps its revision each turn; re-read until the pause lands.
+      const pauseIfRunning = () => expect(async () => {
+        if (await goalStatus() !== "running") return;
+        const goal = await (await api.get(`chat/sessions/${workId}/goal`)).json() as {revision: number};
+        const written = await coreMutation(api, "post", `chat/sessions/${workId}/goal/actions`, {expected_revision: goal.revision, action: "pause"});
+        expect(written.ok() || written.status() === 409, await written.text()).toBe(true);
+        expect(await goalStatus()).not.toBe("running");
+      }).toPass({timeout: 60_000});
+      await expect(proposal.getByRole("checkbox")).toHaveCount(0);
+      await pausedCard.getByRole("checkbox", {name: `Select ${workTitle} to resume`}).check();
+      const selection = board.getByRole("region", {name: "Selected idle goals"});
+      await expect(selection).toContainText("1 selected");
+      await expect(sectionHead("idle")).toContainText("1 selected");
+      await selection.getByRole("button", {name: "Resume 1"}).click();
+      await expect(board.getByRole("status").filter({hasText: "Resumed 1 goal."})).toBeVisible({timeout: 60_000});
+      await expect(selection).toHaveCount(0);
+      await expect.poll(goalStatus, {timeout: 60_000}).not.toBe("paused");
+      await expect(pausedCard).toHaveCount(0, {timeout: 60_000});
+      await expect.poll(async () => ((await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json()) as Activity)
+        .find(item => item.session_id === workId)?.state, {timeout: 90_000}).toBe("idle");
+      await pauseIfRunning();
+      await expect(pausedCard).toBeVisible({timeout: 30_000});
+      await board.getByRole("button", {name: "Resume all idle"}).click();
+      const resumeDialog = page.getByRole("dialog");
+      await expect(resumeDialog).toContainText("Resume 1 idle goal?");
+      await expect(resumeDialog).toContainText("Proposed goals are not started.");
+      await resumeDialog.getByRole("button", {name: "Resume 1"}).click();
+      await expect(board.getByRole("status").filter({hasText: "Resumed 1 goal."})).toBeVisible({timeout: 60_000});
+      await expect.poll(goalStatus, {timeout: 60_000}).not.toBe("paused");
+      await expect(proposal).toBeVisible();
+      expect((await (await api.get(`chat/sessions/${proposalId}/goal`)).json() as {status: string}).status).toBe("draft");
+      // Leave the chat quiet again for the rest of the journey.
+      await expect.poll(async () => ((await (await api.get(`chat/session-activity?engagement_id=${bounty}`)).json()) as Activity)
+        .find(item => item.session_id === workId)?.state, {timeout: 90_000}).toBe("idle");
+      await pauseIfRunning();
 
       // Butler's own places: Oversight and Settings tabs, and the project's ongoing thread.
       const sections = page.getByRole("navigation", {name: "Butler sections"});
@@ -583,7 +626,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the proposed goal had no checkbox, a ticked paused card resumed through Resume 1, and Resume all idle confirmed and resumed it again while leaving the proposal a draft; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }

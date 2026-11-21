@@ -1230,6 +1230,20 @@ def test_product_help_explains_butler_board_goal_sections(monkeypatch):
     assert "chats without a goal are not listed" in text
 
 
+def test_product_help_explains_resuming_idle_goals_from_butler_board(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I resume all idle goals, or select several to resume, in Butler mode?"
+    )
+    assert any(
+        item["heading"] == "Resuming idle goals from the Butler board"
+        for item in matches
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Resume all idle**" in text and "**Select all**" in text
+    assert "**Resume N**" in text and "Proposed" in text
+
+
 def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("How do I archive or delete a Butler thread?")

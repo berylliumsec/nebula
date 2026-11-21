@@ -1,21 +1,27 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ButlerModePage } from "./ButlerModePage";
 
 const requestIfChanged = vi.fn();
-const api = { requestIfChanged };
+const writeChatGoal = vi.fn();
+const getChatGoal = vi.fn();
+const confirm = vi.fn();
+const listChatMessages = vi.fn(async () => []);
+const getPendingChatTurn = vi.fn(async () => null);
+const api = { requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn };
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: undefined, engagements: [], providers: [], harnesses: [], selectEngagement: vi.fn() }),
 }));
 vi.mock("../state/ButlerPanelBridge", () => ({ useButlerPanelBridge: () => null }));
-vi.mock("../components/DialogSystem", () => ({ useConfirmation: () => vi.fn() }));
+vi.mock("../components/DialogSystem", () => ({ useConfirmation: () => confirm }));
 vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => false }));
 vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
 vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
+vi.mock("./ButlerChatBrief", () => ({ ButlerChatBrief: ({ onAsk }: { onAsk: (value: unknown) => void }) => <button type="button" onClick={() => onAsk(undefined)}>Ask Butler about this</button> }));
 
 const research = { id: "p1", name: "Research" };
 const bounty = { id: "p2", name: "Bounty" };
@@ -109,8 +115,123 @@ it("groups by status into the three sections across projects", async () => {
   const board = screen.getByRole("region", { name: "Status board" });
   await within(board).findByRole("article", { name: "Fuzz parser: Working, Active" });
   expect(within(board).getByRole("button", { name: /Group: Status/ })).toBeVisible();
-  const sections = [...board.querySelectorAll<HTMLElement>("div[data-section] > button")].map((head) => [head.parentElement?.dataset.section, head.getAttribute("aria-expanded")]);
+  const sections = [...board.querySelectorAll<HTMLElement>("div[data-section] > div > button")].map((head) => [head.parentElement?.parentElement?.dataset.section, head.getAttribute("aria-expanded")]);
   expect(sections).toEqual([["active", "true"], ["idle", "true"], ["completed", "false"]]);
   // Cards name their project when the board is not grouped by project.
   expect(within(within(board).getByRole("article", { name: "Install driver: Needs you, Active" })).getByText(/Bounty/)).toBeVisible();
+});
+
+const idlePage = {
+  ...poll,
+  states: null,
+  items: [
+    wire("Paused triage", research, "idle", "idle", "paused", "Paused"),
+    wire("Blocked build", bounty, "idle", "idle", "blocked", "Blocked"),
+    wire("Proposed sweep", research, "idle", "idle", "draft", "Proposed"),
+  ],
+};
+
+it("resumes the idle goals the operator ticks and keeps Core's refusal on the card", async () => {
+  writeChatGoal.mockResolvedValue({});
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const paused = await within(board).findByRole("article", { name: "Paused triage: Paused, Idle" });
+  // Active cards cannot be ticked; paused and blocked ones can.
+  expect(within(within(board).getByRole("article", { name: "Fuzz parser: Working, Active" })).queryByRole("checkbox")).not.toBeInTheDocument();
+  await userEvent.click(within(paused).getByRole("checkbox", { name: "Select Paused triage to resume" }));
+  const bar = within(board).getByRole("region", { name: "Selected idle goals" });
+  expect(within(bar).getByText("1 selected")).toBeVisible();
+  expect(paused).toHaveAttribute("data-selected", "true");
+
+  await userEvent.click(within(bar).getByRole("button", { name: "Resume 1" }));
+  await within(board).findByText("Resumed 1 goal.");
+  expect(writeChatGoal).toHaveBeenCalledWith("Paused triage", { expectedRevision: 1, action: "resume" });
+  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+
+  writeChatGoal.mockRejectedValueOnce(Object.assign(new Error("goal budget is spent"), { status: 409 }));
+  await userEvent.click(within(paused).getByRole("checkbox", { name: "Select Paused triage to resume" }));
+  await userEvent.click(within(board).getByRole("button", { name: "Resume 1" }));
+  await within(board).findByText(/Resumed 0 of 1\. 1 stayed idle; its card says why\./);
+  expect(within(paused).getByText("Not resumed: goal budget is spent")).toHaveAttribute("data-failed", "true");
+  // A refused goal stays ticked so the operator can retry it.
+  expect(paused).toHaveAttribute("data-selected", "true");
+  await userEvent.keyboard("{Escape}");
+  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+});
+
+it("Resume all idle reads Core's full idle list, confirms, and skips proposed goals", async () => {
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    if (path.includes("section=idle")) return { value: idlePage, etag: '"i"' };
+    return { value: poll, etag: '"b"' };
+  });
+  writeChatGoal.mockResolvedValue({});
+  confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  await within(board).findByRole("article", { name: "Paused triage: Paused, Idle" });
+
+  await userEvent.click(within(board).getByRole("button", { name: "Resume all idle" }));
+  await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+  expect(requestIfChanged).toHaveBeenCalledWith("butler/board?section=idle&limit=200", undefined, { signal: undefined });
+  expect(confirm.mock.calls[0][0]).toMatchObject({ title: "Resume 2 idle goals?", confirmLabel: "Resume 2" });
+  expect(confirm.mock.calls[0][0].message).toContain("in 2 projects");
+  expect(writeChatGoal).not.toHaveBeenCalled();
+
+  await userEvent.click(within(board).getByRole("button", { name: "Resume all idle" }));
+  await within(board).findByText("Resumed 2 goals.");
+  expect(writeChatGoal.mock.calls.map(([id]) => id).sort()).toEqual(["Blocked build", "Paused triage"]);
+});
+
+it("Select all in a project ticks every resumable idle goal Core lists there", async () => {
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    if (path.includes("section=idle")) return { value: { ...idlePage, items: idlePage.items.filter((item) => item.project.id === "p1") }, etag: '"i"' };
+    return { value: poll, etag: '"b"' };
+  });
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  await within(board).findByRole("article", { name: "Paused triage: Paused, Idle" });
+  const selectAll = within(board).getByRole("checkbox", { name: "Select all paused or blocked goals in Research" });
+  await userEvent.click(selectAll);
+  await waitFor(() => expect(selectAll).toBeChecked());
+  expect(requestIfChanged).toHaveBeenCalledWith("butler/board?section=idle&project_id=p1&limit=200", undefined, { signal: undefined });
+  expect(within(within(board).getByRole("region", { name: "Selected idle goals" })).getByText("1 selected")).toBeVisible();
+  await userEvent.click(selectAll);
+  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+});
+
+describe("asking about a chat while the open thread is answering", () => {
+  const thread = (state: string) => ({ session_id: "t1", title: "Earlier question", project: bounty, state, updated_at: "2026-11-20T10:00:00Z" });
+  const serveThreads = (states: string[]) => {
+    let reads = 0;
+    requestIfChanged.mockImplementation(async (path: string) => {
+      if (path.startsWith("butler/threads")) { const state = states[Math.min(reads, states.length - 1)]; reads += 1; return { value: { items: [thread(state)] }, etag: `"t${reads}"` }; }
+      return { value: poll, etag: '"b"' };
+    });
+  };
+  const mountOnThread = () => render(<MemoryRouter initialEntries={["/butler?thread=t1&chat=Install%20driver"]}><ButlerModePage /></MemoryRouter>);
+
+  it("starts as a new thread, then quotes into the thread once it settles", async () => {
+    serveThreads(["working", "idle"]);
+    mountOnThread();
+    const reply = await screen.findByRole("button", { name: "Reply in this thread" });
+    await userEvent.click(await screen.findByRole("button", { name: "Ask Butler about this" }));
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Install driver", { selector: "span" })).toBeVisible();
+    await waitFor(() => expect(reply).toHaveAttribute("aria-pressed", "true"), { timeout: 8000 });
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "false");
+  }, 15_000);
+
+  it("keeps the operator's own choice of a new thread", async () => {
+    serveThreads(["working", "idle"]);
+    mountOnThread();
+    const reply = await screen.findByRole("button", { name: "Reply in this thread" });
+    await userEvent.click(await screen.findByRole("button", { name: "Ask Butler about this" }));
+    await userEvent.click(screen.getByRole("button", { name: "New thread" }));
+    await waitFor(() => expect(requestIfChanged.mock.calls.filter(([path]) => String(path).startsWith("butler/threads")).length).toBeGreaterThan(1), { timeout: 8000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reply).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
+  }, 15_000);
 });
