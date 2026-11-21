@@ -152,6 +152,11 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
 
       use: { ...devices["iPhone 13"], viewport: { width: 430, height: 932 } },
     },
+    // Work board geometry in desktop WebKit; the assistant-real projects cover Chromium and phone WebKit.
+    {
+      name: "assistant-real-webkit-desktop", testMatch: "**/work-import.spec.ts", grep: /work hub board layout /,
+      use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } },
+    },
     {
       name: "real-core",
       testMatch: "**/real-core.spec.ts",
