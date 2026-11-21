@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .async_utils import resolve_workspace
 
 from copy import deepcopy
@@ -1109,7 +1110,7 @@ class AutomationToolPlatform:
                     )
                 try:
                     mcp_profiles = tuple(
-                        McpServerProfile.model_validate(item)
+                        decode_stored(McpServerProfile, item)
                         for item in run.runtime_snapshot.get("mcp_snapshot", [])
                     )
                     extra_components = await self.mcp_platform.chat_components(

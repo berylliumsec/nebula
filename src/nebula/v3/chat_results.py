@@ -4,6 +4,7 @@ import re
 from hashlib import sha256
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
+from .stored_entities import decode_stored
 from .artifacts import ArtifactStoreError
 from .database import EntityRow
 from .domain import (
@@ -56,7 +57,7 @@ def results_router(store, artifacts):
         session = await store.get(ChatSession, session_id)
         async with store.database.session() as database:
             page = [
-                ChatMessage.model_validate(row.payload)
+                decode_stored(ChatMessage, row.payload)
                 for row in (
                     await database.scalars(
                         select(EntityRow)
@@ -79,7 +80,7 @@ def results_router(store, artifacts):
                 message for message in page[:limit] if not message_is_replaced(message)
             ]
             calls = [
-                ToolCall.model_validate(row.payload)
+                decode_stored(ToolCall, row.payload)
                 for row in (
                     await database.scalars(
                         select(EntityRow).where(
@@ -126,7 +127,7 @@ def results_router(store, artifacts):
             if turn_id and artifacts is not None:
                 async with store.database.session() as database:
                     diffs = [
-                        Artifact.model_validate(row.payload)
+                        decode_stored(Artifact, row.payload)
                         for row in (
                             await database.scalars(
                                 select(EntityRow).where(
@@ -214,7 +215,7 @@ def results_router(store, artifacts):
                 .offset(offset)
                 .limit(41)
             )
-            page = [ChatMessage.model_validate(row.payload) for row in rows]
+            page = [decode_stored(ChatMessage, row.payload) for row in rows]
             has_more = len(page) > 40
             messages = [
                 message for message in page[:40] if not message_is_replaced(message)

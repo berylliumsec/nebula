@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, or_
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .domain import ChatDecision, ChatMessage, ChatSession
 from .storage import ConflictError
@@ -31,7 +32,7 @@ async def decisions_for(store, session_id, project_id):
             )
             .order_by(EntityRow.created_at, EntityRow.id)
         )
-        return [ChatDecision.model_validate(row.payload) for row in rows]
+        return [decode_stored(ChatDecision, row.payload) for row in rows]
 
 
 async def decision_snapshot(store, session_id, project_id):

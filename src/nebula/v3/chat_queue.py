@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, Response, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from .stored_entities import decode_stored
 from .project_hold_gate import is_held
 from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatHistoryConflict, unarchive_chat_session
@@ -208,7 +209,7 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
     row = await transaction.session.get(EntityRow, queue_id)
     if row is None:
         raise ConflictError("Follow-up queue was removed")
-    queue = ChatQueue.model_validate(row.payload)
+    queue = decode_stored(ChatQueue, row.payload)
     items = [dict(item) for item in queue.items]
     item = next((item for item in items if item["id"] == item_id), None)
     if item is None or item["status"] != "claiming" or queue.paused:
@@ -227,11 +228,14 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
         not in {HarnessProfile.entity_kind, ProviderProfile.entity_kind}
         or not _authorization_unchanged(
             item,
-            (
-                HarnessProfile
-                if profile_row.kind == HarnessProfile.entity_kind
-                else ProviderProfile
-            ).model_validate({**profile_row.payload, "revision": profile_row.revision}),
+            decode_stored(
+                (
+                    HarnessProfile
+                    if profile_row.kind == HarnessProfile.entity_kind
+                    else ProviderProfile
+                ),
+                {**profile_row.payload, "revision": profile_row.revision},
+            ),
         )
     ):
         raise ConflictError("Runtime authorization changed during preparation")
@@ -239,7 +243,7 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
         device_row = await transaction.session.get(EntityRow, item["device_id"])
         if device_row is None:
             raise ConflictError("Authorizing device was removed")
-        device = PairedDeviceSession.model_validate(device_row.payload)
+        device = decode_stored(PairedDeviceSession, device_row.payload)
         now = utc_now()
         if (
             device.revoked_at

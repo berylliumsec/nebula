@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import Field
 from sqlalchemy import text
 
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .domain import (
     Finding,
@@ -126,7 +127,7 @@ async def _validate_findings(transaction: StoreTransaction, report: Report) -> N
         row = await transaction.session.get(EntityRow, finding_id)
         if row is None or row.kind != Finding.entity_kind:
             raise ConflictError("report references a deleted finding")
-        finding = Finding.model_validate(row.payload)
+        finding = decode_stored(Finding, row.payload)
         if finding.engagement_id != report.engagement_id:
             raise ConflictError("report contains a finding from another project")
         if finding.status not in _SIGNABLE_FINDING_STATUSES:

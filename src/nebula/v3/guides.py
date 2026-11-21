@@ -7,6 +7,7 @@ operator created themselves (files in the project workspace); they never change 
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .async_utils import MaybeAsync, call_async
 
 import json
@@ -103,7 +104,7 @@ def guide_progress_router(
             if len(values) > limit:
                 response.headers["X-Nebula-Next-Offset"] = str(offset + limit)
             response.headers["Cache-Control"] = "no-store"
-            return [GuideProgress.model_validate(row.payload) for row in values[:limit]]
+            return [decode_stored(GuideProgress, row.payload) for row in values[:limit]]
 
     @router.put("/guides/progress/{guide_id}", response_model=GuideProgress)
     async def write_progress(guide_id: str, body: GuideProgressWrite) -> GuideProgress:

@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 from sqlalchemy import func, select, text
 
+from .stored_entities import decode_stored
 from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
 from .database import EntityRow
@@ -163,7 +164,7 @@ async def reserve_butler_session(
             .limit(1)
         )
         if row is not None and not request.thread:
-            return ChatSession.model_validate(row.payload)
+            return decode_stored(ChatSession, row.payload)
         title = (request.title or "Butler thread") if request.thread else "Butler"
         # A thread keeps the operator's question as its name.
         thread_metadata = (

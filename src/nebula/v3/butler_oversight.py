@@ -19,6 +19,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, field_validator, model_validator
 
+from .stored_entities import decode_stored
 from .project_hold_gate import is_held
 from .database import EntityRow
 from .diagnostics import create_diagnostic_task, record_caught_exception
@@ -243,7 +244,7 @@ async def _entity_in_transaction(
         return None
     if row.kind != model.entity_kind:
         raise ConflictError(f"entity {entity_id} has an unexpected kind")
-    return model.model_validate(row.payload)
+    return decode_stored(model, row.payload)
 
 
 def _coverage_reason() -> str:

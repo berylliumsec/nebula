@@ -31,6 +31,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy import func, select
 
+from .stored_entities import decode_stored
 from .artifacts import ArtifactStore, ArtifactStoreError
 from .butler_board import FAILED_WINDOW, MAX_FAILED_ITEMS
 from .chat_turn_headers import (
@@ -349,7 +350,7 @@ def _observation_changes(
     payload: dict[str, Any], paths: _WorkspacePaths
 ) -> list[_Change]:
     try:
-        observation = WorkspaceProvenanceObservation.model_validate(payload)
+        observation = decode_stored(WorkspaceProvenanceObservation, payload)
     except ValueError as exc:
         record_caught_exception(
             "file_attribution",
@@ -682,7 +683,7 @@ async def _scan(
             if artifacts is None or payload is None:
                 return None
             try:
-                artifact = Artifact.model_validate(payload)
+                artifact = decode_stored(Artifact, payload)
                 with artifacts.open(artifact) as stream:
                     data = stream.read(MAX_DIFF_ARTIFACT_BYTES + 1)
             except (OSError, ArtifactStoreError, ValueError) as exc:
