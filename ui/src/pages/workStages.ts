@@ -103,3 +103,21 @@ export function stageKeyFor(label: string, taken: Iterable<string>): string {
   for (let suffix = 2; used.has(key); suffix += 1) key = `${base}-${suffix}`;
   return key;
 }
+
+/** The fields stage inheritance reads from a project. */
+export interface StageOwner {
+  id: string;
+  name: string;
+  parentEngagementId?: string | null;
+  workStages?: WorkStage[];
+}
+
+/** A project's own stages, or else its nearest ancestor's; `from` names that ancestor. */
+export function effectiveStages<T extends StageOwner>(project: T | undefined, byId: ReadonlyMap<string, T>): { stages: WorkStage[]; from?: T } {
+  const seen = new Set<string>();
+  for (let current = project; current && !seen.has(current.id); current = current.parentEngagementId ? byId.get(current.parentEngagementId) : undefined) {
+    seen.add(current.id);
+    if (current.workStages?.length) return { stages: current.workStages, from: current === project ? undefined : current };
+  }
+  return { stages: [] };
+}

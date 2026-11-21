@@ -212,6 +212,7 @@
 .work-fields select { min-height: 32px; max-width: 180px; padding: 4px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--text-strong); font: inherit; font-size: 12px; }
 .work-stage-editor { width: min(560px, 100%); max-height: calc(100dvh - 32px); overflow: auto; }
 .work-stage-lede { color: var(--muted); font-size: 12px; margin: -6px 0 0; }
+.work-stage-board > .work-stage-inherited { grid-column: 1 / -1; color: var(--muted); font-size: 12px; margin: 0; }
 .work-stage-rows { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .work-stage-rows li { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .work-stage-order { display: flex; }

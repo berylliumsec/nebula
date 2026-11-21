@@ -218,3 +218,68 @@ async def test_stage_api_and_agent_tools(tmp_path):
         scope,
     )
     assert (await store.get(WorkItem, item_id)).stage == "ship"
+
+
+async def test_subprojects_use_their_nearest_parents_stages(tmp_path):
+    from nebula.v3.control_assistant_work import ControlAssistantWork
+
+    store = NebulaStore(tmp_path / "core.db")
+    service = WorkService(store)
+    parent = await store.create(Engagement(name="Portfolio"))
+    child = await store.create(Engagement(name="Team", parent_engagement_id=parent.id))
+    leaf = await store.create(Engagement(name="Task", parent_engagement_id=child.id))
+    assert await service.effective_stages(leaf) == ([], None)
+    parent = await service.set_stages(
+        parent.id,
+        [WorkStage.model_validate(stage) for stage in STAGES],
+        expected_revision=parent.revision,
+    )
+    stages, source = await service.effective_stages(leaf)
+    assert [stage.key for stage in stages] == ["draft", "review", "ship"]
+    assert source is not None and source.id == parent.id
+
+    # Agents in a subproject see the inherited list; Butler names its source.
+    components = work_components(
+        service,
+        leaf.id,
+        tmp_path,
+        ScopePolicy(id=f"scope:{leaf.id}", engagement_id=leaf.id),
+    )
+    listed = await components.broker.execute(
+        ToolInvocation(
+            engagement_id=leaf.id,
+            tool_name="work_list",
+            arguments={},
+            run_id="run-1",
+            workspace=tmp_path,
+        ),
+        components.scope,
+    )
+    assert [stage["key"] for stage in listed.output["stages"]] == [
+        "draft",
+        "review",
+        "ship",
+    ]
+    butler = object.__new__(ControlAssistantWork)
+    butler.store, butler.work_service = store, service
+    read = await butler.work_stages(leaf.id)
+    assert read["stages"] == []
+    assert [stage["key"] for stage in read["effective_stages"]] == [
+        "draft",
+        "review",
+        "ship",
+    ]
+    assert read["inherited_from"] == {"project_id": parent.id, "name": "Portfolio"}
+
+    # A subproject's own stages win, and its children use those instead.
+    child = await service.set_stages(
+        child.id,
+        [WorkStage.model_validate({"key": "build", "label": "Build"})],
+        expected_revision=child.revision,
+    )
+    stages, source = await service.effective_stages(leaf)
+    assert [stage.key for stage in stages] == ["build"]
+    assert source is not None and source.id == child.id
+    own = await butler.work_stages(child.id)
+    assert own["inherited_from"] is None
+    assert [stage["key"] for stage in own["effective_stages"]] == ["build"]

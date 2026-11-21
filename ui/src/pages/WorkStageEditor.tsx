@@ -9,6 +9,8 @@ type Draft = WorkStage & { saved: boolean; rowId: number };
 
 interface WorkStageEditorProps {
   project: EngagementSummary;
+  /** Stages this project uses from a parent while it has none of its own. */
+  inherited?: { from: string; stages: WorkStage[] };
   /** Open items per stage key, so removing a used stage says what happens to them. */
   itemCounts: Record<string, number>;
   save: (stages: WorkStage[], expectedRevision: number | undefined) => Promise<void>;
@@ -18,8 +20,9 @@ interface WorkStageEditorProps {
 const maxStages = 12;
 
 /** Edit a project's ordered Work stages. Saved keys never change, so items keep their stage. */
-export function WorkStageEditor({ project, itemCounts, save, close }: WorkStageEditorProps) {
-  const [rows, setRows] = useState<Draft[]>(() => (project.workStages ?? []).map((stage, index) => ({ ...stage, saved: true, rowId: index })));
+export function WorkStageEditor({ project, inherited, itemCounts, save, close }: WorkStageEditorProps) {
+  // Inherited stages start the draft with their keys, so items keep their stage when this project saves its own.
+  const [rows, setRows] = useState<Draft[]>(() => (project.workStages?.length ? project.workStages : inherited?.stages ?? []).map((stage, index) => ({ ...stage, saved: true, rowId: index })));
   const [nextRow, setNextRow] = useState(rows.length);
   // Save against the revision the editor opened with, so a change made elsewhere is reported, not overwritten.
   const [baseRevision] = useState(project.revision);
@@ -66,7 +69,9 @@ export function WorkStageEditor({ project, itemCounts, save, close }: WorkStageE
   return <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) close(); }}>
     <form className="work-dialog work-stage-editor" role="dialog" aria-modal="true" aria-labelledby="work-stages-title" onSubmit={(event) => void submit(event)}>
       <header><h2 id="work-stages-title">Work stages</h2><button className="work-dialog-close" type="button" aria-label="Close" title="Close" disabled={busy} onClick={close}><X size={18} aria-hidden="true" /></button></header>
-      <p className="work-stage-lede">Group {project.name}'s items by stage. Stages are saved with this project.</p>
+      <p className="work-stage-lede">{inherited
+        ? <>{project.name} uses {inherited.from}'s stages. Saving gives {project.name} its own stages; {inherited.from} and its other subprojects keep theirs.</>
+        : <>Group {project.name}'s items by stage. Stages are saved with this project, and subprojects without their own stages use them.</>}</p>
       {rows.length ? <ol className="work-stage-rows">{rows.map((row, index) => {
         const used = row.saved ? itemCounts[row.key] ?? 0 : 0;
         return <li key={row.rowId}>

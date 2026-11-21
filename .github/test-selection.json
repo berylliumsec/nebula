@@ -1,20 +1,25 @@
 {
-  "change_digest": "10f6adc5c2f8a059a6ad0f345bcca38a44446a6b837ac50f8094debef3dab293",
-  "reviewed_by": "Claude Code, building the operator-approved Butler resume-idle mockup (Figma tVEa0PXZaa7H4ZLflwgcb7, page 210:2)",
-  "reason": "Butler mode's status board gains Resume all idle (toolbar; reads every paused or blocked goal Core lists across projects via GET /butler/board?section=idle pages, then confirms), a checkbox on each resumable Idle card, Select all per project's Idle section, and a selection bar with Clear and Resume N. Each goal resumes through the existing POST chat/sessions/{id}/goal/actions resume action, re-reading the revision once on a stale conflict; Core's refusals stay on the card. No Core code changed. Selected: the board's unit and component suites (butlerBoard.test.ts, ButlerModePage.board.test.tsx, butlerThreads.test.ts), the real-Core LAN butler-mode spec now extended to tick and resume a paused card and to Resume all idle with confirmation (desktop, compact, Chromium 390, WebKit 390, the same projects #1263 selected), and test_product_knowledge.py by node ID because the settings-assistant guide gained a section that re-chunks later passages. Also: Ask Butler about this, clicked while the project's open thread is still answering, now switches the composer to Reply in this thread once Core reports the thread idle (unless the operator chose a target); two component tests and the real-Core spec cover it, and the help text says so.",
-  "exclusions": "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli and tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls already fail on pristine origin/main (the latter on the same 2 unreviewed signatures; this change only raised two existing butlerBoard.ts call counts, refreshed in the inventory). No Core route, setting or settings catalog entry changed (resume is an existing goal action, not a setting). Other butler-mode viewports (320, 430) and unrelated Playwright areas are not selected.",
+  "change_digest": "49f10eddd53866620f80869afeba2be618eb6d670b3548a86f27c51620ee6ff2",
+  "reviewed_by": "Claude Code, implementing the operator's choice that subprojects inherit their parent's Work stages",
+  "reason": "Work stages gain inheritance: a subproject without stages of its own uses its nearest parent's, so a portfolio defines stages once on the parent instead of writing them to every subproject (each such write is a project command that starts that project's worker). Core adds WorkService.effective_stages (own stages, else nearest ancestor's, cycle-safe); agent work_list reports the effective list, and Butler's nebula.work.work_stages adds effective_stages and inherited_from while stages/set_work_stages keep meaning the project's own list. The UI uses the effective stages for All projects cells, the stage board, item Stage field and create dialog; a parent with subprojects and no items of its own is a container (no cells, never Missing a stage, no Define stages link); a subproject's board says whose stages it uses, and its editor starts from the inherited keys so saving gives it its own list. Settings catalog, settings-assistant destination and docs describe it; the product index regenerates and verifies. Selected: test_work_stages.py (new inheritance test for the service, agent tool and Butler read), the Butler work-board capability test, test_product_knowledge.py by node ID (docs re-chunk passages; a new assertion finds the inheritance guidance), the stage unit and WorkPage component suites, settings catalog and destination tests, and Playwright area work-stages, whose grep now covers both real-Core LAN journeys (the new one: define stages on a parent, see them on subprojects, container parent, Missing a stage, move a subproject item without writing subproject stages). All 8 profiles passed locally against a LAN Core.",
+  "exclusions": "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli already fails on pristine origin/main and is excluded. No Core route, migration or stored field changed (effective stages are computed on read), so storage/compatibility suites are not selected. Unrelated Playwright areas are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 90,
-    "frontend": 29,
+    "python": 97,
+    "frontend": 35,
     "native": 0,
-    "playwright": 4
+    "playwright": 16
   },
   "python": [
+    "tests/v3/test_work_stages.py::test_stage_settings_are_revision_checked_and_validated",
+    "tests/v3/test_work_stages.py::test_items_take_a_stage_on_create_patch_and_check_in",
+    "tests/v3/test_work_stages.py::test_reimport_moves_stage_and_posts_new_updates_by_update_id",
+    "tests/v3/test_work_stages.py::test_stage_api_and_agent_tools",
+    "tests/v3/test_work_stages.py::test_subprojects_use_their_nearest_parents_stages",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_help_discovers_next_turn_mcp_context_choices",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_adding_a_claude_harness",
@@ -46,6 +51,7 @@
     "tests/v3/test_product_knowledge.py::test_product_search_finds_goal_resume_instruction_editor",
     "tests/v3/test_product_knowledge.py::test_product_search_explains_core_goal_capacity_recovery",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_work_agent_access_and_history",
+    "tests/v3/test_product_knowledge.py::test_product_search_finds_work_stages_and_their_butler_tools",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_chat_rewind_guidance",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_notebook_guidance",
     "tests/v3/test_product_knowledge.py::test_product_search_finds_butler_project_lifecycle_and_confirmation",
@@ -104,19 +110,18 @@
     "tests/v3/test_product_knowledge.py::test_product_help_explains_resuming_idle_goals_from_butler_board",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_proposed_goal_chats"
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_proposed_goal_chats",
+    "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_project_work_board"
   ],
   "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/butlerThreads.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx"
+    "ui/src/pages/workStages.test.ts",
+    "ui/src/pages/WorkPage.test.tsx",
+    "ui/src/settingsCatalog.workStages.test.ts",
+    "ui/src/assistantDestinations.test.ts"
   ],
   "native": [],
   "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
+    "area:work-stages"
   ],
   "checks": []
 }

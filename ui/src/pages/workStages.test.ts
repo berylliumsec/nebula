@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_STAGE_KEY, OTHER_STAGE_KEY, hasStageGap, stageCells, stageColumns, stageKeyFor, type StagedItem } from "./workStages";
+import { NO_STAGE_KEY, OTHER_STAGE_KEY, effectiveStages, hasStageGap, stageCells, stageColumns, stageKeyFor, type StagedItem } from "./workStages";
 
 const stages = [
   { key: "draft", label: "Draft", flagWhenEmpty: true },
@@ -47,5 +47,23 @@ describe("work stages", () => {
     expect(stageKeyFor("Code review", ["code-review"])).toBe("code-review-2");
     expect(stageKeyFor("   ", [])).toBe("stage");
     expect(stageKeyFor("Écrire", [])).toBe("ecrire");
+  });
+
+  it("uses a project's own stages, else its nearest ancestor's, and survives a parent cycle", () => {
+    const own = [{ key: "build", label: "Build", flagWhenEmpty: false }];
+    const projects = [
+      { id: "root", name: "Root", workStages: stages },
+      { id: "team", name: "Team", parentEngagementId: "root" },
+      { id: "task", name: "Task", parentEngagementId: "team" },
+      { id: "own", name: "Own", parentEngagementId: "root", workStages: own },
+      { id: "a", name: "A", parentEngagementId: "b" },
+      { id: "b", name: "B", parentEngagementId: "a" },
+    ];
+    const byId = new Map(projects.map((project) => [project.id, project]));
+    expect(effectiveStages(byId.get("task"), byId)).toEqual({ stages, from: byId.get("root") });
+    expect(effectiveStages(byId.get("root"), byId)).toEqual({ stages, from: undefined });
+    expect(effectiveStages(byId.get("own"), byId)).toEqual({ stages: own, from: undefined });
+    expect(effectiveStages(byId.get("a"), byId)).toEqual({ stages: [] });
+    expect(effectiveStages(undefined, byId)).toEqual({ stages: [] });
   });
 });
