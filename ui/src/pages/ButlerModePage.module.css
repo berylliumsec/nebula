@@ -58,6 +58,23 @@
 .dot[data-state="failed"] { background: var(--red); }
 .dot[data-state="done"] { background: var(--green); }
 
+/* A board section's dot: Active solid blue, Idle a hollow amber ring (shape is
+   the second cue), Completed solid green and a cancelled goal muted grey. */
+.sectionDot {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sectionDot[data-section="active"] { background: var(--blue); }
+.sectionDot[data-section="idle"] { border: 2px solid var(--orange); background: transparent; }
+.sectionDot[data-section="completed"] { background: var(--green); }
+.sectionDot[data-section="completed"][data-goal="cancelled"] { background: var(--muted); }
+
 .iconButton {
   display: inline-grid;
   place-items: center;
@@ -544,6 +561,29 @@
 
 .groupLabel { font-weight: var(--weight-semibold); }
 
+.boardSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: var(--type-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.sectionLabel { color: var(--text); font-weight: var(--weight-medium); }
+
 .groupCounts {
   display: inline-flex;
   flex-wrap: wrap;
@@ -620,6 +660,10 @@
 }
 
 .card[data-expanded="true"] .cardNow { display: block; }
+
+/* Inside Active, a chat needing the operator or a failed last turn stands out. */
+.cardNow[data-state="waiting"] { color: var(--orange); }
+.cardNow[data-state="failed"] { color: var(--red); }
 
 .cardDetail {
   display: flex;

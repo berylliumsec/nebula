@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ArrowUp, ChevronDown, Square, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { boardElapsed, cancelProposedGoalChat, goalChatProposalFromReceipt, startProposedGoalChat, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
+import { ALL_PROJECTS, SECTION_LABEL, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSection, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
@@ -34,8 +34,8 @@ type Approval = Awaited<ReturnType<ApiClient["getApproval"]>>;
 type LiveTurn = { prompt: string; text: string; browserAction?: boolean; error?: string; done?: boolean };
 
 const GROUPING_KEY = "nebula.butler-mode.grouping";
-const SUBAGENTS_KEY = "nebula.butler-mode.subagents";
-const STATE_LABEL = { waiting: "Needs you", working: "Working", failed: "Failed", idle: "Idle" } as const;
+// Which board sections are open on this device ("<project or all>:<section>").
+const SECTIONS_KEY = "nebula.butler-mode.sections";
 const THREAD_STATE_LABEL = { waiting: "Needs you", working: "Working", idle: "Answered" } as const;
 
 type Section = "board" | "code" | "oversight" | "memory" | "settings";
@@ -53,7 +53,7 @@ function isSection(value: string | null): value is Section {
 
 /** A board item for a chat known only from its brief (an idle chat, say). */
 function itemFromBrief(brief: ButlerBrief): ButlerBoardItem {
-  return { sessionId: brief.sessionId, title: brief.title, project: brief.project, state: brief.state, backend: brief.backend, model: brief.model, isSubagent: Boolean(brief.parentSessionId), updatedAt: brief.updatedAt, now: brief.attention?.summary };
+  return { sessionId: brief.sessionId, title: brief.title, project: brief.project, section: sectionOfGoalStatus(brief.goal?.status), state: brief.state, backend: brief.backend, model: brief.model, isSubagent: Boolean(brief.parentSessionId), updatedAt: brief.updatedAt, now: brief.attention?.summary };
 }
 
 /** Selected text added to Butler, sent ahead of the operator's words. */
@@ -107,11 +107,12 @@ export function ButlerModePage() {
   const [boardError, setBoardError] = useState("");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
-  const [grouping, setGrouping] = useState<ButlerBoardGrouping>(() => readStorage(GROUPING_KEY) === "project" ? "project" : "attention");
-  const [showSubagents, setShowSubagents] = useState(() => readStorage(SUBAGENTS_KEY) === "true");
+  const [grouping, setGrouping] = useState<ButlerBoardGrouping>(() => readStorage(GROUPING_KEY) === "attention" ? "attention" : "project");
   const [organizeOpen, setOrganizeOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [idle, setIdle] = useState<{ open: boolean; items: ButlerBoardItem[]; nextOffset?: number; loading: boolean; error?: string }>({ open: false, items: [], loading: false });
+  const [sectionOpen, setSectionOpen] = useState<BoardSectionOpenState>(() => parseBoardSectionState(readStorage(SECTIONS_KEY)));
+  // Completed goal chats load on request, by project ID or ALL_PROJECTS; ``count`` is Core's count they were read at.
+  const [completed, setCompleted] = useState<Record<string, { items: ButlerBoardItem[]; nextOffset?: number; loading: boolean; error?: string; count: number }>>({});
   // Cards open the chat brief; the inline expansion stays for its approval controls.
   const [expanded] = useState<string>();
   const [approval] = useState<{ id: string; value?: Approval; error?: string }>();
@@ -166,7 +167,7 @@ export function ButlerModePage() {
           if (!answer) return "idle";
           boardEtag.current = answer.etag;
           setBoard(answer.board);
-          return answer.board.counts.working || answer.board.counts.waiting ? "active" : "idle";
+          return answer.board.states?.working || answer.board.states?.waiting ? "active" : "idle";
         } catch (caught) {
           if (signal.aborted) return "stop";
           void logCaughtDiagnostic("interface.butler_mode.board_failed", "Butler mode could not read the status board.", caught, "butler_mode");
@@ -326,11 +327,13 @@ export function ButlerModePage() {
 
   // The search filters loaded cards as the operator types; Core's search (debounced) then fills in the rest.
   const searchedItems = useMemo(() => filterBoardItems(board?.items ?? [], search), [board, search]);
-  const searchedIdle = useMemo(() => filterBoardItems(idle.items, search), [idle.items, search]);
-  const groups = useMemo(() => groupButlerBoard(searchedItems, grouping, showSubagents), [searchedItems, grouping, showSubagents]);
+  const searchedCompleted = useMemo(() => Object.fromEntries(Object.entries(completed).map(([key, page]) => [key, filterBoardItems(page.items, search)])), [completed, search]);
+  // Core's counts hold once its search caught up with the box; until then the matched cards count.
+  const coreCounts = search.trim() === query.trim();
+  const groups = useMemo(() => groupButlerBoard(searchedItems, grouping, { projects: coreCounts ? board?.projects : [], completed: searchedCompleted, coreCounts }), [searchedItems, grouping, board, searchedCompleted, coreCounts]);
   const searching = search.trim().length > 0;
-  const matchedChats = groups.reduce((sum, group) => sum + group.items.length, 0);
-  const matchedProjects = new Set(groups.flatMap((group) => group.items.map((item) => item.project.id))).size;
+  const matchedChats = groups.reduce((sum, group) => sum + group.total, 0);
+  const matchedProjects = coreCounts && board ? board.projects.length : new Set(searchedItems.map((item) => item.project.id)).size;
   const openThreadSummary = threads.find((item) => item.sessionId === openThreadId);
   // Archive or delete the open thread. Core keeps an archived thread in the
   // project's archived chats; Butler mode lists only unarchived threads.
@@ -360,19 +363,42 @@ export function ButlerModePage() {
 
   const toggleGroup = (key: string) => setCollapsed((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
-  const loadIdle = async (offset: number) => {
-    if (!api) return;
-    setIdle((current) => ({ ...current, open: true, loading: true, error: undefined }));
-    try {
-      const answer = await getButlerBoardIfChanged(api, { q: query, state: "idle", offset, limit: 50 }, undefined);
-      const page = answer?.board;
-      setIdle((current) => ({ open: true, loading: false, items: offset ? [...current.items, ...(page?.items ?? [])] : page?.items ?? [], nextOffset: page?.nextOffset }));
-    } catch (caught) {
-      void logCaughtDiagnostic("interface.butler_mode.idle_failed", "Butler mode could not list idle chats.", caught, "butler_mode");
-      setIdle((current) => ({ ...current, loading: false, error: caught instanceof Error ? caught.message : "Core could not list idle chats." }));
-    }
+  const toggleSection = (groupKey: string, value: ButlerBoardSection) => {
+    const next = toggleBoardSection(sectionOpen, groupKey, value);
+    setSectionOpen(next);
+    writeStorage(SECTIONS_KEY, JSON.stringify(next));
   };
-  useEffect(() => { setIdle({ open: false, items: [], loading: false }); }, [query]);
+
+  // Core's exact Completed count for a project, or across projects.
+  const coreCompleted = useCallback((scope: string) => scope === ALL_PROJECTS ? board?.counts.completed ?? 0 : board?.projects.find((item) => item.id === scope)?.counts.completed ?? 0, [board]);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const loadCompleted = useCallback(async (scope: string, offset: number, count: number) => {
+    if (!api) return;
+    const asked = query;
+    setCompleted((current) => ({ ...current, [scope]: { items: current[scope]?.items ?? [], nextOffset: current[scope]?.nextOffset, loading: true, count } }));
+    try {
+      const answer = await getButlerBoardIfChanged(api, { q: asked, section: "completed", projectId: scope === ALL_PROJECTS ? undefined : scope, offset, limit: 50 }, undefined);
+      if (queryRef.current !== asked) return;
+      const page = answer?.board;
+      setCompleted((current) => ({ ...current, [scope]: { loading: false, count, items: offset ? [...(current[scope]?.items ?? []), ...(page?.items ?? [])] : page?.items ?? [], nextOffset: page?.nextOffset } }));
+    } catch (caught) {
+      if (queryRef.current !== asked) return;
+      void logCaughtDiagnostic("interface.butler_mode.completed_failed", "Butler mode could not list completed goal chats.", caught, "butler_mode");
+      setCompleted((current) => ({ ...current, [scope]: { items: current[scope]?.items ?? [], nextOffset: current[scope]?.nextOffset, loading: false, count, error: caught instanceof Error ? caught.message : "Core could not list completed goal chats." } }));
+    }
+  }, [api, query]);
+  useEffect(() => { setCompleted({}); }, [query]);
+  // An open Completed section reads its first page, and again when Core's count changes.
+  useEffect(() => {
+    for (const group of groups) {
+      if (!boardSectionOpen(sectionOpen, group.key, "completed")) continue;
+      const count = coreCompleted(group.key);
+      const page = completed[group.key];
+      if (!count || page?.loading || page?.count === count) continue;
+      void loadCompleted(group.key, 0, count);
+    }
+  }, [groups, sectionOpen, completed, coreCompleted, loadCompleted]);
 
   const decide = async (item: ButlerBoardItem, decision: "approve" | "reject") => {
     if (!api || !item.attention?.actionId) return;
@@ -570,24 +596,39 @@ export function ButlerModePage() {
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
   };
 
-  const counts = board?.counts;
+  const states = board?.states;
+  const card = (item: ButlerBoardItem) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} />;
+  // One section of a project (or of every project, grouped by status): Completed starts collapsed.
+  const sectionView = (group: ButlerBoardGroup, entry: ButlerBoardSectionGroup) => {
+    const open = boardSectionOpen(sectionOpen, group.key, entry.section);
+    const page = entry.section === "completed" ? completed[group.key] : undefined;
+    return <div key={entry.section} className={styles.boardSection} data-section={entry.section}>
+      <button type="button" className={styles.sectionHead} aria-expanded={open} onClick={() => toggleSection(group.key, entry.section)}>
+        {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        <i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />
+        <span className={styles.sectionLabel}>{SECTION_LABEL[entry.section]}</span>
+        <span className={styles.muted}>{entry.count.toLocaleString()}</span>
+      </button>
+      {open && <>
+        {entry.items.length > 0 && <div className={styles.cards}>{entry.items.map(card)}</div>}
+        {page?.error && <div className={styles.error} role="alert">{page.error} <button type="button" className={styles.link} onClick={() => void loadCompleted(group.key, page.items.length, coreCompleted(group.key))}>Retry</button></div>}
+        {page?.loading && <p className={styles.muted}>Loading completed goal chats…</p>}
+        {page?.nextOffset !== undefined && !page.loading && <button type="button" className={styles.link} onClick={() => void loadCompleted(group.key, page.nextOffset!, coreCompleted(group.key))}>Show more completed</button>}
+      </>}
+    </div>;
+  };
   const boardView = <section className={styles.board} aria-label="Status board">
     <div className={styles.boardToolbar}>
       <div className={styles.organize}>
         <button type="button" className={styles.select} aria-haspopup="dialog" aria-expanded={organizeOpen} onClick={() => setOrganizeOpen((open) => !open)}>
-          <SlidersHorizontal size={14} aria-hidden="true" /> Group: {grouping === "project" ? "Project" : "Attention"} <ChevronDown size={13} aria-hidden="true" />
+          <SlidersHorizontal size={14} aria-hidden="true" /> Group: {grouping === "project" ? "Project" : "Status"} <ChevronDown size={13} aria-hidden="true" />
         </button>
         {organizeOpen && <div className={styles.popover} role="dialog" aria-label="Organize the board">
           <div className={styles.popoverHeading}>Group by</div>
-          {(["attention", "project"] as const).map((value) => <label key={value} className={styles.option}>
+          {(["project", "attention"] as const).map((value) => <label key={value} className={styles.option}>
             <input type="radio" name="butler-board-grouping" checked={grouping === value} onChange={() => { setGrouping(value); writeStorage(GROUPING_KEY, value); }} />
-            {value === "attention" ? "Attention" : "Project"}
+            {value === "attention" ? "Status" : "Project"}
           </label>)}
-          <div className={styles.popoverHeading}>Show</div>
-          <label className={styles.option}>
-            <input type="checkbox" checked={showSubagents} onChange={(event) => { setShowSubagents(event.target.checked); writeStorage(SUBAGENTS_KEY, String(event.target.checked)); }} />
-            Subagent chats as their own cards
-          </label>
         </div>}
       </div>
       <label className={styles.boardSearch}>
@@ -595,40 +636,28 @@ export function ButlerModePage() {
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && search) { event.preventDefault(); setSearch(""); } }} placeholder="Search projects and chats" aria-label="Search projects and chats" />
         {searching && <button type="button" className={styles.clearSearch} aria-label="Clear search" title="Clear search" onClick={() => setSearch("")}><X size={14} aria-hidden="true" /></button>}
       </label>
-      {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} active chats; search to narrow.</span>}
+      {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} goal chats; search to narrow.</span>}
     </div>
-    {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "chat" : "chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
+    {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "goal chat" : "goal chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
     {boardError && <div className={styles.error} role="alert">{boardError} The board retries on its own.</div>}
-    {!board && !boardError && <p className={styles.muted}>Reading every project's chats…</p>}
-    {board && groups.length === 0 && <p className={styles.empty}>{searching ? `No running, waiting or failed chats match “${search.trim()}”.` : "Nothing is running and nothing needs you."}</p>}
+    {!board && !boardError && <p className={styles.muted}>Reading every project's goal chats…</p>}
+    {board && groups.length === 0 && <p className={styles.empty}>{searching ? `No goal chats match “${search.trim()}”.` : "No goal chats yet."}</p>}
     {groups.map((group) => {
+      const sections = group.sections.filter((entry) => entry.count > 0 || entry.items.length > 0);
+      if (group.label === undefined) return <div key={group.key} className={styles.group}>{sections.map((entry) => sectionView(group, entry))}</div>;
       const open = !collapsed.has(group.key);
-      return <div key={group.key} className={styles.group}>
+      return <div key={group.key} className={styles.group} data-project={group.key}>
         <button type="button" className={styles.groupHead} aria-expanded={open} onClick={() => toggleGroup(group.key)}>
           {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
           <span className={styles.groupLabel}>{group.label}</span>
-          <span className={styles.muted}>{group.items.length}</span>
-          {grouping === "project" && <span className={styles.groupCounts}>
-            {group.counts.waiting > 0 && <span><i className={styles.dot} data-state="waiting" aria-hidden="true" />{group.counts.waiting} need you</span>}
-            {group.counts.working > 0 && <span><i className={styles.dot} data-state="working" aria-hidden="true" />{group.counts.working} working</span>}
-            {group.counts.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{group.counts.failed} failed</span>}
-          </span>}
+          <span className={styles.muted}>{group.total.toLocaleString()} {group.total === 1 ? "goal" : "goals"}</span>
+          <span className={styles.groupCounts}>
+            {sections.map((entry) => <span key={entry.section} data-section={entry.section}><i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />{entry.count.toLocaleString()} {SECTION_LABEL[entry.section].toLowerCase()}</span>)}
+          </span>
         </button>
-        {open && <div className={styles.cards}>{group.items.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} />)}</div>}
+        {open && sections.map((entry) => sectionView(group, entry))}
       </div>;
     })}
-    {counts && counts.idle > 0 && <div className={styles.group}>
-      <button type="button" className={styles.groupHead} aria-expanded={idle.open} onClick={() => idle.open ? setIdle((current) => ({ ...current, open: false })) : void loadIdle(0)}>
-        {idle.open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
-        <span className={styles.groupLabel}>Idle</span><span className={styles.muted}>{counts.idle.toLocaleString()}{idle.open ? "" : " · hidden"}</span>
-      </button>
-      {idle.open && <>
-        {idle.error && <div className={styles.error} role="alert">{idle.error} <button type="button" className={styles.link} onClick={() => void loadIdle(idle.items.length)}>Retry</button></div>}
-        <div className={styles.cards}>{searchedIdle.map((item) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={false} onToggle={() => openBrief(item.sessionId)} onDecide={() => undefined} onStop={() => undefined} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject />)}</div>
-        {idle.loading && <p className={styles.muted}>Loading idle chats…</p>}
-        {idle.nextOffset !== undefined && !idle.loading && <button type="button" className={styles.link} onClick={() => void loadIdle(idle.nextOffset!)}>Show more idle chats</button>}
-      </>}
-    </div>}
   </section>;
 
   // Projects with chats that need the operator or are working come first; the
@@ -747,7 +776,9 @@ export function ButlerModePage() {
   </section>;
 
   // ↑ and ↓ step through the board's chats while a brief is open.
-  const boardOrder = useMemo(() => [...groups.flatMap((group) => group.items), ...(idle.open ? searchedIdle : [])].map((item) => item.sessionId), [groups, idle.open, searchedIdle]);
+  const boardOrder = useMemo(() => groups.flatMap((group) => group.label !== undefined && collapsed.has(group.key) ? [] : group.sections
+    .filter((entry) => boardSectionOpen(sectionOpen, group.key, entry.section))
+    .flatMap((entry) => entry.items.map((item) => item.sessionId))), [groups, collapsed, sectionOpen]);
   useEffect(() => {
     if (!briefId) return;
     const onKey = (event: globalThis.KeyboardEvent) => {
@@ -764,7 +795,7 @@ export function ButlerModePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [briefId, boardOrder, popup, updateParams]);
 
-  const allItems = [...(board?.items ?? []), ...idle.items];
+  const allItems = [...(board?.items ?? []), ...Object.values(completed).flatMap((page) => page.items)];
   allItemsRef.current = allItems;
   const briefItem = briefId ? allItems.find((item) => item.sessionId === briefId) : undefined;
   const briefIndex = briefId ? boardOrder.indexOf(briefId) : -1;
@@ -823,7 +854,7 @@ export function ButlerModePage() {
   const sectionTabs = <nav className={styles.sections} aria-label="Butler sections">
     {SECTIONS.map((item) => <button key={item.id} type="button" className={styles.sectionTab} aria-current={section === item.id ? "page" : undefined} onClick={() => setSection(item.id)}>
       {item.label}
-      {item.id === "board" && counts?.waiting ? <span className={styles.badge} data-state="waiting">{counts.waiting}</span> : null}
+      {item.id === "board" && states?.waiting ? <span className={styles.badge} data-state="waiting">{states.waiting}</span> : null}
       {item.id === "oversight" && bridge?.attentionCount ? <span className={styles.badge} data-state="failed">{bridge.attentionCount}</span> : null}
     </button>)}
   </nav>;
@@ -836,10 +867,10 @@ export function ButlerModePage() {
       <h1>Butler</h1>
       {!compact && sectionTabs}
       <span className={styles.spacer} />
-      {counts && !compact && <div className={styles.pulse} aria-label="Chat status across projects">
-        <span><i className={styles.dot} data-state="waiting" aria-hidden="true" />{counts.waiting} need you</span>
-        <span><i className={styles.dot} data-state="working" aria-hidden="true" />{counts.working} working</span>
-        {counts.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{counts.failed} failed</span>}
+      {states && !compact && <div className={styles.pulse} aria-label="Goal chat status across projects">
+        <span><i className={styles.dot} data-state="waiting" aria-hidden="true" />{states.waiting} need you</span>
+        <span><i className={styles.dot} data-state="working" aria-hidden="true" />{states.working} working</span>
+        {states.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{states.failed} failed</span>}
       </div>}
       {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
       <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>
@@ -847,7 +878,7 @@ export function ButlerModePage() {
     {coreState !== "online" && <div className={styles.error} role="alert">Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</div>}
     {compact ? <>
       <div className={styles.tabs} role="tablist" aria-label="Butler mode">
-        <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "board"} onClick={() => setSection("board")}>Board{counts?.waiting ? <span className={styles.tabCount} data-state="waiting">{counts.waiting}</span> : null}</button>
+        <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "board"} onClick={() => setSection("board")}>Board{states?.waiting ? <span className={styles.tabCount} data-state="waiting">{states.waiting}</span> : null}</button>
         <button type="button" role="tab" aria-selected={phoneTab === "threads"} onClick={() => setPhoneTab("threads")}>Threads{runningThreads ? <span className={styles.tabCount} data-state="working">{runningThreads}</span> : null}</button>
         <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "oversight"} onClick={() => setSection("oversight")}>Oversight{bridge?.attentionCount ? <span className={styles.tabCount} data-state="failed">{bridge.attentionCount}</span> : null}</button>
         <button type="button" role="tab" aria-selected={phoneTab === "board" && (section === "code" || section === "memory" || section === "settings")} aria-haspopup="dialog" aria-expanded={moreOpen} onClick={() => setMoreOpen(true)}><MoreHorizontal size={16} aria-hidden="true" /> More</button>
@@ -882,15 +913,16 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   onOpen: () => void;
   showProject: boolean;
 }) {
-  const elapsed = boardElapsed(item.state === "idle" || item.state === "failed" ? item.updatedAt : item.turnStartedAt ?? item.updatedAt, clock);
+  const elapsed = boardElapsed(item.section !== "active" || item.state === "idle" || item.state === "failed" ? item.updatedAt : item.turnStartedAt ?? item.updatedAt, clock);
   const runtime = [showProject ? item.project.name : undefined, item.model, item.isSubagent ? "Subagent" : undefined, item.proposedBy ? "Proposed by Butler" : item.startedBy ? "Started by Butler" : undefined].filter(Boolean).join(" · ");
   const goal = item.goal ? `Goal ${Math.min(item.goal.currentStep + 1, Math.max(item.goal.planLength, 1))}/${Math.max(item.goal.planLength, 1)} · ${item.goal.status}` : undefined;
   const pendingApproval = item.attention?.kind === "approval" && approval?.id === item.attention.actionId ? approval : undefined;
-  return <article className={styles.card} data-state={item.state} data-expanded={expanded ? "true" : "false"} aria-label={`${item.title}: ${STATE_LABEL[item.state]}`}>
+  // The section's name is in the label too: the dot's colour and shape are not the only cue.
+  return <article className={styles.card} data-section={item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} aria-label={`${item.title}: ${boardStatusLabel(item)}, ${SECTION_LABEL[item.section]}`}>
     <button type="button" className={styles.cardSummary} aria-expanded={expanded} onClick={onToggle}>
-      <span className={styles.cardHead}><i className={styles.dot} data-state={item.state} aria-hidden="true" /><span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
+      <span className={styles.cardHead}><i className={styles.sectionDot} data-section={item.section} data-goal={item.goal?.status} aria-hidden="true" /><span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
       {runtime && <span className={styles.cardMeta}>{runtime}</span>}
-      {item.now && <span className={styles.cardNow}>{item.now}</span>}
+      {item.now && <span className={styles.cardNow} data-state={item.state}>{item.now}</span>}
       {goal && !expanded && <span className={styles.cardMeta}>{goal}</span>}
     </button>
     {expanded && <div className={styles.cardDetail}>

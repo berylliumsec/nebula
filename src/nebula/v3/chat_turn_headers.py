@@ -245,6 +245,94 @@ async def latest_turn_header(
     return headers[0] if headers else None
 
 
+async def latest_turn_headers(
+    database: AsyncSession, session_ids: Iterable[str]
+) -> dict[str, ChatTurnHeader]:
+    """The newest turn of each given conversation, by ``(created_at, id)``.
+
+    Each conversation's newest turn is one backward step on the conversation
+    index, however many turns it has; one query reads a chunk of them.
+    """
+
+    identifiers = sorted(set(session_ids))
+    conversation = aliased(EntityRow)
+    turn = aliased(EntityRow)
+    versions: list[tuple[str, int, Any]] = []
+    for start in range(0, len(identifiers), _LOOKUP_CHUNK):
+        chunk = identifiers[start : start + _LOOKUP_CHUNK]
+        newest = (
+            select(turn.id)
+            .where(
+                turn.kind == ChatTurn.entity_kind,
+                turn.chat_session_id == conversation.id,
+            )
+            .order_by(turn.created_at.desc(), turn.id.desc())
+            .limit(1)
+            .correlate(conversation)
+            .scalar_subquery()
+        )
+        newest_ids = select(newest).where(
+            conversation.kind == ChatSession.entity_kind,
+            conversation.id.in_(chunk),
+        )
+        versions.extend(
+            (row.id, row.revision, row.created_at)
+            for row in await database.execute(
+                select(EntityRow.id, EntityRow.revision, EntityRow.created_at).where(
+                    EntityRow.kind == ChatTurn.entity_kind,
+                    EntityRow.id.in_(newest_ids),
+                )
+            )
+        )
+    return {header.session_id: header for header in await _resolve(database, versions)}
+
+
+async def pending_turn_headers_of_sessions(
+    database: AsyncSession, session_ids: Iterable[str], *, statuses: Sequence[str]
+) -> list[ChatTurnHeader]:
+    """Pending turns of the given conversations, oldest first.
+
+    Read from the covering turn status index alone, as two seeks (the listed
+    statuses, then rows without the projection) sorted here: Core holds few
+    pending turns, while the listed conversations may hold thousands of
+    finished ones. One ``OR`` of the two, or a join to the conversations,
+    lets the planner scan the table instead.
+    """
+
+    wanted = set(session_ids)
+    if not wanted:
+        return []
+    lookup = select(
+        EntityRow.id,
+        EntityRow.revision,
+        EntityRow.created_at,
+        EntityRow.chat_session_id,
+        EntityRow.chat_turn_status,
+        EntityRow.chat_turn_recovery_visible,
+    ).where(EntityRow.kind == ChatTurn.entity_kind)
+    rows = [
+        *await database.execute(lookup.where(EntityRow.chat_turn_status.in_(statuses))),
+        *await database.execute(lookup.where(EntityRow.chat_turn_status.is_(None))),
+    ]
+    versions = sorted(
+        (
+            (row.id, row.revision, row.created_at)
+            for row in rows
+            if row.chat_session_id in wanted
+            and not (
+                row.chat_turn_status == "interrupted"
+                and row.chat_turn_recovery_visible is False
+            )
+        ),
+        key=lambda version: (_aware(version[2]), version[0]),
+    )
+    return [
+        header
+        for header in await _resolve(database, versions)
+        if header.status in statuses
+    ]
+
+
 async def engagement_turn_headers(
     database: AsyncSession, engagement_id: str
 ) -> list[ChatTurnHeader]:

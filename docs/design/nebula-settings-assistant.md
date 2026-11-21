@@ -1244,22 +1244,24 @@ more. Parallel
 Butler mode joins the composer's **selected context** and is sent with the next
 message; remove an item with its ×.
 
-The **status board** reads one Core-owned list of chats across all projects
-that are not archived. Chats that need the operator (a pending approval, a
-harness question, or an interrupted response that will not resume on its own)
-come first, then working chats, then chats whose last response failed in the
-last day. Idle chats are only counted; **Idle** pages through them on request.
-Butler's own conversations, side chats and archived chats are never listed.
-**Group** switches between **Attention** and **Project**, and can show subagent
-chats as their own cards (by default a working subagent folds into its parent;
-one that needs the operator always shows). The board's search sits beside
+The **status board** reads one Core-owned list of goal chats across all
+projects that are not archived; chats without a goal are not listed. Each
+project has three sections: **Active** (running goals, including chats
+working or needing the operator, which come first), **Idle** (paused, blocked
+or proposed by Butler) and **Completed** (completed or cancelled, collapsed at
+first). Its header shows "N goals" and each section's count. Butler's own
+conversations, side chats, subagent chats and archived chats are never listed.
+**Group** switches between **Project** and **Status** (the three sections
+across projects). The board's search sits beside
 **Group**: it filters loaded cards as the operator types, says how many chats in
 how many projects match, then Core's search (chat titles, models and project
-names) fills in chats the board had not loaded. Esc or × clears it. The grouping choice is remembered on this device only.
+names) fills in chats the board had not loaded. Esc or × clears it. The grouping
+and open sections are remembered on this device only.
 
 Each card shows the chat's status, project, model, how long its current
 response has run, one line of what it is doing or waiting for, and "Started by
-Butler" or "Proposed by Butler" when Butler created it. Clicking a card opens
+Butler" or "Proposed by Butler" when Butler created it. Section dots: Active
+solid blue, Idle a hollow amber ring, Completed green (grey when cancelled). Clicking a card opens
 its brief (below); ↑ and ↓ move between chats while a brief is open and Esc
 returns to the board. In the brief, **Approve** and **Deny** answer a pending
 approval with the exact request shown; **Stop** stops a working chat's response
@@ -1331,7 +1333,7 @@ reload and on every device. The receipt has `state: proposed`,
 `operator_confirmation_required: true` and a `goal_chat_proposal` client
 action: nothing runs until the operator chooses **Start**. **Edit** changes the
 draft goal; **Cancel** deletes the empty draft. The status board lists each
-proposal as waiting with attention kind `proposal`.
+proposal in Idle, waiting with attention kind `proposal`.
 
 Under Delegate or Act authority Core begins the goal chat at once and returns
 `state: started` with a `goal_chat_started` action, which Butler reports. If

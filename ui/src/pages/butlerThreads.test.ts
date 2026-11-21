@@ -56,7 +56,7 @@ describe("Butler mode threads", () => {
     expect(butlerThreadTitle("  Which   chats\nneed me?  ")).toBe("Which chats need me?");
     expect(butlerThreadTitle("x".repeat(120))).toHaveLength(80);
     expect(butlerThreadTitle("   ")).toBe("Butler thread");
-    const about = butlerQuestionAbout({ sessionId: "s9", title: "Kernel fuzz", now: "Approve run_command: make install", project: { id: "p", name: "R" }, state: "waiting", backend: "provider", isSubagent: false, updatedAt: "" }, "Is this safe?");
+    const about = butlerQuestionAbout({ sessionId: "s9", title: "Kernel fuzz", now: "Approve run_command: make install", project: { id: "p", name: "R" }, section: "active", state: "waiting", backend: "provider", isSubagent: false, updatedAt: "" }, "Is this safe?");
     expect(about).toContain('About the chat "Kernel fuzz" (conversation s9 in this project). Current status: Approve run_command: make install.');
     expect(about.endsWith("Is this safe?")).toBe(true);
     expect(butlerQuestionAbout(undefined, "Plain")).toBe("Plain");
@@ -122,6 +122,16 @@ describe("Butler mode search", () => {
     expect(filterBoardItems(items, "DEEPSEEK").map((item) => item.title)).toEqual(["Run exact-build simulation"]);
     expect(filterBoardItems(items, "sim lab crash").map((item) => item.title)).toEqual(["Triage crashes"]);
     expect(filterBoardItems(items, "nothing")).toEqual([]);
+  });
+
+  it("searches goal chats in every section alike", () => {
+    const items = [
+      { title: "Fuzz parser", project: { id: "bb", name: "Bounty" }, section: "active" as const },
+      { title: "Paused fuzz", project: { id: "bb", name: "Bounty" }, section: "idle" as const },
+      { title: "Old fuzz run", project: { id: "r", name: "Research" }, section: "completed" as const },
+    ];
+    expect(filterBoardItems(items, "fuzz").map((item) => item.section)).toEqual(["active", "idle", "completed"]);
+    expect(filterBoardItems(items, "research fuzz").map((item) => item.title)).toEqual(["Old fuzz run"]);
   });
 });
 
