@@ -349,6 +349,40 @@
       "status": "supported"
     },
     {
+      "id": "work.stages",
+      "entry_point": "Work board: Stages editor (or settings assistant Work stages)",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/stages`"
+      ],
+      "core_owner": "Core project revision and Work stages",
+      "butler": {
+        "discover": "nebula.work.catalog",
+        "read": "nebula.work.work_stages",
+        "change": "nebula.work.set_work_stages"
+      },
+      "authority": "Explicit instruction, selected project, full ordered stage list and current project revision",
+      "observed_result_test": "ui/tests/work-import.spec.ts::work hub stages: define, view gaps, group and move items, resync from import",
+      "result": "Saved stages appear on All projects and the stage board after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "work.item_stage",
+      "entry_point": "Work item detail: Stage field",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}`"
+      ],
+      "core_owner": "WorkService, item revision",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item",
+        "change": "nebula.work.update_work_item"
+      },
+      "authority": "Selected project, current item revision and a listed stage key",
+      "observed_result_test": "ui/tests/work-import.spec.ts::work hub stages: define, view gaps, group and move items, resync from import",
+      "result": "The item's saved stage shows in its column and Stage field after refresh",
+      "status": "supported"
+    },
+    {
       "id": "workspace.text_files",
       "entry_point": "Files or Code: create, edit, rename, delete or download a regular text file in the selected project workspace",
       "ui_calls": [
@@ -3599,7 +3633,7 @@
     },
     {
       "id": "host.cpu_budget",
-      "entry_point": "Settings \u2192 Setup \u2192 CPU budget, or an explicit Butler request to configure this Core host",
+      "entry_point": "Settings → Setup → CPU budget, or an explicit Butler request to configure this Core host",
       "ui_calls": [
         "ui/src/api/hostCpuBudget.ts::request::GET \"host-cpu-budget\"",
         "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\""
@@ -3612,7 +3646,7 @@
       },
       "authority": "Explicit host CPU budget request; enabling/disabling additionally requires an explicit activation request. Use fresh host_id/expected_revision and enabled only when requested; omission preserves state. Core persists and reads back policy. Running requires observed live workers/affinity with executor_state=running and apply_state=applied; disabled requires zero workers. Resize/disable drains accepted PDF work.",
       "observed_result_test": "tests/v3/test_report_cpu_activation.py::test_butler_activates_and_reads_actual_running_then_disabled_workers",
-      "result": "One PDF worker pool shared across this host\u2019s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
+      "result": "One PDF worker pool shared across this host’s projects. Saving, starting, draining, running, failure and disabled states have distinct observed receipts; other hosts and external chat/tool/LLM/GPU execution are separate.",
       "status": "supported"
     },
     {
@@ -5838,7 +5872,15 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}`",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/setting`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/stages`",
       "count": 1
     },
     {

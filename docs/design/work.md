@@ -22,6 +22,7 @@ the local Core database.
 | Group projects | Existing projects can be linked to a parent without overwriting tasks; the Work page nests children, searches names, and shows parent rollups | Core project parent ID | API, component, and real Core browser |
 | Find imported work | The overview pages Work items, uses one active-agent query, and lets the operator search a large project list | Core list routes and UI query | component and browser |
 | Agent pages Work | An eligible agent can follow `next_offset` until null; every list result fits the provider model bound, and `work_get`/`work.get` can read a full description in chunks | Core Work records; per-call offset | provider and gateway |
+| Work stages | A project saves an ordered stage list (name, key, flag when empty) at its revision; items carry a stage key set on create, edit, check-in, or import; All projects shows each project's stage counts, gaps and Missing a stage / Blocked filters; the board groups by stage from the URL | Core project `work_stages`, item `stage`; URL owns grouping and focus | service, API, component, and real Core browser |
 | Disable Work posting | The gateway refuses Work writes and stops advertising list/get/create/check-in after a session reconnects; the read-only roster remains available | Core project setting | gateway and API |
 
 The built-in session MCP gateway supplies `work.list`, `work.get`, `work.create`, and
@@ -73,8 +74,8 @@ submitted data in the operator's Core. It does not read local files. Imported
 new projects use the normal agent-tools default; importing into an existing
 project keeps its current setting. A new project's optional workspace path must name an existing
 folder on the Core host and is resolved before any batch write. Existing
-imported records remain unchanged on retry, so later
-agent progress is preserved. A batch can be retried after a partial failure.
+imported records keep their title, description, and status on retry, so later
+agent progress is preserved; only a supplied stage is resynced (see Work stages). A batch can be retried after a partial failure.
 
 A new imported project may specify `parent_engagement_id` for an existing parent.
 For projects already in Core, `PATCH /api/v1/work/projects` accepts up to 100
@@ -83,6 +84,35 @@ For projects already in Core, `PATCH /api/v1/work/projects` accepts up to 100
 and hierarchy cycles, and commits each batch atomically. A repeated batch is a
 no-op. The Work page groups child projects beneath their parent, shows parent
 task counts across descendants, and searches child names with parent context.
+
+## Work stages
+
+A project may define up to 12 ordered stages (`PATCH
+/api/v1/engagements/{id}/work/stages` with the full list and optional
+`expected_revision`). Each has a key (`[a-z0-9][a-z0-9_-]*`, up to 64
+characters), a label, and `flag_when_empty`. Stage names are the operator's
+own project data: Nebula ships no stage presets, and its tests use neutral
+names. The editor derives a new stage's key from its name and never changes a
+saved key, so items keep their stage; an item whose key is no longer listed
+shows under Other stage.
+
+An item's optional `stage` is set on create, by `PATCH` (null clears it), or
+by a check-in's `stage`, which moves the item with the update and is recorded
+on it. Agent `work_list` results include the project's stages, and
+`work_create`/`work_check_in` accept a stage key. Butler uses
+`nebula.work.work_stages` and `nebula.work.set_work_stages`.
+
+All projects shows one cell per stage: open (not Done) items, and a detail of
+blocked, in review, in progress, or not started counts. A flagged stage that
+no item has reached shows as a gap ("None yet"); Missing a stage lists those
+projects. Each cell opens the project's board grouped by stage
+(`?group=stage&stage=<key>`). Projects without stages keep their status row.
+
+An imported item's stage follows its source: each import that includes
+`stage` sets it, and an import that omits it leaves the item's stage alone.
+An import update without `update_id` is posted once per item; a new
+`update_id` posts another update, so a repeated sync can report progress and
+status changes.
 
 The import caller maps its own source status and priority values to Nebula's
 generic enums. Source-specific conversion and private data stay outside this

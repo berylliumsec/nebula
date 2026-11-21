@@ -1,7 +1,7 @@
 {
   "format": "nebula.runtime-compatibility/v1",
   "migration_tree_sha256": "228e441e37d6bf1478ce4a561e24a031150236b2158d9c60b3daadfb4ef7d2cb",
-  "entity_fields_sha256": "6e3a99c5633c1c95ba21104250205d4dddc507be09a34e4dadd22645e1156922",
+  "entity_fields_sha256": "fe91fe06fbe229808660d27f96d9d4ce17205bbcd072043271cc5c4d0c08f3fa",
   "entity_fields_tolerant_baseline_sha256": "6e3a99c5633c1c95ba21104250205d4dddc507be09a34e4dadd22645e1156922",
   "manifest": {
     "schema_family": 5,
@@ -28,7 +28,8 @@
       "storage.report/v1",
       "butler.home/v1",
       "butler.action/v1",
-      "storage.tolerant-entities/v1"
+      "storage.tolerant-entities/v1",
+      "storage.entity-field-additions/v1"
     ]
   }
 }

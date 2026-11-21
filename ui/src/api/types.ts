@@ -107,6 +107,13 @@ export interface Page<T> {
   nextCursor?: string;
 }
 
+/** One project-defined Work stage: items link to it by key. */
+export interface WorkStage {
+  key: string;
+  label: string;
+  flagWhenEmpty: boolean;
+}
+
 export interface EngagementSummary {
   id: Identifier;
   name: string;
@@ -115,6 +122,10 @@ export interface EngagementSummary {
   status: "draft" | "active" | "paused" | "complete" | "archived";
   tags: string[];
   workEnabled: boolean;
+  /** The project's ordered Work stages; empty when the project defines none. */
+  workStages?: WorkStage[];
+  /** Core's project revision, for revision-checked project settings. */
+  revision?: number;
   parentEngagementId?: string;
   workspacePath?: string;
   createdAt: string;

@@ -2389,6 +2389,49 @@ async def test_butler_discovers_and_uses_project_work_board(tmp_path):
             change=True,
         )
         assert disabled["saved"] is True and disabled["enabled"] is False
+        stage_matches = await capabilities.search({"query": "Work stages"})
+        assert "nebula.work.set_work_stages" in {
+            item["operation"] for item in stage_matches["matches"]
+        }
+        stages = await capabilities.invoke(
+            {"operation": "nebula.work.work_stages", "arguments": {}},
+            change=False,
+        )
+        assert stages["stages"] == []
+        saved_stages = await capabilities.invoke(
+            {
+                "operation": "nebula.work.set_work_stages",
+                "arguments": {
+                    "stages": [
+                        {"key": "draft", "label": "Draft", "flag_when_empty": True},
+                        {"key": "ship", "label": "Ship"},
+                    ],
+                    "expected_revision": stages["revision"],
+                },
+            },
+            change=True,
+        )
+        assert saved_stages["saved"] is True
+        assert [stage["key"] for stage in saved_stages["stages"]] == ["draft", "ship"]
+        staged = await capabilities.invoke(
+            {
+                "operation": "nebula.work.check_in_work_item",
+                "arguments": {
+                    "item_id": item_id,
+                    "expected_revision": checked["revision"],
+                    "summary": "Shipping",
+                    "stage": "ship",
+                    "request_id": "launch-stage-1",
+                },
+            },
+            change=True,
+        )
+        moved = await capabilities.invoke(
+            {"operation": "nebula.work.work_item", "arguments": {"item_id": item_id}},
+            change=False,
+        )
+        assert moved["item"]["stage"] == "ship"
+        checked = {**checked, "revision": staged["revision"]}
         updates = await capabilities.invoke(
             {
                 "operation": "nebula.work.work_updates",

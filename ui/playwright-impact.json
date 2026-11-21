@@ -82,7 +82,7 @@
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
     {"name": "project-switcher-search", "patterns": ["ui/src/components/SideNav*", "ui/src/components/ProjectSwitcher*"], "areas": ["project-switcher-search"]},
-    {"name": "work-hub", "patterns": ["src/nebula/v3/work.py", "ui/src/pages/WorkPage*", "docs/design/work.md"], "areas": ["work-hub", "work-import"]},
+    {"name": "work-hub", "patterns": ["src/nebula/v3/work.py", "ui/src/pages/WorkPage*", "ui/src/pages/WorkStage*", "ui/src/pages/workStages*", "docs/design/work.md"], "areas": ["work-hub", "work-import", "work-stages"]},
     {"name": "mission-restart-recovery", "patterns": ["ui/src/pages/AgentsPage.tsx", "ui/src/components-workbench.css", "src/nebula/v3/missions.py"], "areas": ["mission-restart-recovery"]},
     {"name": "mission-supervisor", "patterns": ["src/nebula/v3/mission_delegation.py", "ui/src/components/MissionControls.tsx", "ui/src/pages/AgentsPage.tsx"], "areas": ["mission-supervisor-core"]},
     {"name":"composer-draft-continuity","patterns":["ui/src/pages/chatDraftStorage.ts","ui/src/components/selection/SelectionActionsProvider.tsx"],"areas":["composer-draft-continuity"]},
@@ -1284,6 +1284,16 @@
       {"area":"work-import","project":"assistant-real-webkit-320","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
       {"area":"work-import","project":"assistant-real-webkit-390","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
       {"area":"work-import","project":"assistant-real-webkit-430","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"}
+    ],
+    "work-stages": [
+      {"area":"work-stages","project":"assistant-real-desktop","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-compact","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-chromium-320","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-chromium-390","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-chromium-430","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-webkit-320","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-webkit-390","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"},
+      {"area":"work-stages","project":"assistant-real-webkit-430","test_match":"tests/work-import.spec.ts","grep":"work hub stages: define, view gaps, group and move items, resync from import","runtime":"real-core","shard":"1/1"}
     ],
     "assistant-links": [
       {"area":"assistant-links","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade links open workspace files and websites in the matching right pane","runtime":"mock","shard":"1/1"},

@@ -90,7 +90,14 @@ from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .database import EntityRow
 from .storage import NebulaStore, NotFoundError, readable_entities
-from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
+from .work import (
+    WorkCheckIn,
+    WorkCreate,
+    WorkPatch,
+    WorkService,
+    WorkSettingPatch,
+    WorkStagesPatch,
+)
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -508,6 +515,11 @@ WORK_ITEM_TARGET_SCHEMA: dict[str, Any] = {
     },
     "required": ["item_id"],
 }
+WORK_STAGE_KEY_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+    "description": "A stage key from nebula.work.work_stages.",
+}
 WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -520,6 +532,7 @@ WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
         },
         "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
         "assignee_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "stage": WORK_STAGE_KEY_SCHEMA,
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
     "required": ["title", "request_id"],
@@ -534,6 +547,11 @@ WORK_ITEM_UPDATE_SCHEMA: dict[str, Any] = {
         "description": {"type": "string", "maxLength": 20000},
         "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
         "assignee_session_id": {"type": ["string", "null"], "maxLength": 200},
+        "stage": {
+            "type": ["string", "null"],
+            "pattern": WORK_STAGE_KEY_SCHEMA["pattern"],
+            "description": "A stage key from nebula.work.work_stages; null clears it.",
+        },
     },
     "required": ["item_id", "expected_revision"],
 }
@@ -551,6 +569,7 @@ WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
             "description": "Only when the work cannot continue; any blocker saves the item as blocked whatever status is given.",
         },
         "status": WORK_ITEM_CREATE_SCHEMA["properties"]["status"],
+        "stage": WORK_STAGE_KEY_SCHEMA,
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
     "required": ["item_id", "expected_revision", "summary", "request_id"],
@@ -563,6 +582,29 @@ WORK_SETTING_SCHEMA: dict[str, Any] = {
         "expected_revision": {"type": "integer", "minimum": 1},
     },
     "required": ["enabled", "expected_revision"],
+}
+WORK_STAGES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "stages": {
+            "type": "array",
+            "maxItems": 12,
+            "description": "The project's full ordered stage list; it replaces the saved list.",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "key": WORK_STAGE_KEY_SCHEMA,
+                    "label": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "flag_when_empty": {"type": "boolean"},
+                },
+                "required": ["key", "label"],
+            },
+        },
+        "expected_revision": {"type": "integer", "minimum": 1},
+    },
+    "required": ["stages", "expected_revision"],
 }
 WORK_UPDATES_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1501,6 +1543,38 @@ class ControlAssistantWork:
         return {
             **observed,
             "saved": observed["enabled"] == request.enabled
+            and observed["revision"] == saved["revision"],
+        }
+
+    async def work_stages(self, project_id: str) -> dict[str, Any]:
+        project = await self._project(project_id)
+        return {
+            "project_id": project_id,
+            "stages": [stage.model_dump(mode="json") for stage in project.work_stages],
+            "revision": project.revision,
+            "url": f"/projects/{quote(project_id, safe='')}/work?stages=edit",
+        }
+
+    async def set_work_stages(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_STAGES_SCHEMA)
+        current = await self._project(project_id)
+        if current.revision != arguments["expected_revision"]:
+            raise ValueError(
+                "project Work stages changed; read its current revision before updating"
+            )
+        request = WorkStagesPatch.model_validate(arguments)
+        saved = await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/stages",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        observed = await self.work_stages(project_id)
+        return {
+            **observed,
+            "saved": observed["stages"]
+            == [stage.model_dump(mode="json") for stage in request.stages]
             and observed["revision"] == saved["revision"],
         }
 
@@ -3976,6 +4050,18 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.work_stages",
+        "Read this project's ordered Work stages (key, label, flag when empty) and the current project revision. Items use a stage key; the Work board can group by stage.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_work_stages",
+        "Replace this project's ordered Work stages after explicit operator instruction. Read them first, pass the full list and the current project revision. Items keep their stage keys; an item whose key is no longer listed shows under Other stage.",
+        WORK_STAGES_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.work_updates",
         "Page saved check-ins for one selected-project Work item, including older updates. Use next_offset until the desired update is found, then read its exact text.",
         WORK_UPDATES_SCHEMA,
@@ -4372,6 +4458,10 @@ async def dispatch_work_tool(
         return await work.work_item(project_id, arguments)
     if name == "nebula.work.work_setting":
         return await work.work_setting(project_id)
+    if name == "nebula.work.work_stages":
+        return await work.work_stages(project_id)
+    if name == "nebula.work.set_work_stages":
+        return await work.set_work_stages(project_id, arguments)
     if name == "nebula.work.set_work_setting":
         return await work.set_work_setting(project_id, arguments)
     if name == "nebula.work.work_updates":
