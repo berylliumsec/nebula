@@ -6,6 +6,7 @@ but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .recovery_markers import OPERATOR_RECOVERY_PAUSE, OPERATOR_RECOVERY_STOP
 from .async_utils import MaybeAsync
 
@@ -4758,7 +4759,7 @@ class ChatService:
                 if turn is None or queue is None or queue.state != "queued":
                     continue
                 if await turn_admission_allowed(
-                    session, ChatTurn.model_validate(turn.payload)
+                    session, decode_stored(ChatTurn, turn.payload)
                 ):
                     continue
                 runtime.handoff_parked = True
@@ -14670,12 +14671,12 @@ class ChatService:
             raise ChatConfigurationError("automation command runtime is unavailable")
         try:
             mcp_profiles = tuple(
-                McpServerProfile.model_validate(item)
+                decode_stored(McpServerProfile, item)
                 for key in ("mcp_snapshot", "mcp_catalog_snapshot")
                 for item in snapshot.get(key, [])
             )
             ssh_environments = tuple(
-                SshEnvironment.model_validate(item)
+                decode_stored(SshEnvironment, item)
                 for item in snapshot.get("ssh_environment_snapshot", [])
             )
             include_commands = bool(
