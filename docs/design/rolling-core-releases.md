@@ -213,8 +213,8 @@ Three independent designs were produced from the same fact sheet.
   provider re-requests.
 - **(2) is what makes step 2 safe**, the supervisor replacement. The smallest
   version holds only the public socket (systemd socket activation) and lets
-  workers wait out the host-services gap. A dedicated launcher that also holds
-  the host-services socket is the follow-up.
+  workers wait out the host-services gap. The holder now also keeps the
+  host-services socket (see step 2), so that wait is only the fallback.
 - **(3) is reserved for releases that cannot roll**: non-additive schema,
   protocol breaks, and the first transition.
 
@@ -270,17 +270,65 @@ Three independent designs were produced from the same fact sheet.
      and resubmit the same operation ID, which returns the saved receipt. The supervisor joins those tasks
      before releasing host authority. An operation still waiting for the
      operations lock then fails as closed, with a definite receipt.
+   - **The holder also keeps the private host-services socket.**
+     - Workers call the supervisor's host services (capabilities, host
+       pressure, the desktop browser bridge, credentials, Butler actions,
+       memory) through `<socket root>/host-services.sock`. Without a holder
+       that socket disappears for the whole swap.
+     - A second socket unit binds a private Unix socket (`SocketMode=0600`,
+       in a directory only Core's user or root can write) and `serve` adopts
+       it with `--host-services-fd N`. Adoption checks a listening Unix
+       stream socket bound to an absolute path, owner-only and owned by
+       Core's user, and marks the fd non-inheritable. Socket activation that
+       names Core itself (`LISTEN_PID`) accepts only one socket, so a unit
+       with both sockets must pass `--listen-fd` and `--host-services-fd`
+       explicitly (the live unit does so anyway, because of `mercury-run`).
+     - Each generation points `<socket root>/host-services.sock` at the
+       holder's socket with a symlink, replaced atomically. Retained workers
+       of every release keep their derived endpoint; a self-bound generation
+       replaces the link with its own socket.
+     - A stopping holder-backed generation first stops accepting, then
+       finishes the calls it already read against still-open services, then
+       closes them. It leaves the link in place. Later calls wait in the
+       kernel queue.
+     - A starting generation listens as soon as it holds the host lock,
+       before the slow startup work (the knowledge index). A call that
+       arrives before every service is open waits for them, up to 20 s
+       (`READY_WAIT_SECONDS`, inside the caller's 30 s deadline), and is only
+       then answered as undispatched.
+     - A call whose authenticated send time is more than 25 s old when the
+       gateway would dispatch it is answered as undispatched instead
+       (`QUEUED_CALL_LIMIT_SECONDS`). Its caller may already have timed out,
+       and a call it abandoned in the queue must never run later.
+     - The desktop browser-bridge registration is saved in the private
+       `runtime/browser-bridge.json` (owner-only, with its wall-clock expiry)
+       on every registration and refresh, removed on revoke, and adopted by
+       the next generation if unexpired. The desktop's next refresh, which
+       names its registration ID, succeeds instead of getting a 409 that
+       makes Electron drop the browser until it is reopened. This works with
+       or without a holder. An expired registration's file is deleted when
+       the expiry is observed. A device unpaired during the swap keeps the
+       bridge until the registration expires (at most 180 s), as it would
+       without a swap.
    - **Without an inherited socket**, `serve`'s pre-start probe now uses
      `SO_REUSEADDR` like the real listener. TIME_WAIT no longer blocks a
      restart for a minute; a live listener is still refused.
-   - **A worker's host-service client resends only read-only observations:**
-     host capabilities, host pressure, the desktop-browser bridge, and
-     provider and integration credentials. It resends them for up to 120 s,
-     and only when the host provably did not run them:
-     - a connection that was never established, or
+   - **A worker's host-service client resends only read-only observations**
+     (and idempotent Butler action calls): host capabilities, host pressure,
+     the desktop-browser bridge, and provider and integration credentials.
+     With a holder this is the fallback, not the path. It resends them for up
+     to 120 s, and only after failures that show the host being replaced:
+     - a connection that was never established;
      - the gateway's new `X-Nebula-IPC-Undispatched: 1` 503, which it
        returns before dispatch only while the host is being replaced (closed,
-       or not yet holding the host lock).
+       not yet ready, or not yet holding the host lock);
+     - a connection a stopping gateway closed before reading the request
+       (`RemoteProtocolError`), including a pooled keep-alive connection;
+     - a call that waited out its 30 s deadline in the holder's queue because
+       no generation started (`ReadTimeout`). After a timeout only the
+       read-only observations are resent, never the Butler action calls: the
+       timed-out attempt may still be running, and those calls are idempotent
+       only one after another.
      - Capacity limits (busy request slots, the 16-peer cap) and peer
        failures (an unreadable credential) answer a plain 503 and fail at
        once, as before. A peer that is not ready, or whose lease expired,
@@ -450,7 +498,7 @@ The review checked every kind of work against the design.
 | Work | During the roll | Residual risk |
 | --- | --- | --- |
 | Streaming provider turn | Finishes on its original worker; viewer may be cut after 5 s at host swap and resumes by cursor | UI reconnect across a host swap not yet verified in a browser |
-| Queued provider admission | Waits at host swap (host pressure call is resent); parked then restored at handoff | Bounded by the 120 s host wait; a longer host outage still fails the turn |
+| Queued provider admission | Waits at host swap (the host-pressure call waits in the holder's queue); parked then restored at handoff | A failed new generation is bounded by the 120 s resend window; a longer host outage still fails the turn |
 | Follow-up queue item | Waits at host swap; a dispatch in flight keeps the project finishing | Requires the #1017 `await` fix |
 | Harness turn | Project pinned on the old version, untouched | None new |
 | Idle harness session | Detached by the source; the target's next turn resumes the saved vendor thread | A vendor that lost the thread starts fresh with the saved conversation (existing recreate path) |
@@ -551,7 +599,8 @@ The review checked every kind of work against the design.
 **Failure modes.**
 - **New generation fails to start.** The holder keeps queuing, but nothing
   answers. The deployer must start the previous retained release. Worker host
-  observations fail after 120 s.
+  observations time out in the host-services queue and are resent until
+  their 120 s window ends; calls with effects fail after their 30 s deadline.
   - Held projects (`admission_held`) stay held until some supervisor runs,
     because only the supervisor advances handoffs.
   - Repeated start failures hit systemd's start limit, which fails the socket
@@ -569,8 +618,14 @@ The review checked every kind of work against the design.
 - **Supervisor crash mid-roll.** Handoff phases are durable and transfer is
   idempotent; held projects wait.
 - **Keep-alive race.** If the old host closes a pooled connection just as a
-  request is written, the worker sees `RemoteProtocolError`, which is not
-  resent. That follow-up can still go to review. The window is narrow.
+  request is written, the worker sees `RemoteProtocolError`. Read-only host
+  observations are resent; a call with effects is not, and its work can still
+  go to review. The window is narrow.
+- **Rollback below holder-owned host services.** A release without
+  `--host-services-fd` cannot start from a unit that passes it, and refuses
+  to start while `<socket root>/host-services.sock` is the holder link.
+  Rolling back to such a release means removing the flag (and the host
+  socket unit) and deleting that link first.
 - **Butler actions.** A Butler action in `dispatching` when a project transfers
   is reconciled to `uncertain` on the target (`butler_authority.py`). Butler
   actions are not in the handoff inventory.
@@ -591,7 +646,11 @@ Changed modules:
   a retryable 503 for a cancelled request, and joining before host authority
   is released.
 - `runtime_ipc.py`: `RuntimeIpcUndispatched`.
-- `runtime_host_services.py`: `HostServiceClient`, undispatched 503 marker.
+- `runtime_host_services.py`: `HostServiceClient`, undispatched 503 marker;
+  `inherited_host_services`, the endpoint link, listen-before-ready and
+  stop-accepting-first for a holder-owned socket.
+- `runtime_browser_bridge.py`: the saved registration.
+- `cli.py` and `runtime_service.py`: `--host-services-fd`.
 - `runtime_project_handoff.py`: in-flight follow-up blocker.
 
 The rehearsal tools live outside the repository:
@@ -626,6 +685,14 @@ handoff inventory, and the in-Core roller.
   - Rehearsed with real user systemd and a forwarding wrapper: two swaps,
     213 requests, 0 refused, worst queued request 5.6 s. Not yet rehearsed
     with a frozen Core or on the live host.
+  - *(not shipped yet)* Add a second socket unit for host services, for example
+    `nebula-core-host.socket` with
+    `ListenStream=%t/nebula-core/host-services.sock`, `SocketMode=0600`,
+    `Accept=no` and, for a system unit, `SocketUser=` set to Core's user
+    (adoption refuses a socket Core's user does not own), list it second in the service's `Sockets=`, and pass
+    `--host-services-fd 4`. Keep it out of `nebula-core.socket`, whose
+    `Listen` the deployer checks. Enable it only once every retained
+    rollback release supports `--host-services-fd` (see Failure modes).
 - **In-Core roller follow-ups.**
   - Teach the external deployer to hand the per-project loop to the roller:
     stop after `target_execution` and wait on `roll.state` instead of moving
@@ -647,10 +714,10 @@ handoff inventory, and the in-Core roller.
     automation sessions, busy harness sessions,
     running missions, unconfirmed callbacks or approval deliveries) stay
     pinned by design.
-- **Host-services socket ownership.** Hold the host-services socket in the
-  holder too, which makes the 120 s worker wait the exception rather than the
-  path. The browser-bridge registration lives only in memory and is lost at a
-  host swap.
+- **Host-services socket ownership.** *(done: `serve --host-services-fd`
+  adopts a holder-owned host-services socket, and the desktop browser-bridge
+  registration survives a supervisor swap. Its socket unit is listed under
+  Production unit.)*
 - **Cold chat starts.** Use `chat.accept/v1` for a cold project's chat start
   (see [Queued turns and chat-start commands](#queued-turns-and-chat-start-commands-across-a-release)).
 - **Evidence still missing:**
@@ -658,7 +725,10 @@ handoff inventory, and the in-Core roller.
   - harness, goal, mission, approval, schedule and callback journeys during a
     roll;
   - packaged (frozen) bundles;
-  - the live socket unit (source and deployer support are done).
+  - the live socket units, including the host-services one (source and
+    deployer support for the public listener are done);
+  - the Electron desktop's own refresh against a swapped Core (only its
+    registration API was exercised).
 - **AGENTS.md.** Once the production unit and roller are live and rehearsed,
   replace the Butler ritual for supervisor-mode deploys with a pinned-project
   report. Keep the ritual for legacy and non-additive deploys.

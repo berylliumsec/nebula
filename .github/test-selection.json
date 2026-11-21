@@ -1,46 +1,27 @@
 {
-  "change_digest": "55315e07c5a3a3dc37259cdaac28d4691c44babe5c3173f2fa3176e143c06074",
-  "reviewed_by": "Claude Code, selection narrowed at the operator's request to the tests that exercise Work stages and the code it touched",
-  "reason": "Adds project-defined Work stages: Engagement.work_stages and WorkItem/WorkUpdate.stage (declared storage.entity-field-additions/v1), PATCH work/stages, stage on create/patch/check-in/import (import resyncs stage; update_id posts later updates), shared import_item used by both import paths, agent and Butler Work tools, All projects stage cells/gaps/filters, Group: Stage board, item Stage field, stage editor, settings catalog entry and assistant destination. Selected: the new stage tests, the Work import/API/tool tests that cover the refactored import path and changed tool schemas, the batch-import resync test, the Butler Work board capability test, the product-knowledge digest/Chroma sync and stage search tests, the runtime bundle compatibility tests, the Work page and stage logic component tests, catalog/destination/settings-list tests, and the real-Core LAN stages journey on all eight profiles plus the existing import journey on desktop and WebKit 390 (its pairing step changed).",
-  "exclusions": "Not selected because they fail identically on origin/main before this change: test_runtime_work_batches::test_legacy_queued_goal_creates_admit_their_exact_five_projects, test_runtime_work_batch_integration::test_retained_cli_import_progresses_without_api_and_keeps_batch_receipts, test_butler_capabilities::test_scheduled_butler_can_edit_all_assistant_settings, test_product_knowledge::test_product_search_finds_headless_core_and_paired_butler_cli, and test_butler_workflow_registry::test_reviewed_workflow_registry_matches_ui_api_calls (2 unreviewed signatures predate this change; the new calls are linked). Remaining tests in test_work.py, test_control_assistant_work.py and the Butler suites passed locally but cover unchanged behavior. work-hub real-Core board journey passed locally on desktop; not selected. No native code changed.",
+  "change_digest": "e1a0e4156dc154a01b0e567b04bd06060f53d2567cffe4d42e9558f166c0e633",
+  "reviewed_by": "Claude Code, after a scratch-Core supervisor-swap rehearsal and an independent subagent review whose findings were fixed",
+  "reason": "Holder-owned host-services socket (--host-services-fd, endpoint symlink, listen-before-ready, stop-accepting-first, stale-call refusal, wider read-only resend) and a saved desktop browser-bridge registration. Selected: test_runtime_host_services.py (adoption checks, a call queued in the holder across a real generation swap with a non-resending client, self-bound link replacement, resend rules, stale-call refusal, failed-start release), test_runtime_browser_bridge.py (registration survives a generation swap and a real supervisor restart, expiry, revoke, damaged file), test_runtime_host_settings.py (reads browser_bridge.enabled from the shared services), and test_runtime_service.py (serve_runtime composition and the public inherited-listener path next to --host-services-fd). All 114 pass locally on SQLite and PostgreSQL.",
+  "exclusions": "No UI, settings or API shape change: no frontend, Playwright or settings-assistant update applies (--host-services-fd is a deployment flag, not an operator setting). The deployer and socket-unit wiring belong to the separate socket-unit change, so test_simulation_* and the deployer tests are not selected. The supervisor, admission and handoff suites are unaffected: only the host-services gateway's start/stop order and the bridge registry changed. Real-Core evidence: scratch Core rehearsal recorded in docs/validation/rolling-core-releases.md (E8).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 26,
-    "frontend": 42,
+    "python": 114,
+    "frontend": 0,
     "native": 0,
-    "playwright": 10
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_work_stages.py",
-    "tests/v3/test_work.py::test_work_import_api_creates_projects_items_and_updates_without_duplicate_or_overwrite",
-    "tests/v3/test_work.py::test_work_import_api_can_attach_to_existing_project_and_reject_duplicate_ids",
-    "tests/v3/test_work.py::test_work_import_can_create_child_under_existing_project",
-    "tests/v3/test_work.py::test_provider_work_tools_use_chat_scope_and_opt_out",
-    "tests/v3/test_work.py::test_work_api_auth_scope_and_refresh",
-    "tests/v3/test_runtime_work_batches.py::test_batch_reimport_moves_source_stage_inside_project_fence",
-    "tests/v3/test_runtime_work_batches.py::test_natural_import_retry_preserves_ids_and_operator_edits",
-    "tests/v3/test_butler_capabilities.py::test_butler_discovers_and_uses_project_work_board",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_search_finds_work_stages_and_their_butler_tools",
-    "tests/v3/test_runtime_bundle.py"
+    "tests/v3/test_runtime_browser_bridge.py",
+    "tests/v3/test_runtime_host_services.py",
+    "tests/v3/test_runtime_host_settings.py",
+    "tests/v3/test_runtime_service.py"
   ],
-  "frontend": [
-    "ui/src/pages/workStages.test.ts",
-    "ui/src/pages/WorkPage.test.tsx",
-    "ui/src/settingsCatalog.workStages.test.ts",
-    "ui/src/assistantDestinations.test.ts",
-    "ui/src/components/CompactSettingsList.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:work-stages",
-    "entry:work-import/assistant-real-desktop",
-    "entry:work-import/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }

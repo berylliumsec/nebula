@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 import json
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 import httpx
 import pytest
 from pydantic import ValidationError
@@ -19,9 +20,13 @@ from nebula.v3.deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.runtime_browser_bridge import (
     BRIDGE_OPERATION,
+    BRIDGE_TTL_SECONDS,
     BridgeRegistration,
+    BridgeRevocation,
+    HostBrowserBridge,
     RemoteBrowserBridge,
 )
+from nebula.v3.runtime_launcher import write_private
 from nebula.v3.runtime_coordination import LeaseLost
 from nebula.v3.runtime_host_services import host_service_client
 from nebula.v3.runtime_ipc import RuntimeIpcError
@@ -355,3 +360,121 @@ async def test_bridge_disconnect_does_not_retry_an_admitted_mutation(bridge_host
                     "POST", "/v1/companion/identity", {"operation": "click"}
                 )
         assert len(requests) == 1
+
+
+async def test_registration_survives_a_supervisor_generation_swap(tmp_path):
+    path = tmp_path / "browser-bridge.json"
+    now, wall = [1000.0], [5_000_000.0]
+    first = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    assert first.restore(path) is False and not path.exists()
+    value = BridgeRegistration.model_validate(registration())
+    issued = first.register_viewer(value, "device:desktop-test-device")
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert TOKEN in path.read_text()
+    first.close()
+    # Closing a generation keeps the registration for the next one.
+    assert path.exists()
+
+    # The next generation runs on a different monotonic clock.
+    now[0], wall[0] = 7.0, wall[0] + 30
+    second = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    assert second.restore(path) is True and second.enabled
+    current = second._current()
+    assert current.registration.registration_id == issued["registration_id"]
+    assert current.deadline == pytest.approx(7.0 + BRIDGE_TTL_SECONDS - 30)
+    # The desktop's next refresh, naming its registration, is not a conflict.
+    refreshed = second.register_viewer(
+        value.model_copy(update={"registration_id": issued["registration_id"]}),
+        "device:desktop-test-device",
+    )
+    assert refreshed["registration_id"] == issued["registration_id"]
+    with pytest.raises(HTTPException) as other:
+        second.register_viewer(
+            value.model_copy(update={"registration_id": issued["registration_id"]}),
+            "operator",
+        )
+    assert other.value.status_code == 409
+
+    second.revoke_viewer(
+        BridgeRevocation(
+            device_id="desktop-test-device",
+            registration_id=issued["registration_id"],
+        ),
+        "device:desktop-test-device",
+    )
+    assert not path.exists()
+    third = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    assert third.restore(path) is False and third._current() is None
+
+
+async def test_expired_or_damaged_saved_registration_is_discarded(tmp_path):
+    path = tmp_path / "browser-bridge.json"
+    now, wall = [1000.0], [5_000_000.0]
+    first = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    first.restore(path)
+    first.register_viewer(BridgeRegistration.model_validate(registration()), "operator")
+    wall[0] += BRIDGE_TTL_SECONDS + 1
+    late = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    assert late.restore(path) is False and not path.exists()
+    assert not late.enabled
+
+    for damaged in (
+        b"not json",
+        json.dumps({"actor_id": "operator"}).encode(),
+        json.dumps(
+            {
+                "actor_id": "someone",
+                "registration": registration(registration_id="r" * 24),
+                "expires_at": wall[0] + 60,
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "actor_id": "operator",
+                "registration": registration(),
+                "expires_at": wall[0] + 60,
+            }
+        ).encode(),
+    ):
+        write_private(path, damaged)
+        bridge = HostBrowserBridge(
+            None, clock=lambda: now[0], wall_clock=lambda: wall[0]
+        )
+        assert bridge.restore(path) is False and not path.exists()
+    # A future expiry never extends the lease beyond one TTL.
+    write_private(
+        path,
+        json.dumps(
+            {
+                "actor_id": "operator",
+                "registration": registration(registration_id="r" * 24),
+                "expires_at": wall[0] + 10 * BRIDGE_TTL_SECONDS,
+            }
+        ).encode(),
+    )
+    bridge = HostBrowserBridge(None, clock=lambda: now[0], wall_clock=lambda: wall[0])
+    assert bridge.restore(path) is True
+    assert bridge._current().deadline == now[0] + BRIDGE_TTL_SECONDS
+
+
+async def test_supervisor_restart_keeps_the_desktop_attached(bridge_host):
+    response = await bridge_host.public.post(PATH, headers=AUTH, json=registration())
+    assert response.status_code == 200
+    issued = response.json()["registration_id"]
+    await bridge_host.root.close()
+    replacement = RuntimeSupervisor(
+        bridge_host.managed.new_host(), operator_token=_TOKEN
+    )
+    await replacement.start()
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=replacement.app),
+            base_url="http://fixture",
+        ) as public:
+            refreshed = await public.post(
+                PATH, headers=AUTH, json=registration(registration_id=issued)
+            )
+            assert refreshed.status_code == 200
+            assert refreshed.json()["registration_id"] == issued
+    finally:
+        await replacement.close()

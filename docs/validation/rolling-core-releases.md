@@ -63,6 +63,17 @@ Every run had two accommodations; neither is part of the change:
 | E7 | After the review fixes | A→B host activation behind the holder; prepare_api then timed out under load average 44 | 9/9 | The supervisor generation swap took 38 s. 835/835 probes OK (max 37.6 s), none refused. The API worker missed the existing 20 s readiness bound twice, leaving `uncertain` receipts; no work was affected |
 | E7c | After the review fixes | Same roll resumed with a new operation ID: API blue/green, target, 4 handoffs (152 s) | 9/9 | 6/6 queue items complete, 0 error frames; `resident_versions` is the new release only |
 
+| E8 | Holder-owned host services (this change) | 4 supervisor generation swaps behind a holder that keeps both sockets, while 4 loops call `host.services/v1` as a retained worker with a client that never resends | — | 2151/2151 calls OK, slowest 5.6 s (queued during the swap); with the workers' resending client, 2 more swaps: 1221/1221 OK. The desktop bridge registration was refreshed with its ID after each swap: 4/4 200 with the same ID |
+| E8 baseline | Same code, holder keeps only the public socket | 3 swaps, same probe | — | 1180 of 2724 calls failed: 1143 missing socket, 24 refused, 13 undispatched 503s. With the workers' resending client instead: 1556/1556 OK |
+| E8 `main` | `main` (2276020) | 2 swaps, same probe | — | Bridge refresh with its ID: 409 "no longer current" after each swap, which makes the desktop drop the browser until it is reopened |
+| E8 chats | This change, both sockets held | `rehearse.py`: 3 streaming chats with 2 queued follow-ups each, supervisor swap 2 s after streaming | 9/9 | 0 violations, settled 10 s after the swap; no error diagnostics in worker or Core logs during the swaps |
+
+E8 ran on November 21, 2026 (scratch Core on PostgreSQL, stub model,
+`scripts/deploy_rehearsal/host_swap.sh` and `host_services_probe.py`, the
+holder from `listener_holder.py`). Before the stopping generation stopped
+accepting first, the first E8 run had 11 undispatched 503s out of 1590 calls,
+all answered by the old generation while it closed its services. A second run before the review fixes gave 2023/2023.
+
 Additional detail for E4–E6:
 - Host activation took 19.4 s and 21.2 s. Connections queued in the kernel
   backlog instead of being refused.
@@ -91,6 +102,20 @@ and load. All three pass in CI.
     and share one call when the host answers;
   - peer-capacity and peer failures fail after one attempt, while a closed
     gateway still marks its 503 undispatched.
+- `tests/v3/test_runtime_host_services.py`, holder-owned host services:
+  - adoption accepts only a listening, owner-only Unix socket at an absolute
+    path, and leaves a rejected descriptor open;
+  - a call made while no generation serves waits in the holder's queue and is
+    answered by the next generation, with a client that never resends;
+  - a self-bound generation replaces a holder link with its own socket;
+  - `RemoteProtocolError` is resent for read-only and idempotent calls,
+    `ReadTimeout` for read-only observations only (never a Butler submit);
+  - a call older than 25 s is refused as undispatched before it reaches any
+    service, and a failed start answers waiting calls at once.
+- `tests/v3/test_runtime_browser_bridge.py`: the bridge registration survives
+  a generation swap and a real supervisor restart, keeps its remaining
+  lifetime, is removed on revoke, and an expired or damaged file is
+  discarded.
 - `tests/v3/test_runtime_service.py`:
   - an inherited listener queues connections between generations;
   - an explicit fd must match an IP-literal `--host`/`--port`, so a wildcard
@@ -182,8 +207,11 @@ auto-admission change.
   that ends without a terminal frame (E6), on desktop and mobile.
 - Harness, goal, mission, approval, schedule and callback journeys during a
   roll.
-- Frozen onefile bundles, the systemd socket unit, `--listen-fd` under
-  `mercury-run`, and the deployer's readback against a socket-activated unit.
+- Frozen onefile bundles, the systemd socket units (public and host
+  services), `--listen-fd` and `--host-services-fd` under `mercury-run`, and
+  the deployer's readback against a socket-activated unit.
+- The Electron desktop's own refresh across a swap (E8 exercised its
+  registration API with curl).
 - More than four projects and a third resident version. Parallel handoffs
   ran only in the roller rehearsal above (K = 2).
 - A roller roll with a pinned project, a harness session or a supervisor
