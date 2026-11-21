@@ -1609,6 +1609,13 @@ kbd { font-size: 11px; }
 .chat-context-meter > small { color: var(--muted); font-size: 11px; }
 .chat-context-meter.status-failed > span { background: var(--red-muted); color: var(--red); }
 .chat-action-status { display: flex; min-height: 28px; align-items: center; justify-content: center; gap: 5px; margin: 4px 12px 0; color: var(--green); font-size: 11px; }
+.chat-hook-outcomes { margin: 4px 12px 0; color: var(--muted); font-size: 11px; }
+.chat-hook-outcomes > summary { min-height: 28px; display: flex; align-items: center; cursor: pointer; }
+.chat-hook-outcomes [role="list"] { display: grid; gap: 4px; padding: 2px 0 4px 12px; border-left: 1px solid var(--border-soft); }
+.chat-hook-outcomes [role="listitem"] { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.chat-hook-outcomes [role="listitem"] strong { color: var(--text); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.chat-hook-outcomes [role="listitem"] [role="alert"] { flex-basis: 100%; color: var(--red); }
+.chat-hook-outcomes [role="listitem"] small + small { flex-basis: 100%; }
 .callback-waiting-status { display: grid; min-width: 0; gap: 10px; margin: 6px 12px 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); color: var(--text); background: var(--surface); }
 .callback-waiting-status > header { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .callback-waiting-status > header strong { font-size: 12px; font-weight: var(--weight-semibold); }

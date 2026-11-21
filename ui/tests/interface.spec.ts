@@ -7536,15 +7536,9 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
       return;
     }
     if (path.endsWith("/chat/turns/turn-hook/hooks")) {
-      await route.fulfill({ json: [{
-        id: "hook-run-1",
-        hook_id: "audit",
-        event_name: "chat.turn.completed",
-        status: "complete",
-        side_effects: "none",
-        started_at: entity.created_at,
-        completed_at: entity.updated_at,
-      }] });
+      // One run per tool call: the outcomes list shares a row for identical clean runs.
+      const hookRun = (id: string, event_name: string) => ({ id, hook_id: "audit", event_name, status: "complete", side_effects: "none", started_at: entity.created_at, completed_at: entity.updated_at });
+      await route.fulfill({ json: [hookRun("hook-run-1", "chat.turn.completed"), hookRun("hook-run-2", "tool.before"), hookRun("hook-run-3", "tool.before")] });
       return;
     }
     await route.fallback();
@@ -7587,7 +7581,23 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Run the audit hook");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByText("Hooked answer")).toBeVisible();
-  await expect(page.getByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
+  const hookSummary = page.getByText("Lifecycle hooks · 3/3 completed");
+  await expect(hookSummary).toBeVisible();
+  await hookSummary.click();
+  const hookRows = page.getByRole("list", { name: "Lifecycle hook outcomes" }).getByRole("listitem");
+  await expect(hookRows).toHaveCount(2);
+  await expect(hookRows.nth(1)).toHaveText(/Before tool · 2 complete$/);
+  const hookLayout = await hookRows.nth(1).evaluate((row) => {
+    const name = row.querySelector("strong")!.getBoundingClientRect();
+    const detail = row.querySelector("small")!.getBoundingClientRect();
+    const list = row.parentElement!.getBoundingClientRect();
+    return { nameStartsList: Math.abs(name.left - row.getBoundingClientRect().left) < 1, gap: detail.left - name.right, wrapped: detail.top >= name.bottom - 1, listLeft: list.left, rowLeft: row.getBoundingClientRect().left };
+  });
+  // Left-aligned rows, and the hook name never runs into its detail.
+  expect(hookLayout.nameStartsList).toBe(true);
+  expect(hookLayout.wrapped || hookLayout.gap >= 4).toBe(true);
+  expect(hookLayout.rowLeft - hookLayout.listLeft).toBeLessThan(24);
+  expect((await new AxeBuilder({ page }).include('[data-guide="hook-outcomes"]').analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds)).toEqual(["audit"]);
   await openSessionDetails(page);
   await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
