@@ -1,28 +1,24 @@
 {
-  "change_digest": "5025d5c55d78f4f4a7daf64a3bf011e848a76d94adc0e85672c8fd61c072fd83",
-  "reviewed_by": "Claude Code, after diagnosing a dead live worker left ready/degraded for 12 hours (root cause independently validated by a fresh subagent)",
-  "reason": "Expired-owner recovery now also handles owners of projects without demand: it reconciles the dead owner and releases the project (release_dead_owner) instead of starting a worker, falling back to recovery when work still needs one; reconcile_processes marks a provably gone, still-owned execution worker unreachable. Selected: test_runtime_auto_recovery.py (release vs recover decisions, fallback, receipt requirement), test_runtime_reconciliation.py (new end-to-end regression with a real killed worker: unreachable, released, retired, health ready, newer fencing token; plus existing reconcile_processes cases), test_runtime_orphan_recovery.py (dead-owner reconciliation that the release depends on), test_storage_alert_dispatch.py (demanded expired owners still recover; stub repaired), test_runtime_processes.py (host rediscovery and retirement), test_runtime_coordination.py (fencing and leases; also enables the CI PostgreSQL runtime), test_supervisor.py (handoff loop and evict_execution), test_deployment_lifecycle.py (deployment status, health and ready_verified).",
-  "exclusions": "tests/v3/test_recovery_controls.py is excluded: 3 PostgreSQL cases fail on pristine origin/main and it does not exercise the release path. test_chat.py is excluded (unrelated, and its known PostgreSQL failure would fail with the PostgreSQL runtime enabled). No API shape, UI, setting or operator workflow changed (deployment status keeps its schema; a dead worker now reads unreachable), so no frontend, Playwright or LAN-instance journey applies.",
+  "change_digest": "d28c4cd935d0a35968a366f9042da48e4d3b5176ee4e2248de4500490a512b77",
+  "reviewed_by": "Claude Code, after diagnosing a replaced API that stayed draining on live Core (root cause independently validated by a fresh subagent)",
+  "reason": "A promoted-away API is now retired by the supervisor once API_DRAIN_GRACE_MS (60 s) has passed, and deployment status no longer degrades on a replaced API within API_DRAIN_BOUND_MS (180 s) but does past it. Selected: test_api_candidate_retirement.py (new regressions: a draining API with an open stream is kept within grace then retired with its proxied streams closed and the promoted API never retired; health stays ready during the drain and degrades past the bound; a refused retirement keeps the row; an open SSE stream cannot hold the worker server past graceful shutdown; plus the existing prepare_api retirement guards), test_deployment_lifecycle.py (promotion, retirement, status health), test_supervisor.py (supervisor operations and loop), test_runtime_management.py (the operator retire action; also enables the CI PostgreSQL runtime).",
+  "exclusions": "test_api_worker.py, test_api_worker_composition.py, test_deployment_inventory_reads.py, test_runtime_worker_features.py and tests/test_simulation_host_activation.py were run locally and pass except two cases that fail identically on pristine origin/main for environmental reasons (a subprocess without the nebula package on its path, and a deployer test that resolves /srv/apple-sim on this host); they do not exercise the changed paths beyond what the selection covers. test_chat.py is not selected because its [postgresql] case fails on main in CI. No UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 479,
+    "python": 127,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_auto_recovery.py",
-    "tests/v3/test_runtime_reconciliation.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_storage_alert_dispatch.py",
-    "tests/v3/test_runtime_processes.py",
-    "tests/v3/test_runtime_coordination.py",
+    "tests/v3/test_api_candidate_retirement.py",
+    "tests/v3/test_deployment_lifecycle.py",
     "tests/v3/test_supervisor.py",
-    "tests/v3/test_deployment_lifecycle.py"
+    "tests/v3/test_runtime_management.py"
   ],
   "frontend": [],
   "native": [],
