@@ -19,6 +19,47 @@ the cutover boundary.
 The service token stays in the host's private environment file; these source
 files contain no token value.
 
+## Hold the public listener across host swaps
+
+Without a socket unit, Core's listener closes when the supervisor stops and
+clients are refused until the next generation binds it (84 s in rehearsal E1
+of `docs/design/rolling-core-releases.md`). With `nebula-core.socket`, systemd
+holds `127.0.0.1:8000` and connections wait in the kernel queue instead.
+
+Install the files in `scripts/simulation/systemd/` for the `simulation` user:
+
+1. Copy `nebula-core.socket` to `~/.config/systemd/user/` and
+   `nebula-core.service.d/10-socket.conf` to
+   `~/.config/systemd/user/nebula-core.service.d/`.
+2. Add `--listen-fd 3` to the `serve` arguments in the service's `ExecStart`.
+   `mercury-run` and the onefile bootloader sit between systemd and Core, so
+   `LISTEN_PID` names a parent and Core needs the descriptor explicitly.
+   `--host 127.0.0.1 --port 8000` must still match the socket exactly; Core
+   refuses any other inherited socket.
+3. The Core release must already support `serve --listen-fd`. Run
+   `systemctl --user daemon-reload`, stop `nebula-core.service`, start
+   `nebula-core.socket`, then start the service. This one restart is not
+   held; every later host activation is.
+
+On every host activation the deployer reads the unit configuration and, when
+the socket is configured, requires `Requires=nebula-core.socket`, exactly
+`ListenStream=127.0.0.1:8000`, `Accept=no`, `--listen-fd 3` and a
+`TimeoutStopSec` above 40 s. A connection that arrives while the service is
+stopped starts it from `current`, so the deployer selects the new release
+*before* it stops the old supervisor (journal state `release_selected`), and
+the old process's exit is still proven before readiness is read. A failed
+start that trips the socket's start limit fails the socket too; the deployer
+resets and restarts it, and readback reports `socket_listening`.
+
+Before any stop the deployer reads `GET /api/v1/deployment/operations` and
+waits up to `HOST_OPERATION_WAIT_SECONDS` (120 s) for the live supervisor's
+in-flight deployment operations, which its stop would otherwise wait for past
+the stop grace. It refuses the swap, leaving the old host running, if one is
+still in flight. A supervisor without that route relays the read to its API
+worker (503 "reconnecting" in practice); that answer, or 404/405, means the
+listing is unsupported and the stop is not waited for, as before. 401/403 and
+an unreachable Core refuse the swap.
+
 ## Build ahead, and see where the time goes
 
 `python3 -m nebula_deployer prebuild` does what `prepare` does, so that a later

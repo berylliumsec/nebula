@@ -39,6 +39,12 @@ def _offline_api_read(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
     monkeypatch.setattr(deployer, "stop_supervisor_service", lambda _identity: deployer.service("stop"))
+    # These hosts have no socket unit and their fake Cores predate the
+    # running-operation listing; tests/test_simulation_host_restart.py covers both.
+    monkeypatch.setattr(deployer, "socket_activation", lambda: None)
+    monkeypatch.setattr(
+        deployer, "wait_no_running_operations", lambda: {"supported": False}
+    )
 
 
 class _ApiCore:
