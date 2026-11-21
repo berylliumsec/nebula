@@ -464,6 +464,10 @@ def test_product_search_finds_work_stages_and_their_butler_tools(monkeypatch):
         "Which projects are missing a stage on All projects?"
     )
     assert any("Missing a stage" in str(item["text"]) for item in gaps)
+    inherited = search_product_knowledge(
+        "Do subprojects use their parent project's Work stages?"
+    )
+    assert any("nearest parent's" in str(item["text"]) for item in inherited)
 
 
 def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):

@@ -1548,9 +1548,16 @@ class ControlAssistantWork:
 
     async def work_stages(self, project_id: str) -> dict[str, Any]:
         project = await self._project(project_id)
+        effective, source = await self.work_service.effective_stages(project)
         return {
             "project_id": project_id,
+            # The project's own stages; set_work_stages replaces only these.
             "stages": [stage.model_dump(mode="json") for stage in project.work_stages],
+            # What its board uses: its own, else its nearest parent's.
+            "effective_stages": [stage.model_dump(mode="json") for stage in effective],
+            "inherited_from": (
+                {"project_id": source.id, "name": source.name} if source else None
+            ),
             "revision": project.revision,
             "url": f"/projects/{quote(project_id, safe='')}/work?stages=edit",
         }
@@ -4051,7 +4058,7 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.work_stages",
-        "Read this project's ordered Work stages (key, label, flag when empty) and the current project revision. Items use a stage key; the Work board can group by stage.",
+        "Read this project's ordered Work stages (key, label, flag when empty) and the current project revision. A subproject without its own stages uses its nearest parent's: effective_stages and inherited_from report them. Items use a stage key; the Work board can group by stage.",
         EMPTY_SCHEMA,
         True,
     ),

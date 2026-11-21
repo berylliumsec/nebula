@@ -604,4 +604,34 @@ describe("Work stages", () => {
       workspace.api.request.mockImplementation(original);
     }
   });
+
+  it("gives subprojects their parent's stages and treats an item-less parent as a container", async () => {
+    const user = userEvent.setup();
+    const parent = { id: "portfolio", name: "Portfolio", status: "active", workEnabled: true, workStages: stages, revision: 7 };
+    workspace.engagements = [
+      parent,
+      staged({ workStages: [], parentEngagementId: "portfolio" }),
+      { id: "project-2", name: "Release notes", status: "active", workEnabled: true, parentEngagementId: "portfolio" },
+    ] as typeof workspace.engagements;
+    const view = render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "Show subprojects of Portfolio" }));
+    const strip = await screen.findByRole("list", { name: "Documentation portal stages" });
+    expect(within(strip).getByRole("link", { name: "Draft: 1 open, 1 blocked" })).toBeVisible();
+    // The sibling with no items still shows the inherited stages as gaps; the parent has no strip of its own.
+    expect(within(screen.getByRole("list", { name: "Release notes stages" })).getByRole("link", { name: "Draft: none yet" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Portfolio stages" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Define stages" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Missing a stage/ }));
+    expect(screen.getByRole("list", { name: "Release notes stages" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Portfolio stages" })).toBeNull();
+    view.unmount();
+
+    render(<MemoryRouter initialEntries={["/projects/project-1/work?group=stage&stages=edit"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const board = await screen.findByRole("region", { name: "Project board by stage" });
+    expect(within(board).getByText("Using Portfolio's stages.")).toBeVisible();
+    expect(within(board).getByRole("heading", { name: "Draft" })).toBeVisible();
+    const dialog = await screen.findByRole("dialog", { name: "Work stages" });
+    expect(dialog).toHaveTextContent("Documentation portal uses Portfolio's stages.");
+    expect(within(dialog).getByRole("textbox", { name: "Stage 1 name" })).toHaveValue("Draft");
+  });
 });

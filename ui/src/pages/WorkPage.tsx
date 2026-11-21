@@ -9,7 +9,7 @@ import { projectRoot, projectSurface, resourcePath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useOptionalChrome } from "../state/ChromeContext";
 import { WorkStageEditor } from "./WorkStageEditor";
-import { hasStageGap, stageCells, stageColumns, type StageCell } from "./workStages";
+import { effectiveStages, hasStageGap, stageCells, stageColumns, type StageCell } from "./workStages";
 import "./WorkPage.css";
 
 type Status = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done";
@@ -136,7 +136,8 @@ export function WorkPage() {
   }, [activeProjects, projectById]);
   const directChildren = childrenByParent.get(projectId ?? "") ?? [];
   // The URL owns which grouping and stage are shown, so a stage link and reload land on the same view.
-  const projectStages: WorkStage[] = selectedProject?.workStages ?? [];
+  // A subproject without its own stages uses its nearest parent's.
+  const { stages: projectStages, from: stagesFrom } = effectiveStages(selectedProject, projectById);
   const groupByStage = searchParams.get("group") === "stage";
   const focusedStage = searchParams.get("stage");
   const editingStages = Boolean(projectId) && searchParams.get("stages") === "edit";
@@ -346,9 +347,13 @@ export function WorkPage() {
     for (const item of items) byProject.set(item.engagement_id, [...(byProject.get(item.engagement_id) ?? []), item]);
     return byProject;
   }, [items]);
-  const cellsByProject = useMemo(() => new Map(activeProjects
-    .filter((project) => (project.workStages ?? []).length > 0)
-    .map((project) => [project.id, stageCells(project.workStages ?? [], itemsByProject.get(project.id) ?? [])])), [activeProjects, itemsByProject]);
+  // A parent with subprojects and no items of its own only holds the stages its subprojects use: it gets no cells.
+  const cellsByProject = useMemo(() => new Map(activeProjects.flatMap((project) => {
+    const { stages } = effectiveStages(project, projectById);
+    const own = itemsByProject.get(project.id) ?? [];
+    if (!stages.length || (!own.length && childrenByParent.has(project.id))) return [];
+    return [[project.id, stageCells(stages, own)] as const];
+  })), [activeProjects, projectById, itemsByProject, childrenByParent]);
   const gapCount = useMemo(() => [...cellsByProject.values()].filter(hasStageGap).length, [cellsByProject]);
   const blockedProjects = useMemo(() => new Set(items.filter((item) => item.status === "blocked").map((item) => item.engagement_id)), [items]);
   const visibleProjects = useMemo(() => {
@@ -366,7 +371,7 @@ export function WorkPage() {
   const boardColumns = useMemo(() => stageColumns(projectStages, items), [projectStages, items]);
   const stageLabel = (key: string | null | undefined) => key ? projectStages.find((stage) => stage.key === key)?.label ?? key : "No stage";
   const createTarget = engagements.find((project) => project.id === (projectId ?? createProjectId));
-  const createStages = createTarget?.workStages ?? [];
+  const createStages = effectiveStages(createTarget, projectById).stages;
   const activeItems = useMemo(() => items.filter((item) => item.status !== "done"), [items]);
   const agentEntries = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working" || state === "waiting").map(([sessionId, state]) => ({
     sessionId,
@@ -594,7 +599,7 @@ export function WorkPage() {
               {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
               <div className="work-project-content"><Link className="work-project-primary" to={projectRoot(project.id)}><span className="work-project-initials" aria-hidden="true">{projectInitials(project.name)}</span><span className="work-project-main"><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}{projectItems.latest ? "" : " · No check-ins yet"}</small></span><ProjectStatusCounts counts={projectItems} /><ArrowRight size={16} /></Link>
                 {cells && <ProjectStageStrip projectId={project.id} projectName={project.name} cells={cells} />}
-                {projectsView === "stages" && !cells && <Link className="work-stage-define" to={`${projectSurface(project.id, "work")}?stages=edit`}><Columns3 size={14} aria-hidden="true" /> Define stages</Link>}
+                {projectsView === "stages" && !cells && !effectiveStages(project, projectById).stages.length && <Link className="work-stage-define" to={`${projectSurface(project.id, "work")}?stages=edit`}><Columns3 size={14} aria-hidden="true" /> Define stages</Link>}
                 {projectItems.latest && <Link className="work-project-latest" to={projectSurface(projectItems.latest.engagement_id, "work", projectItems.latest.id)}><span><strong>Latest check-in: {projectItems.latest.title}</strong><small>{projectName(projectItems.latest.engagement_id)} · {time(projectItems.latest.last_update_at)}</small>{latestUpdate && <small>{latestUpdate.blocker ? `Blocked: ${latestUpdate.blocker}` : latestUpdate.next_step ? `Next: ${latestUpdate.next_step}` : latestUpdate.summary}</small>}</span><ArrowRight size={15} aria-hidden="true" /></Link>}</div>
             </div>;
           })}</div>
@@ -613,6 +618,7 @@ export function WorkPage() {
             <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}><Columns3 size={15} aria-hidden="true" /> Stages</button>
           </div>
           {groupByStage ? <section className="work-board work-stage-board" aria-label="Project board by stage">
+            {stagesFrom && <p className="work-stage-inherited">Using {stagesFrom.name}'s stages.</p>}
             {!projectStages.length && <p className="work-empty-inline">This project has no stages yet. <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}>Define stages</button></p>}
             {boardColumns.map((column) => <section className="work-column" key={column.key} data-focused={focusedStage === column.key || undefined} aria-labelledby={`work-stage-column-${column.key}`}>
               <header><h2 id={`work-stage-column-${column.key}`}>{column.label}</h2><span>{column.open.length}</span></header>
@@ -652,7 +658,7 @@ export function WorkPage() {
         {directChildren.length > 0 && <section className="work-panel work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{directChildren.length}</span></div><div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{directChildren.filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())).slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}</div>{directChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing up to {visibleProjectLimit} matches. Search to narrow the list.</p>}</section>}
       </>}
     </>}
-    {editingStages && selectedProject && <WorkStageEditor key={selectedProject.id} project={selectedProject} itemCounts={Object.fromEntries(boardColumns.map((column) => [column.key, column.open.length]))} save={saveStages} close={() => setParam("stages", null)} />}
+    {editingStages && selectedProject && <WorkStageEditor key={selectedProject.id} project={selectedProject} inherited={stagesFrom ? { from: stagesFrom.name, stages: projectStages } : undefined} itemCounts={Object.fromEntries(boardColumns.map((column) => [column.key, column.open.length]))} save={saveStages} close={() => setParam("stages", null)} />}
     {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label>{createStages.length > 0 && <label>Stage<select value={createStage} onChange={(event) => setCreateStage(event.target.value)}><option value="">No stage</option>{createStages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>}<label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" aria-busy={busy} disabled={busy || !title.trim()}>{busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : <ListTodo size={16} />} Create item</button></footer></form></div>}
     {trackingAgent && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setTrackingAgent(null); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-track-title" onSubmit={(event) => void trackWork(event)}><header><h2 id="work-track-title">Track conversation work</h2><button className="work-dialog-close" type="button" aria-label="Close" title="Close" disabled={busy} onClick={() => setTrackingAgent(null)}><X size={18} aria-hidden="true" /></button></header><p className="work-track-context">{projectName(trackingAgent.projectId)} · {trackingAgent.title}</p>
       {availableTrackItems.length > 0 && <><label>Find an existing item<input type="search" value={trackSearch} onChange={(event) => setTrackSearch(event.target.value)} placeholder="Search open items" /></label><label>Work item<select value={trackItemId} onChange={(event) => setTrackItemId(event.target.value)}><option value="">Create a new item</option>{visibleTrackItems.map((item) => <option key={item.id} value={item.id}>{item.title} · {label(item.status)}</option>)}</select></label></>}

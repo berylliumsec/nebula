@@ -96,9 +96,17 @@ names. The editor derives a new stage's key from its name and never changes a
 saved key, so items keep their stage; an item whose key is no longer listed
 shows under Other stage.
 
+A subproject without stages of its own uses its nearest parent's, so a
+portfolio defines its stages once on the parent. Saving stages on a subproject
+gives it its own list, starting from the inherited keys. A parent that has
+subprojects and no items of its own is a container: All projects shows its
+subprojects' stage cells, not its own, and never lists it as missing a stage.
+This keeps one write on the parent instead of one per subproject, each of
+which is a project command that starts that project's worker.
+
 An item's optional `stage` is set on create, by `PATCH` (null clears it), or
 by a check-in's `stage`, which moves the item with the update and is recorded
-on it. Agent `work_list` results include the project's stages, and
+on it. Agent `work_list` results include the project's effective stages, and
 `work_create`/`work_check_in` accept a stage key. Butler uses
 `nebula.work.work_stages` and `nebula.work.set_work_stages`.
 
