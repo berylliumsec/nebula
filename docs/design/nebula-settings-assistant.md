@@ -1243,8 +1243,10 @@ Oversight, Memory and Settings follow the project chosen in their **Project**
 picker. Links to Butler settings or oversight from elsewhere open these
 sections; while the small panel is open they open inside it instead. On a phone
 the sections are **Board**, **Threads**, **Oversight** and **More** (Code &
-files, Memory, Settings, Open full Nebula). **Start Butler Voice** is in the top
-bar.
+files, Memory, Settings, All projects, Open full Nebula). **Start Butler Voice**
+is in the top bar, next to **All projects**, which opens the Projects page
+(`/projects`): every project's Work status and, where projects define them,
+their stage cells and Missing a stage filter.
 
 The rail's **Projects** picker holds each project's one ongoing Butler
 conversation (the same conversation the small panel shows), with its request

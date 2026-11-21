@@ -89,7 +89,23 @@
 
 .iconButton:hover { background: var(--surface-hover); color: var(--text); }
 
+.projectsLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--touch-target);
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.projectsLink:hover { background: var(--surface-hover); color: var(--text); }
+
 .mode button:focus-visible,
+.mode a:focus-visible,
 .mode select:focus-visible,
 .mode textarea:focus-visible,
 .mode input:focus-visible {
@@ -944,6 +960,7 @@
 }
 
 .sheetRow:last-child { border-bottom: 0; }
+a.sheetRow { text-decoration: none; }
 
 @media (max-width: 1180px) {
   .pulse { display: none; }
