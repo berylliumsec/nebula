@@ -262,6 +262,7 @@ from .work import (
     WorkImportResult,
     WorkPatch,
     WorkSettingPatch,
+    WorkStagesPatch,
     WorkProjectBatchResult,
     WorkProjectBatchUpdate,
     WorkService,
@@ -8281,6 +8282,17 @@ def create_execution_kernel(
     ) -> Engagement:
         return await work_service.set_enabled(
             engagement_id, body.enabled, expected_revision=body.expected_revision
+        )
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/stages",
+        response_model=Engagement,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_work_stages(engagement_id: str, body: WorkStagesPatch) -> Engagement:
+        return await work_service.set_stages(
+            engagement_id, body.stages, expected_revision=body.expected_revision
         )
 
     @app.post(
