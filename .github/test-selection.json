@@ -1,23 +1,23 @@
 {
-  "change_digest": "e2c135621d229566198d4290614808f142a4cbb84eed56569596c919826d8201",
-  "reviewed_by": "Claude Code, after diagnosing deployment_receipts sequential scans on live Core (independently validated by a fresh subagent)",
-  "reason": "Migration 0055 adds ix_deployment_receipt_action_time (action, occurred_at_ms) and the matching model index, so the supervisor admission reconcile's api.promoted and project.quiesced lookups (about once a second) stop reading the whole deployment_receipts table. Selected: the new migration test (SQLite + PostgreSQL: rows saved before the index are found, the Postgres plan uses the index instead of a sequential scan, downgrade drops only the index), test_runtime_bundle.py for the reviewed compatibility head and migration-tree digest, and test_storage_open_rows.py as the neighbouring index-only migration test. ci.yml adds the new test to the selected-PostgreSQL gates so its Postgres variant runs.",
-  "exclusions": "No API, UI, setting or operator workflow changes, so no frontend, Playwright or LAN-instance journey applies; product help and settings assistant are unaffected. Query code is unchanged, so the runtime admission and retirement suites are not selected. Behaviour on live data was checked separately (57 api.promoted and 90 project.quiesced rows out of 180k).",
+  "change_digest": "8155099624e8c43799ed7af619725dc425ada851d86b7926c220c2cdd166c7c3",
+  "reviewed_by": "Claude Code, after diagnosing live supervisor CPU (root cause independently validated by a fresh subagent)",
+  "reason": "verify_recovery returns before the full project checkpoint scan when the recovery is already verified for the exact lease and restored digest; the prepared -> verified path is unchanged. Selected: test_runtime_recovery.py (new regression: a verified recovery re-confirms with zero scans while the project is changing, and a wrong digest still takes the full path; plus existing grant/verify/status tests), test_recovery_reconciliation.py (supervisor recovery advancement, prepared-worker activation, restart re-adoption), and test_checkpoint_heartbeat.py (verify_recovery under concurrent heartbeats; also enables the CI PostgreSQL runtime for the selection).",
+  "exclusions": "tests/v3/test_recovery_activation_no_relock.py replaces verify_recovery with a stub, so it does not exercise this change (locally it also fails on pristine origin/main because the local venv lacks pytest-asyncio). No API, UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 15,
+    "python": 92,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_deployment_receipt_index.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_storage_open_rows.py"
+    "tests/v3/test_runtime_recovery.py",
+    "tests/v3/test_recovery_reconciliation.py",
+    "tests/v3/test_checkpoint_heartbeat.py"
   ],
   "frontend": [],
   "native": [],
