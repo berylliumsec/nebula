@@ -517,7 +517,7 @@ def tool_failure(
     # so a provider that does not retain function declarations can correct the
     # next request. Keep the whole envelope inside the 8 KiB result limit.
     inline_schema = len(schema_bytes) <= 4_000
-    result = {
+    result: dict[str, Any] = {
         "schema": FAILURE_SCHEMA,
         "status": "failed",
         "tool": spec.name,
