@@ -164,6 +164,25 @@ class DeploymentCoordinator:
         assert row is not None
         return row
 
+    async def _read_host(self, session) -> DeploymentHostRow:
+        """The host row without locking it; before any write, its defaults.
+
+        ``_host`` creates the row with these values on the first write, so a
+        revision read here matches what that write will compare against.
+        """
+        row = await session.get(DeploymentHostRow, "host")
+        if row is not None:
+            return row
+        return DeploymentHostRow(
+            key="host",
+            revision=1,
+            api_runtime_id=None,
+            target_version=None,
+            rollback_version=None,
+            detail="No runtime has been promoted.",
+            shutdown_requested=False,
+        )
+
     async def _receipt(self, session, action, result):
         session.add(
             DeploymentReceiptRow(
@@ -2977,8 +2996,16 @@ class DeploymentCoordinator:
             )
 
     async def status(self) -> DeploymentStatus:
-        async with self.coordination._write() as session:
-            host = await self._host(session)
+        # A read: one consistent snapshot, no row lock. Coordination writes
+        # (a handoff transfer waiting on project ownership, for one) hold the
+        # host row for as long as they wait; locking it here queued every
+        # status read behind them, each holding a pool connection.
+        async with self.database.session() as session:
+            if self.database.engine.dialect.name == "postgresql":
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                )
+            host = await self._read_host(session)
             processes = {
                 row.runtime_id: row
                 for row in await session.scalars(select(RuntimeProcessRow))
