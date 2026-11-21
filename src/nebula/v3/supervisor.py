@@ -796,6 +796,7 @@ class RuntimeSupervisor:
                 now = asyncio.get_running_loop().time()
                 if now >= self._next_process_reconciliation:
                     await self.host.reconcile_processes()
+                    await self.retire_drained_apis()
                     self._next_process_reconciliation = now + 5
                 await self.advance_project_handoffs()
             except Exception as error:
@@ -807,6 +808,39 @@ class RuntimeSupervisor:
                     stage="handoff",
                 )
             await asyncio.sleep(0.5)
+
+    async def retire_drained_apis(self) -> list[str]:
+        """Retire each replaced API once its drain grace has passed.
+
+        Promotion only routes new traffic to the new API; without this the
+        replaced process stayed draining until the next deployment. Requests
+        it accepted are already in SQL, and its streams close so clients
+        reconnect to the promoted API. A refusal or slow exit keeps the row
+        draining for the next pass, and status reports it past its bound.
+        """
+        retired: list[str] = []
+        async with self._operations:
+            if self.closed or not self.started or self._shutdown_committed:
+                return retired
+            for runtime_id in await self.coordinator.drained_apis():
+                try:
+                    identity = await self.host.retire(runtime_id)
+                except (
+                    CoordinationConflict,
+                    RuntimeIpcError,
+                    TimeoutError,
+                ) as error:
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.api.drain_retirement_waiting",
+                        "A replaced API stays draining until its retirement is verified.",
+                        error,
+                        stage="deployment",
+                    )
+                    continue
+                await self.proxy.discard_endpoint(identity.endpoint)
+                retired.append(runtime_id)
+        return retired
 
     async def stage(self, source: Path, *, manifest_sha256: str) -> ReleaseManifest:
         async with self._operations:

@@ -75,6 +75,10 @@ class WorkerContext:
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
 # A timer firing this late means the event loop was blocked, not SQL.
 LOOP_STALL_SECONDS = 2.0
+# Open requests and streams, such as a chat event stream on a replaced API,
+# get this long after shutdown is requested; then uvicorn cancels them so the
+# process exits within the supervisor's retirement wait.
+WORKER_GRACEFUL_SHUTDOWN_SECONDS = 5
 
 
 async def keep_lease(
@@ -510,7 +514,7 @@ async def run_worker(
                     lifespan="off",
                     access_log=False,
                     log_level="error",
-                    timeout_graceful_shutdown=5,
+                    timeout_graceful_shutdown=WORKER_GRACEFUL_SHUTDOWN_SECONDS,
                 )
             )
             if heartbeat.done():
