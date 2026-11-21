@@ -643,6 +643,7 @@ class AutomationBroker:
                     hook_id=exc.execution.hook_id,
                     stdout=exc.execution.stdout,
                     stderr=exc.execution.stderr,
+                    route_to=exc.route_to,
                 ) from exc
             except (NativeHookError, OSError) as exc:
                 await self.ledger.transition(
