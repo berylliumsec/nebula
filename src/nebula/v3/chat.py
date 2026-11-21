@@ -5827,6 +5827,7 @@ class ChatService:
         is created.
         """
 
+        from .chat_goals import ChatGoalService
         from .chat_schedules import ChatScheduleService
 
         turn = prepared.turn
@@ -5846,6 +5847,14 @@ class ChatService:
             or goal.execution_claim_id is not None
             or (await self.pending_turn(turn.session_id)) is not None
         ):
+            return None
+        goals = ChatGoalService(self.store)
+        if await goals.has_working_subagents(turn.session_id):
+            # Working subagents report back and continue the goal, as they do
+            # for harness goals and the idle reconciler. Another turn now would
+            # only poll them with the whole context. Active time stays open
+            # while a subagent works; settle it like the other ends of a turn.
+            await goals.settle_active_time(turn.session_id)
             return None
         # The operator may have picked another model, effort or subagent
         # choice while the turn ran; the conversation holds that choice, the
