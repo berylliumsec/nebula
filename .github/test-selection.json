@@ -1,27 +1,30 @@
 {
-  "change_digest": "d8e2b5aace23f995afbc641681298855d66e29d2f29dc95bd3efee88dd192b9a",
-  "reviewed_by": "Claude Code, at the operator's request: a provider goal should wait for its working subagents instead of running turns that poll them",
-  "reason": "After a provider goal turn completed, _continue_running_goal_after_turn started the next goal turn even while the goal's subagents were still working, so the parent ran full-context turns that only polled them (live Core: 321 wait_subagents and 291 list_subagents calls in 3 days). It now settles the goal's active time and returns when has_working_subagents is true, as the harness path and the idle reconciler already do; the subagent report delivery path (deliver_pending -> _continue_goal) resumes the goal once every subagent has finished. Goals with no working subagents continue as before. Selected: the subagent and subagent-lifecycle suites (new regression test: a running provider goal with two working subagents starts no continuation after its turn, and continues exactly once when both finish together), the goal suites, the goal-continuation settings test, the provider stream tests that stub the continuation, and test_chat.py for the changed module.",
-  "exclusions": "Harness goal continuation is unchanged and its suites are not selected. No UI, settings or operator-visible control changes, so no browser, settings-assistant or LAN Core validation applies; the behaviour is covered by the real ChatService with a scripted provider.",
+  "change_digest": "604d3dff35892ab9a80f49d8a8a88954a2f4a1db8b021f4fc880ba3e2b7a8b7c",
+  "reviewed_by": "Claude Code, at the operator's request: show a partial head/tail preview for large command output instead of nothing",
+  "reason": "Command receipts inlined output only when all of it fit 4 KiB; larger output gave the model nothing but artifact references, so about 30% of commands cost an extra tool_output.read round trip (49,242 preview-less results and 23,083 reads on live Core over 3 days). command_output_preview (tool_results.py) now keeps the complete small preview and otherwise gives each stream a redacted head and tail, marked partial with total_lines, total_bytes and the omitted line range, shrunk until the whole receipt fits MAX_EXCERPT_BYTES. Redaction runs over whole lines (a single over-long line is redacted before it is cut), and an unmatched private-key marker stops the head or tail before possible key material. Both command receipt builders (tools.py broker, automation_tools.py run_command) use it off the event loop; partial receipts keep tool_output.search/read in next_actions; failure context keeps the tail of a partial preview. tool_output.read's default and maximum page go from 100/200 to 400 lines, still bounded by 8 KiB. Model guidance (chat tool instructions, harness gateway description) names partial previews. Selected: the new focused unit tests, the automation-runtime receipt tests, and the receipt/failure suites that build or read output_preview (tool failures, all-tool failure guidance, storage waste, never policy, tool-result recovery, minimal instructions).",
+  "exclusions": "Not selected because they fail identically on pristine origin/main d497cb2 (verified by running them with the source changes removed): tests/v3/test_automation_runtime.py::test_network_request_fails_closed_when_disabled_or_scope_is_url_only (DID NOT RAISE AutomationPolicyDenied), ::test_host_mode_requires_consent_and_reads_external_folder_without_docker (AutomationRuntimeUnavailable: prepare the existing Kali headless runtime), ::test_temporary_host_override_accepts_chat_origin_harness_only (DID NOT RAISE MemoryEnforcementUnavailable), ::test_host_scope_expiry_closes_running_commands (session ready, expected closed), and tests/v3/test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog (HarnessInstructionContextChanged). The rest of test_automation_runtime.py, test_chat_tool_loop.py, test_process_results_webhook.py, test_tool_history_memory.py, test_browser_companion.py and test_in_turn_context_pruning.py were run locally and pass but are not selected: they do not depend on the preview size. No UI change: the UI's output_preview is the unrelated terminal-history field. No LAN Core run: the change is a model-facing receipt format exercised directly by the broker tests.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 236,
+    "python": 145,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_runtime_chat_stream.py",
-    "tests/v3/test_subagent_choice_sticks.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_goal_execution_waiting.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_partial_command_preview.py",
+    "tests/v3/test_automation_runtime.py::test_small_command_output_is_redacted_in_receipt_without_extra_read",
+    "tests/v3/test_automation_runtime.py::test_large_or_truncated_command_output_stays_artifact_only",
+    "tests/v3/test_automation_runtime.py::test_large_text_command_output_gets_a_partial_preview",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_all_tool_failure_guidance.py",
+    "tests/v3/test_storage_waste.py",
+    "tests/v3/test_never_policy.py",
+    "tests/v3/test_tool_result_recovery.py",
+    "tests/v3/test_minimal_agent_instructions.py"
   ],
   "frontend": [],
   "native": [],
