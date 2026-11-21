@@ -65,6 +65,10 @@ from .runtime_coordination import (
     requeue_interrupted_storage_report,
 )
 from .process_identity import same_process
+from .stored_entities import (
+    ENTITY_FIELD_ADDITION_FEATURE,
+    TOLERANT_ENTITY_READ_FEATURE,
+)
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
 EXECUTION_FAILED_RECEIPT = "project.execution_failed"
@@ -215,6 +219,7 @@ class DeploymentCoordinator:
                 raise OperationRejected(
                     "candidate protocol/schema is incompatible with a resident runtime"
                 )
+        await self._require_tolerant_readers(session, manifest, versions)
         if role == "execution":
             required = set(manifest.required_api_features)
             required.update(
@@ -313,6 +318,63 @@ class DeploymentCoordinator:
                     + ", ".join(sorted(missing))
                 )
         return True
+
+    async def _require_tolerant_readers(self, session, manifest, resident) -> None:
+        """Keep every release that may read stored entities able to read them.
+
+        A release declaring ``ENTITY_FIELD_ADDITION_FEATURE`` saves entity
+        fields that earlier releases do not define. It may start only when
+        every resident version and the current execution target decode
+        unknown keys tolerantly (``TOLERANT_ENTITY_READ_FEATURE``); the target
+        becomes the rollback version once the candidate is targeted.
+
+        Conversely, once such a release has run or been targeted its fields
+        may be in any row, so a release without tolerant readers can no longer
+        start, become the target, or be rolled back to.
+        """
+
+        tolerant = TOLERANT_ENTITY_READ_FEATURE in manifest.features
+        host = await session.get(DeploymentHostRow, "host")
+        if ENTITY_FIELD_ADDITION_FEATURE in manifest.features:
+            readers = set(resident)
+            if host is not None and host.target_version:
+                readers.add(host.target_version)
+            readers.discard(manifest.version)
+            intolerant = []
+            for version in sorted(readers):
+                row = await session.get(RuntimeReleaseRow, version)
+                if row is None or TOLERANT_ENTITY_READ_FEATURE not in (
+                    ReleaseManifest.model_validate(row.manifest).features
+                ):
+                    intolerant.append(version)
+            if intolerant:
+                raise OperationRejected(
+                    "Candidate stores entity fields that version(s) "
+                    + ", ".join(intolerant)
+                    + " cannot read. Roll out a release with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " and retire those versions first, so running workers "
+                    "and code rollback keep working"
+                )
+        if tolerant:
+            return
+        started = set(
+            await session.scalars(select(RuntimeProcessRow.version).distinct())
+        )
+        if host is not None and host.target_version:
+            started.add(host.target_version)
+        started.discard(manifest.version)
+        for version in sorted(started):
+            row = await session.get(RuntimeReleaseRow, version)
+            if row is not None and ENTITY_FIELD_ADDITION_FEATURE in (
+                ReleaseManifest.model_validate(row.manifest).features
+            ):
+                raise OperationRejected(
+                    f"Release {manifest.version} cannot read entity fields that "
+                    f"release {version} may have saved; only releases with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " can run or be rolled back to from here"
+                )
 
     async def reserve_worker(
         self, version: str, *, role: str, endpoint: str, credential_reference: str

@@ -201,11 +201,13 @@ Three independent designs were produced from the same fact sheet.
 1. **Stage and migrate** (unchanged).
    - Additive migrations only.
    - Also required before two versions may overlap in practice: tolerant
-     decoding of entity payloads. Entities use `extra="forbid"`, so a field
-     written by release N+1 makes release N raise `CorruptRecordError` on the
-     same row. That breaks old workers and code rollback alike.
+     decoding of entity payloads. Entities use `extra="forbid"`, so before
+     `storage.tolerant-entities/v1` a field written by release N+1 made
+     release N raise `CorruptRecordError` on the same row. That broke old
+     workers and code rollback alike. See
+     [Tolerant entity readers](#tolerant-entity-readers).
    - Release N+1 may write a new field only after every resident and retained
-     rollback version tolerates unknown keys.
+     rollback version tolerates unknown keys. The coordinator enforces this.
 2. **Replace the supervisor generation.** *(prototype)*
    - **The listening socket is owned by a holder that never restarts.** That
      is the systemd `nebula-core.socket` in production.
@@ -374,6 +376,64 @@ The review checked every kind of work against the design.
 - Non-additive changes need expand/contract across three releases, or a
   coordinated stop under the drain design (3).
 
+<a id="tolerant-entity-readers"></a>
+**Tolerant entity readers** (`stored_entities.py`, feature
+`storage.tolerant-entities/v1`).
+- Reading: every stored-entity decode (`_row_to_entity`, the connection
+  readers, and the modules that validate `row.payload` directly) goes through
+  `decode_stored`. It validates strictly first, so a row without unknown keys
+  costs one ordinary validation. Only on failure does it set aside the keys
+  the model reports as `extra_forbidden`, at any depth, and validate again.
+  Any other failure is still `CorruptRecordError`, and so is an unknown key
+  reported through a union member: pydantic then also reports keys that are
+  valid in the matching member, so nothing is guessed. No entity uses such a
+  union today.
+- Keeping: the keys set aside travel with the entity and are written back
+  whenever this release rewrites the row: `StoreTransaction.update`, both
+  connection update paths, `replace`, legacy relation replacement and
+  operator profile updates. A top-level key always survives. A nested key
+  survives while its parent object exists at the same path, even when this
+  release rewrote that object (so a newer field derived from replaced data
+  can go stale). A key inside a list item follows the item: an item with an
+  `id` is found by it after reordering or appends; an item without one must
+  keep its index and content. Otherwise the key is dropped rather than
+  attached to another item. A key this release defines is never overwritten
+  by an old unknown value. A new row, even a copy of a decoded entity, never
+  inherits another row's unknown keys.
+- Input stays strict: API bodies, patches and `update` changes are validated
+  with `extra="forbid"` as before. In an update an unknown key is tolerated
+  only where the stored row already holds it with the same value.
+- Cost: the update path validates the merged payload once, as before. It
+  also checks the old value of a rewritten field for unknown keys, but only
+  for fields whose type contains a strict nested model (53 of about 1,900
+  entity fields today); free-form dicts and scalar lists hold no unknown keys.
+- Entity dumps embedded in other rows (a chat turn's request snapshot, a
+  harness session's MCP and scope snapshots) are decoded the same way.
+- Not covered: append-only event payloads (`ButlerEventPayload` and
+  operation/run events) and host-call bodies; see host-call skew below.
+
+**Adding a stored-entity field** (the rule for release N+1):
+1. Field additions must be optional or defaulted, so release N's rows still
+   validate on N+1.
+2. `runtime-compatibility.json` records `entity_fields_sha256`, a digest of
+   every stored entity field name (nested models included).
+   `load_compatibility` refuses to package or prepare a release whose models
+   differ from it, so a field change always gets a review. When the reviewed
+   digest differs from `entity_fields_tolerant_baseline_sha256` (the fields
+   of the first tolerant release), the release must declare
+   `storage.entity-field-additions/v1`.
+3. The coordinator refuses to start that release as API or execution
+   (`reserve_worker`, `target_execution`) while any resident version or the
+   current execution target lacks `storage.tolerant-entities/v1`. The current
+   target becomes the rollback version when the candidate is targeted, so a
+   stale rollback slot does not block.
+4. Conversely, once a release declaring additions has run or been targeted,
+   its fields may be in any row: no release without tolerant readers can
+   start, become the target or be the destination of `rollback_code` again.
+5. The first tolerant release must therefore be rolled out, and older
+   versions retired, before any field addition. After that the checks only
+   refuse going back to a pre-tolerant release.
+
 **Host-call version skew.**
 - During a roll, the new supervisor serves old workers. On a rollback, the old
   supervisor serves new workers.
@@ -460,8 +520,9 @@ are recorded in
   Retarget handoffs off pinned projects. Allow K projects in parallel.
 - **Third-version targeting.** Fix `target_execution`'s ignored compatibility
   result (step 4).
-- **Tolerant readers.** Entity decoding must tolerate unknown keys before two
-  releases share rows.
+- **Tolerant readers.** Done for stored entities
+  ([Tolerant entity readers](#tolerant-entity-readers)). Still open: event
+  payloads and host-call request and response bodies.
 - **Pinned adapters:**
   - Detach idle harness sessions and resume the vendor session on the target.
   - Re-arm scheduled-only missions from SQL.

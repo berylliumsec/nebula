@@ -37,6 +37,10 @@ from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
 from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, LeaseRenewal
 from .runtime_coordination import STORAGE_REPORT_COMMAND as STORAGE_REPORT_FEATURE
+from .stored_entities import (
+    ENTITY_FIELD_ADDITION_FEATURE,
+    TOLERANT_ENTITY_READ_FEATURE,
+)
 from .runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
@@ -337,6 +341,8 @@ async def run_worker(
             STORAGE_REPORT_FEATURE,
             BUTLER_HOME_FEATURE,
             BUTLER_ACTION_COMMAND,
+            TOLERANT_ENTITY_READ_FEATURE,
+            ENTITY_FIELD_ADDITION_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"

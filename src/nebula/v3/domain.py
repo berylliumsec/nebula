@@ -18,7 +18,14 @@ from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 
 def utc_now() -> datetime:
@@ -624,6 +631,9 @@ class Entity(NebulaModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     revision: int = Field(default=1, ge=1)
+    # Keys a newer release stored that this release does not define, set
+    # aside by ``stored_entities.decode_stored`` and restored on rewrite.
+    _stored_unknown: tuple[Any, ...] = PrivateAttr(default=())
 
     @field_validator("created_at", "updated_at")
     @classmethod
