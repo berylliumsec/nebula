@@ -154,7 +154,7 @@ def _without(payload: Any, path: tuple[PathStep, ...]) -> Any:
         copy = dict(payload)
         copy.pop(step, None)
         return copy
-    if isinstance(payload, list):
+    if isinstance(payload, list) and isinstance(step, int):
         copy_list = list(payload)
         copy_list[step] = _without(payload[step], path[1:])
         return copy_list
