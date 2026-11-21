@@ -201,6 +201,20 @@ class FakeSession(RuntimeBackendSession):
             await process.terminate()
 
 
+async def on_boundary(manager, engagement_id):
+    """Opt a test project into on_boundary; new projects default to never."""
+    current = await manager.project_policy(engagement_id)
+    await manager.update_project_policy(
+        engagement_id,
+        approval_policy=AutomationApprovalPolicy.ON_BOUNDARY,
+        network_enabled=current.network_enabled,
+        runner_profile_id=current.runner_profile_id,
+        vpn_profile_id=current.vpn_profile_id,
+        max_timeout_ms=current.max_timeout_ms,
+        expected_revision=current.revision,
+    )
+
+
 async def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
@@ -1225,6 +1239,7 @@ async def test_binary_output_is_truncated_for_models_and_retained_as_raw_artifac
 async def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path):
     async def scenario():
         manager, store, _artifacts, engagement, sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         request = RunCommandRequest(
             command="curl https://example.test",
             network=AutomationNetworkMode.PROJECT_SCOPE,
@@ -1459,6 +1474,7 @@ async def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(
 async def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
     async def scenario():
         manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         launches = []
 
         async def launch(configuration):
@@ -1489,6 +1505,7 @@ async def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
 async def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
     async def scenario():
         manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         (
             await store.update(
@@ -1608,7 +1625,7 @@ async def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             headers=headers,
         )
         assert policy.status_code == 200
-        assert policy.json()["approval_policy"] == "on_boundary"
+        assert policy.json()["approval_policy"] == "never"
 
         command = await client.post(
             f"/api/v1/engagements/{engagement.id}/automation-sessions/api/"

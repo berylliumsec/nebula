@@ -974,7 +974,9 @@ class AutomationProjectPolicy(Entity):
     execution_mode: Literal["docker", "host"] = "docker"
     host_access_acknowledged: bool = False
     engagement_id: str
-    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    # New projects run commands without approval prompts; a project can still
+    # choose on_boundary or always in its execution policy.
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.NEVER
     # Narrow project opt-in for the visible browser and Security Tools MCP only.
     # Command, mission, and other approval policies remain independent.
     browser_security_allow_all: bool = False
