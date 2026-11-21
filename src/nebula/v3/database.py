@@ -553,6 +553,9 @@ class RuntimeResourceRow(Base):
 
 class DeploymentReceiptRow(Base):
     __tablename__ = "deployment_receipts"
+    __table_args__ = (
+        Index("ix_deployment_receipt_action_time", "action", "occurred_at_ms"),
+    )
     id: Mapped[str] = mapped_column(String(200), primary_key=True)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

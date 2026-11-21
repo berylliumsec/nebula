@@ -1,25 +1,23 @@
 {
-  "change_digest": "40f9e89293a8633e7aa750242712a87ee05ba8f1258dda1358cc5d0b9ee0b820",
-  "reviewed_by": "Claude Code, at the operator's request: remove the restart-recovery concurrency cap",
-  "reason": "Live Core: after a worker crash, 44 turns were auto-resumed in one project, and a hardcoded per-worker semaphore of 2 (_AUTOMATIC_RECOVERY_CONCURRENCY), held for each turn's whole lifetime, serialized them behind two multi-hour subagents while provider capacity (60/58) sat mostly free. The semaphore is removed; recovered turns use ordinary provider admission and, although they resume in a running status, now wait out host-load pressure like new queued turns (admit(automatic_recovery=True)). Selected: the admission cleanup suite holding the changed and new tests, restart recovery lifecycle, async recovery, host load and shutdown admission suites.",
-  "exclusions": "No UI, settings, or API shape change, so no frontend, Playwright, settings-assistant or LAN Core run: the path only runs when an execution worker dies with durable provider turns, which a disposable LAN Core cannot produce through operator entry points; the new tests drive start_provider_turn(automatic_recovery=True) and ProviderScheduler.admit directly. Broader chat suites are not selected because only the recovery admission path changed.",
+  "change_digest": "e2c135621d229566198d4290614808f142a4cbb84eed56569596c919826d8201",
+  "reviewed_by": "Claude Code, after diagnosing deployment_receipts sequential scans on live Core (independently validated by a fresh subagent)",
+  "reason": "Migration 0055 adds ix_deployment_receipt_action_time (action, occurred_at_ms) and the matching model index, so the supervisor admission reconcile's api.promoted and project.quiesced lookups (about once a second) stop reading the whole deployment_receipts table. Selected: the new migration test (SQLite + PostgreSQL: rows saved before the index are found, the Postgres plan uses the index instead of a sequential scan, downgrade drops only the index), test_runtime_bundle.py for the reviewed compatibility head and migration-tree digest, and test_storage_open_rows.py as the neighbouring index-only migration test. ci.yml adds the new test to the selected-PostgreSQL gates so its Postgres variant runs.",
+  "exclusions": "No API, UI, setting or operator workflow changes, so no frontend, Playwright or LAN-instance journey applies; product help and settings assistant are unaffected. Query code is unchanged, so the runtime admission and retirement suites are not selected. Behaviour on live data was checked separately (57 api.promoted and 90 project.quiesced rows out of 180k).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 62,
+    "python": 15,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_async_admission_cleanup.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_async_recovery.py",
-    "tests/v3/test_host_load.py",
-    "tests/v3/test_shutdown_admission.py"
+    "tests/v3/test_deployment_receipt_index.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_storage_open_rows.py"
   ],
   "frontend": [],
   "native": [],
