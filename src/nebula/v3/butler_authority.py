@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, model_validator
 
+from .stored_entities import decode_stored
 from .butler_oversight import (
     ButlerEventPayload,
     ButlerEvidenceRef,
@@ -123,7 +124,7 @@ async def _entity(
         return None
     if row.kind != model.entity_kind:
         raise ConflictError("Butler action entity kind changed")
-    return model.model_validate(row.payload)
+    return decode_stored(model, row.payload)
 
 
 class ButlerAuthorityService:

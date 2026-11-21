@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import aliased
 
+from .stored_entities import decode_stored
 from .chat_subagents import is_subagent_session
 from .chat_turn_headers import (
     ChatTurnHeader,
@@ -342,7 +343,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                     statement = statement.offset(offset).limit(limit + 1)
                 listed[name] = [
                     (
-                        ChatSession.model_validate(chat),
+                        decode_stored(ChatSession, chat),
                         BoardGoal(
                             status=ChatGoalStatus(status),
                             objective=str(objective or ""),
@@ -526,7 +527,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 )
             )
             sessions = [
-                (ChatSession.model_validate(payload), str(name or ""))
+                (decode_stored(ChatSession, payload), str(name or ""))
                 for payload, name in rows
             ]
             pending: dict[str, ChatTurnHeader] = {}
@@ -607,7 +608,7 @@ async def _pending_questions(
         ).all()
     questions: dict[str, HarnessInteraction] = {}
     for payload in rows:
-        interaction = HarnessInteraction.model_validate(payload)
+        interaction = decode_stored(HarnessInteraction, payload)
         if interaction.chat_session_id:
             questions[interaction.chat_session_id] = interaction
     return questions
@@ -627,7 +628,7 @@ async def _goals(store: NebulaStore, session_ids: list[str]) -> dict[str, ChatGo
         ).all()
     goals: dict[str, ChatGoal] = {}
     for payload in rows:
-        goal = ChatGoal.model_validate(payload)
+        goal = decode_stored(ChatGoal, payload)
         goals[goal.session_id] = goal
     return goals
 

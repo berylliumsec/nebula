@@ -14,6 +14,7 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import aliased
 
+from .stored_entities import decode_stored
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_turn_headers import ChatTurnHeader, pending_turn_headers_in_projects
 from .conditional_reads import conditional, content_etag
@@ -147,7 +148,7 @@ def linked_project_chats_router(store: NebulaStore) -> APIRouter:
             )
         active: list[tuple[ChatSession, str, str]] = []
         for payload, name in active_rows:
-            session = ChatSession.model_validate(payload)
+            session = decode_stored(ChatSession, payload)
             state = await session_state(store, session, pending[session.id])
             active.append((session, str(name or ""), state))
         active.sort(key=lambda item: (item[0].updated_at, item[0].id), reverse=True)
@@ -170,7 +171,7 @@ def linked_project_chats_router(store: NebulaStore) -> APIRouter:
             )
             async with store.database.session(bulk=True) as database:
                 page.extend(
-                    (ChatSession.model_validate(payload), str(name or ""), "idle")
+                    (decode_stored(ChatSession, payload), str(name or ""), "idle")
                     for payload, name in await database.execute(idle_statement)
                 )
         has_more = len(page) > limit

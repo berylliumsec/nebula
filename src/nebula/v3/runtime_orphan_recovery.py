@@ -6,6 +6,7 @@ import hashlib
 
 from sqlalchemy import and_, delete, or_, select, update
 
+from .stored_entities import decode_stored
 from .database import (
     DeploymentReceiptRow,
     EntityRow,
@@ -223,7 +224,7 @@ async def reconcile_dead_project(
                 for row in rows
                 if row.payload.get("status") != ChatTurnStatus.WAITING_APPROVAL.value
                 or not await _awaits_undecided_approval(
-                    store, ChatTurn.model_validate(row.payload)
+                    store, decode_stored(ChatTurn, row.payload)
                 )
             ]
             resources = list(
@@ -247,7 +248,7 @@ async def reconcile_dead_project(
             transaction = StoreTransaction(session)
             interrupted = []
             for row in rows:
-                turn = ChatTurn.model_validate(row.payload)
+                turn = decode_stored(ChatTurn, row.payload)
                 calls = await store.find_entities(
                     ToolCall,
                     {"chat_turn_id": turn.id},
@@ -697,7 +698,7 @@ async def _release_ended_provider_claims(
     held: list[str] = []
     now = utc_now()
     for row in rows:
-        turn = ChatTurn.model_validate(row.payload)
+        turn = decode_stored(ChatTurn, row.payload)
         unconfirmed = None
         if turn.status != ChatTurnStatus.WAITING_APPROVAL:
             try:
@@ -720,7 +721,7 @@ async def _release_ended_provider_claims(
         goal_row = await session.get(EntityRow, turn.goal_id) if turn.goal_id else None
         if goal_row is None or goal_row.kind != ChatGoal.entity_kind:
             continue
-        goal = ChatGoal.model_validate(goal_row.payload)
+        goal = decode_stored(ChatGoal, goal_row.payload)
         if goal.engagement_id != project_id:
             continue
         changes: dict = {}
@@ -771,7 +772,7 @@ async def _release_ended_provider_claims(
         .order_by(EntityRow.id)
         .limit(MAX_ORPHAN_ROWS)
     ):
-        goal = ChatGoal.model_validate(row.payload)
+        goal = decode_stored(ChatGoal, row.payload)
         if await session.scalar(
             select(EntityRow.id)
             .where(
@@ -1055,7 +1056,7 @@ async def _mark_unconfirmed_adapter_deliveries(
         )
     marked = []
     for row in rows:
-        approval = Approval.model_validate(row.payload)
+        approval = decode_stored(Approval, row.payload)
         if approval.continuation is None:
             continue
         continuation = approval.continuation.model_copy(

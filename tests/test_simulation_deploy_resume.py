@@ -423,6 +423,12 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
     monkeypatch.setattr(deployer, "runtime_package_version", package)
     monkeypatch.setattr(deployer, "unit_state", lambda _unit: core.unit)
     monkeypatch.setattr(deployer, "service", core.service)
+    # No socket unit, and a Core older than the running-operation listing;
+    # tests/test_simulation_host_restart.py covers both.
+    monkeypatch.setattr(deployer, "socket_activation", lambda: None)
+    monkeypatch.setattr(
+        deployer, "wait_no_running_operations", lambda: {"supported": False}
+    )
     monkeypatch.setattr(
         deployer, "stop_supervisor_service", lambda _identity: core.service("stop")
     )

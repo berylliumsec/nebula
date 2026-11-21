@@ -184,6 +184,49 @@ class ProcessDeploymentStatus(NebulaModel):
     ready_verified: bool = False
 
 
+class RollMovingProject(NebulaModel):
+    """A project the in-Core roller is moving onto the execution target."""
+
+    project_id: str
+    phase: HandoffPhase
+    target_runtime_id: str
+    admission_held: bool
+
+
+class RollPinnedProject(NebulaModel):
+    """A project left on its current version until its pins clear."""
+
+    project_id: str
+    runtime_version: str | None
+    blockers: list[str] = Field(default_factory=list)
+    retry_in_seconds: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+
+
+class RollStatus(NebulaModel):
+    """The in-Core roller's last pass; None on hosts without a roller.
+
+    ``state`` is ``disabled`` (``NEBULA_ROLL_PROJECTS_AT_ONCE=0``), ``idle``
+    (no execution target, or a host shutdown), ``deferred`` (an operator
+    deployment operation ran recently), ``rolling``, ``waiting`` (only pinned
+    or backing-off projects remain), ``blocked`` (the target cannot take a
+    project now) or ``complete``.
+    """
+
+    state: Literal[
+        "disabled", "idle", "deferred", "rolling", "waiting", "blocked", "complete"
+    ]
+    detail: str
+    target_version: str | None = None
+    projects_at_once: int = Field(ge=0)
+    remaining: int = Field(default=0, ge=0)
+    moving: list[RollMovingProject] = Field(default_factory=list)
+    pinned: list[RollPinnedProject] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    retired_sources: int = Field(default=0, ge=0)
+    updated_at_ms: int | None = None
+
+
 class DeploymentStatus(NebulaModel):
     protocol: Literal["nebula.runtime/v1"] = IPC_PROTOCOL
     revision: int
@@ -196,3 +239,5 @@ class DeploymentStatus(NebulaModel):
     detail: str
     # None distinguishes older hosts without an authoritative process inventory.
     processes: list[ProcessDeploymentStatus] | None = None
+    # The in-Core project roller's last pass; None where no roller runs.
+    roll: RollStatus | None = None

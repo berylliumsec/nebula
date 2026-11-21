@@ -44,7 +44,38 @@ def load_compatibility() -> dict:
     manifest = payload["manifest"]
     if manifest["schema_family"] != CURRENT_SCHEMA_VERSION:
         raise ValueError("Runtime schema family requires a compatibility review")
+    _check_entity_fields(payload, manifest)
     return dict(manifest)
+
+
+def _check_entity_fields(payload: dict, manifest: dict) -> None:
+    """Tie stored-entity field changes to a reviewed rolling-release flag.
+
+    Releases older than ``storage.tolerant-entities/v1`` cannot read rows that
+    hold fields they do not define. A changed field set therefore needs a
+    review that records its digest and, once it differs from the fields the
+    first tolerant release stored, declares ``storage.entity-field-additions/v1``
+    so the coordinator keeps intolerant releases from reading those rows.
+    """
+
+    from .domain import ENTITY_MODELS
+    from .stored_entities import ENTITY_FIELD_ADDITION_FEATURE, entity_fields_digest
+
+    if entity_fields_digest(ENTITY_MODELS) != payload.get("entity_fields_sha256"):
+        raise ValueError(
+            "Stored entity fields changed; review runtime-compatibility.json "
+            "(entity_fields_sha256) before packaging. A release that adds "
+            "fields must also declare " + ENTITY_FIELD_ADDITION_FEATURE
+        )
+    if payload.get("entity_fields_sha256") != payload.get(
+        "entity_fields_tolerant_baseline_sha256"
+    ) and ENTITY_FIELD_ADDITION_FEATURE not in manifest.get("features", []):
+        raise ValueError(
+            "Stored entity fields differ from the tolerant-reader baseline; "
+            "declare "
+            + ENTITY_FIELD_ADDITION_FEATURE
+            + " in runtime-compatibility.json"
+        )
 
 
 def file_digest(path: Path) -> str:

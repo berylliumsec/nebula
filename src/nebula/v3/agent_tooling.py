@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
@@ -529,7 +530,7 @@ class BrokeredToolSpecialist:
             usage=ModelUsage.model_validate(record.get("usage") or {}),
             reasoning_state=record.get("reasoning_state"),
             tool_calls=[
-                ToolCall.model_validate(call) for call in record.get("tool_calls") or []
+                decode_stored(ToolCall, call) for call in record.get("tool_calls") or []
             ],
         )
 

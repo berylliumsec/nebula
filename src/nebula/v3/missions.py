@@ -227,6 +227,10 @@ class MissionService:
         self.cancellation_timeout_seconds = cancellation_timeout_seconds
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_tasks: dict[str, asyncio.Task[None]] = {}
+        # Scheduled occurrences whose timer is still sleeping. _scheduled_tasks
+        # also holds starting, recovering and capacity-waiting runs; only
+        # these have run nothing and live wholly in SQL.
+        self._sleeping_schedules: set[str] = set()
         self._cancel_reasons: dict[str, tuple[str, str]] = {}
         self._lock = asyncio.Lock()
         self._closed = False
@@ -234,6 +238,24 @@ class MissionService:
     @property
     def active_run_ids(self) -> frozenset[str]:
         return frozenset(self._tasks)
+
+    def restorable_handles(self) -> dict[str, set[str]]:
+        """Resident entries a later project owner restores from SQL alone.
+
+        A scheduled occurrence still sleeping has run nothing: its run stays
+        queued with ``scheduled_for`` and startup re-arms it on the new owner.
+        If the timer wakes on the source after transfer, every source
+        transaction is fenced, so only the new owner can start the run.
+        """
+
+        return {
+            "_scheduled_tasks": {
+                run_id
+                for run_id in self._sleeping_schedules
+                if run_id in self._scheduled_tasks
+                and not self._scheduled_tasks[run_id].done()
+            }
+        }
 
     async def startup(self) -> None:
         """Reclaim stale API missions from their last durable checkpoint."""
@@ -701,7 +723,13 @@ class MissionService:
         try:
             delay = max(0.0, (scheduled_for - utc_now()).total_seconds())
             if delay:
-                await asyncio.sleep(delay)
+                self._sleeping_schedules.add(run_id)
+                try:
+                    await asyncio.sleep(delay)
+                finally:
+                    # Cleared before the first read after waking: from here
+                    # the timer may start the run and pins its project again.
+                    self._sleeping_schedules.discard(run_id)
             run = await self.store.get(AgentRun, run_id)
             if run.status != RunStatus.QUEUED or self._closed:
                 return

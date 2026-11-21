@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from sqlalchemy import and_, func, or_, select
 
+from .stored_entities import decode_stored
 from .database import ChatTurnStepEventRow, EntityRow, OperationEventRow
 from .domain import (
     ButlerAgentReport,
@@ -278,14 +279,14 @@ class ButlerTimeline:
         matches = [
             session
             for row in rows
-            if (session := ChatSession.model_validate(row.payload))
+            if (session := decode_stored(ChatSession, row.payload))
             and not any(
                 session.metadata.get(key) is True
                 for key in ("control_assistant", "side_chat", "temporary_assistant")
             )
         ]
         chosen = (
-            ChatSession.model_validate(exact_rows[0].payload)
+            decode_stored(ChatSession, exact_rows[0].payload)
             if len(exact_rows) == 1
             else matches[0]
             if len(matches) == 1 and len(rows) == 1
@@ -545,7 +546,7 @@ class ButlerTimeline:
                 for row in rows:
                     when = _utc(row.created_at)
                     if kind == "message":
-                        message = ChatMessage.model_validate(row.payload)
+                        message = decode_stored(ChatMessage, row.payload)
                         if message_is_replaced(message):
                             continue
                         items.append(
@@ -562,7 +563,7 @@ class ButlerTimeline:
                             )
                         )
                     elif kind == "turn":
-                        turn = ChatTurn.model_validate(row.payload)
+                        turn = decode_stored(ChatTurn, row.payload)
                         items.append(
                             _item(
                                 kind,
@@ -579,7 +580,7 @@ class ButlerTimeline:
                             )
                         )
                     elif kind == "tool_call":
-                        call = ToolCall.model_validate(row.payload)
+                        call = decode_stored(ToolCall, row.payload)
                         items.append(
                             _item(
                                 kind,
@@ -599,7 +600,7 @@ class ButlerTimeline:
                             )
                         )
                     else:
-                        report = ButlerAgentReport.model_validate(row.payload)
+                        report = decode_stored(ButlerAgentReport, row.payload)
                         details = report.details
                         summary = (
                             details.get("what_changed")

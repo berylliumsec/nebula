@@ -1,0 +1,16 @@
+# Holds Core's public listener across supervisor generations.
+# Install as ~/.config/systemd/user/nebula-core.socket for the simulation user,
+# together with nebula-core.service.d/10-socket.conf, then add `--listen-fd 3`
+# to the service's `serve` command (see scripts/simulation/README.md).
+[Unit]
+Description=Nebula Core public listener
+
+[Socket]
+ListenStream=127.0.0.1:8000
+Accept=no
+# Connections wait in the kernel queue while one supervisor exits and the
+# next starts; keep the queue long enough for a busy minute of clients.
+Backlog=4096
+
+[Install]
+WantedBy=sockets.target

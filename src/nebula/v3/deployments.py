@@ -65,6 +65,10 @@ from .runtime_coordination import (
     requeue_interrupted_storage_report,
 )
 from .process_identity import same_process
+from .stored_entities import (
+    ENTITY_FIELD_ADDITION_FEATURE,
+    TOLERANT_ENTITY_READ_FEATURE,
+)
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
 # A replaced API keeps serving the requests and streams it already holds for
@@ -133,6 +137,9 @@ class DeploymentCoordinator:
     ):
         self.database, self.coordination = database, RuntimeCoordination(database)
         self.runtime_admission = runtime_admission
+        # The in-Core project roller attaches itself so deployment status can
+        # report its last pass; None where no roller runs.
+        self.roller = None
 
     async def _host(self, session):
         await self.coordination._insert_absent(
@@ -224,6 +231,7 @@ class DeploymentCoordinator:
                 raise OperationRejected(
                     "candidate protocol/schema is incompatible with a resident runtime"
                 )
+        await self._require_tolerant_readers(session, manifest, versions)
         if role == "execution":
             required = set(manifest.required_api_features)
             required.update(
@@ -322,6 +330,63 @@ class DeploymentCoordinator:
                     + ", ".join(sorted(missing))
                 )
         return True
+
+    async def _require_tolerant_readers(self, session, manifest, resident) -> None:
+        """Keep every release that may read stored entities able to read them.
+
+        A release declaring ``ENTITY_FIELD_ADDITION_FEATURE`` saves entity
+        fields that earlier releases do not define. It may start only when
+        every resident version and the current execution target decode
+        unknown keys tolerantly (``TOLERANT_ENTITY_READ_FEATURE``); the target
+        becomes the rollback version once the candidate is targeted.
+
+        Conversely, once such a release has run or been targeted its fields
+        may be in any row, so a release without tolerant readers can no longer
+        start, become the target, or be rolled back to.
+        """
+
+        tolerant = TOLERANT_ENTITY_READ_FEATURE in manifest.features
+        host = await session.get(DeploymentHostRow, "host")
+        if ENTITY_FIELD_ADDITION_FEATURE in manifest.features:
+            readers = set(resident)
+            if host is not None and host.target_version:
+                readers.add(host.target_version)
+            readers.discard(manifest.version)
+            intolerant = []
+            for version in sorted(readers):
+                row = await session.get(RuntimeReleaseRow, version)
+                if row is None or TOLERANT_ENTITY_READ_FEATURE not in (
+                    ReleaseManifest.model_validate(row.manifest).features
+                ):
+                    intolerant.append(version)
+            if intolerant:
+                raise OperationRejected(
+                    "Candidate stores entity fields that version(s) "
+                    + ", ".join(intolerant)
+                    + " cannot read. Roll out a release with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " and retire those versions first, so running workers "
+                    "and code rollback keep working"
+                )
+        if tolerant:
+            return
+        started = set(
+            await session.scalars(select(RuntimeProcessRow.version).distinct())
+        )
+        if host is not None and host.target_version:
+            started.add(host.target_version)
+        started.discard(manifest.version)
+        for version in sorted(started):
+            row = await session.get(RuntimeReleaseRow, version)
+            if row is not None and ENTITY_FIELD_ADDITION_FEATURE in (
+                ReleaseManifest.model_validate(row.manifest).features
+            ):
+                raise OperationRejected(
+                    f"Release {manifest.version} cannot read entity fields that "
+                    f"release {version} may have saved; only releases with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " can run or be rolled back to from here"
+                )
 
     async def reserve_worker(
         self, version: str, *, role: str, endpoint: str, credential_reference: str
@@ -1676,6 +1741,49 @@ class DeploymentCoordinator:
                 },
             )
 
+    async def withdraw_handoff(
+        self, project_id: str, *, target_runtime_id: str, revision: int
+    ) -> bool:
+        """Cancel exactly this unfinished handoff before it can transfer.
+
+        Unlike a handoff to the current owner, this never starts a new one: it
+        cancels only while the row still names ``target_runtime_id`` at
+        ``revision``, is ``requested`` or ``finishing``, and the source still
+        owns the project. Locks are taken in ``transfer``'s order, so a
+        concurrent transfer either finds the row cancelled or makes this
+        return False with the project left to the transfer.
+        """
+        async with self.coordination._write() as session:
+            await self._host(session)
+            owner = await session.get(
+                ProjectOwnershipRow, project_id, with_for_update=True
+            )
+            row = await session.get(ProjectHandoffRow, project_id, with_for_update=True)
+            if (
+                owner is None
+                or row is None
+                or row.target_runtime_id != target_runtime_id
+                or row.revision != revision
+                or row.phase not in {HandoffPhase.REQUESTED, HandoffPhase.FINISHING}
+                or owner.runtime_id != row.source_runtime_id
+                or owner.fencing_token != row.source_fencing_token
+            ):
+                return False
+            row.phase, row.admission_held = HandoffPhase.VERIFIED, False
+            row.blockers, row.checkpoint = [], {"cancelled_before_transfer": True}
+            row.revision += 1
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            await self._receipt(
+                session,
+                "handoff.withdrawn",
+                {
+                    "project_id": project_id,
+                    "source_runtime_id": row.source_runtime_id,
+                    "target_runtime_id": target_runtime_id,
+                },
+            )
+            return True
+
     async def checkpoint(
         self, lease: ProjectLease, *, checkpoint: dict, blockers: list[str]
     ) -> HandoffPhase:
@@ -2995,6 +3103,7 @@ class DeploymentCoordinator:
                 projects=projects,
                 health="degraded" if degraded else "ready" if api else "starting",
                 detail=host.detail,
+                roll=self.roller.status() if self.roller is not None else None,
                 processes=[
                     ProcessDeploymentStatus(
                         runtime_id=row.runtime_id,

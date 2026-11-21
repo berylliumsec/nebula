@@ -131,6 +131,42 @@ async def test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_r
     assert row is not None and row.state == "succeeded"
 
 
+async def test_running_listing_names_this_generations_inflight_operations(
+    recovery, tmp_path
+):
+    # The deployer reads this before a host swap: the supervisor's stop joins
+    # these operations, so a swap must not begin while one runs.
+    assert (await recovery.client.get(PATH)).status_code == 401
+    assert (await recovery.client.get(PATH, headers=AUTH)).json() == {"running": []}
+    source = tmp_path / "listed-source"
+    digest = bundle(source, version="listed")
+    original = recovery.root.stage
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def held_stage(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    recovery.root.stage = held_stage
+    body = {
+        "operation_id": "stage-listed",
+        "action": "stage",
+        "parameters": {"source": str(source), "manifest_sha256": digest},
+    }
+    request = asyncio.create_task(recovery.client.post(PATH, headers=AUTH, json=body))
+    await asyncio.wait_for(entered.wait(), 10)
+    listing = await recovery.client.get(PATH, headers=AUTH)
+    assert listing.status_code == 200
+    assert listing.headers["Cache-Control"] == "private, no-store"
+    assert listing.json() == {
+        "running": [{"operation_id": "stage-listed", "action": "stage"}]
+    }
+    release.set()
+    assert (await request).json()["state"] == "succeeded"
+    assert (await recovery.client.get(PATH, headers=AUTH)).json() == {"running": []}
+
+
 @pytest.mark.parametrize("refused", [False, True])
 async def test_shutdown_callback_waits_for_success_and_never_repeats_saved_operation(
     recovery, monkeypatch, refused

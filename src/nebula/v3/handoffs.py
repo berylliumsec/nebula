@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .domain import (
     Engagement,
@@ -180,7 +181,7 @@ class HandoffService:
         )
         async with self.store.database.session() as session:
             envelopes = [
-                HandoffEnvelope.model_validate(row.payload)
+                decode_stored(HandoffEnvelope, row.payload)
                 for row in (await session.scalars(statement))
             ]
         return [(await self._expire(item)) for item in envelopes]

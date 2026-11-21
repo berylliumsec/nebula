@@ -23,6 +23,7 @@ from typing import Any
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import func, select
 
+from .stored_entities import decode_stored
 from .butler_board import (
     FAILED_WINDOW,
     _WORKING_TEXT,
@@ -253,7 +254,7 @@ def chat_brief_router(store: NebulaStore) -> APIRouter:
             row = await database.get(EntityRow, session_id)
             if row is None or row.kind != ChatSession.entity_kind:
                 raise NotFoundError(f"chat session not found: {session_id}")
-            session = ChatSession.model_validate(row.payload)
+            session = decode_stored(ChatSession, row.payload)
             metadata = session.metadata
             project_row = await database.get(EntityRow, session.engagement_id)
             if (

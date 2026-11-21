@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
+from .stored_entities import carry_unknown, decode_stored, dump_with_unknown
 from .diagnostics import record_caught_exception
 
 from contextlib import asynccontextmanager
@@ -27,7 +28,7 @@ def _dump(profile: OperatorProfile) -> dict[str, Any]:
 
 
 def _from_row(row: Any) -> OperatorProfile:
-    return OperatorProfile.model_validate(row["payload"])
+    return decode_stored(OperatorProfile, row["payload"])
 
 
 class OperatorProfileService:
@@ -341,7 +342,9 @@ class OperatorProfileService:
         payload["created_at"] = current.created_at
         payload["updated_at"] = utc_now()
         payload["revision"] = current.revision + 1
-        updated_profile = OperatorProfile.model_validate(payload)
+        updated_profile = carry_unknown(
+            OperatorProfile.model_validate(payload), current
+        )
         result = await connection.execute(
             update(EntityRow)
             .where(
@@ -350,7 +353,7 @@ class OperatorProfileService:
                 EntityRow.revision == current.revision,
             )
             .values(
-                payload=_dump(updated_profile),
+                payload=dump_with_unknown(updated_profile),
                 revision=updated_profile.revision,
                 updated_at=updated_profile.updated_at,
             )
