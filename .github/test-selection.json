@@ -1,23 +1,24 @@
 {
-  "change_digest": "8155099624e8c43799ed7af619725dc425ada851d86b7926c220c2cdd166c7c3",
-  "reviewed_by": "Claude Code, after diagnosing live supervisor CPU (root cause independently validated by a fresh subagent)",
-  "reason": "verify_recovery returns before the full project checkpoint scan when the recovery is already verified for the exact lease and restored digest; the prepared -> verified path is unchanged. Selected: test_runtime_recovery.py (new regression: a verified recovery re-confirms with zero scans while the project is changing, and a wrong digest still takes the full path; plus existing grant/verify/status tests), test_recovery_reconciliation.py (supervisor recovery advancement, prepared-worker activation, restart re-adoption), and test_checkpoint_heartbeat.py (verify_recovery under concurrent heartbeats; also enables the CI PostgreSQL runtime for the selection).",
-  "exclusions": "tests/v3/test_recovery_activation_no_relock.py replaces verify_recovery with a stub, so it does not exercise this change (locally it also fails on pristine origin/main because the local venv lacks pytest-asyncio). No API, UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
+  "change_digest": "a881709dbf622ee5437cf94563198f32cbcc57d4bf081747917b67668e8f9461",
+  "reviewed_by": "Claude Code, after diagnosing a replaced API that stayed draining on live Core (root cause independently validated by a fresh subagent)",
+  "reason": "A promoted-away API is now retired by the supervisor once API_DRAIN_GRACE_MS (60 s) has passed, and deployment status no longer degrades on a replaced API within API_DRAIN_BOUND_MS (180 s) but does past it. Selected: test_api_candidate_retirement.py (new regressions: a draining API with an open stream is kept within grace then retired with its proxied streams closed and the promoted API never retired; health stays ready during the drain and degrades past the bound; a refused retirement keeps the row; an open SSE stream cannot hold the worker server past graceful shutdown; plus the existing prepare_api retirement guards), test_deployment_lifecycle.py (promotion, retirement, status health), test_supervisor.py (supervisor operations and loop), test_runtime_management.py (the operator retire action; also enables the CI PostgreSQL runtime).",
+  "exclusions": "test_api_worker.py, test_api_worker_composition.py, test_deployment_inventory_reads.py, test_runtime_worker_features.py and tests/test_simulation_host_activation.py were run locally and pass except two cases that fail identically on pristine origin/main for environmental reasons (a subprocess without the nebula package on its path, and a deployer test that resolves /srv/apple-sim on this host); they do not exercise the changed paths beyond what the selection covers. test_chat.py is not selected because its [postgresql] case fails on main in CI. No UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 92,
+    "python": 127,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_recovery.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_checkpoint_heartbeat.py"
+    "tests/v3/test_api_candidate_retirement.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_supervisor.py",
+    "tests/v3/test_runtime_management.py"
   ],
   "frontend": [],
   "native": [],
