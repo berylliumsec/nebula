@@ -168,11 +168,11 @@ def test_compatibility_requires_review_of_exact_migration_tree(tmp_path, monkeyp
 
 
 def test_compatibility_reviews_the_storage_open_row_indexes():
-    # 0051 only adds partial indexes on entities (no column or payload change),
-    # so the schema family is unchanged and an older release can keep serving.
+    # 0051 and 0055 only add indexes (no column or payload change), so the
+    # schema family is unchanged and an older release can keep serving.
     compatibility = runtime_bundle.load_compatibility()
 
-    assert compatibility["migration_head"] == "0054_memory_job_labels"
+    assert compatibility["migration_head"] == "0055_deployment_receipt_action"
     assert compatibility["schema_family"] == 5
     assert compatibility["schema_min"] == 5
     assert compatibility["schema_max"] == 5
