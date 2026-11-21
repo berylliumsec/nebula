@@ -1,26 +1,24 @@
 {
-  "change_digest": "3b32ada12af8d11c31ffbad17ec122fece04e3a46db66af2737aa6ebacfb215e",
-  "reviewed_by": "Claude Code, after the 2026-11-21 live promote stopped on a transient HTTP 500 from deployment status",
-  "reason": "The simulation deployer now rides out transient Core failures during promotion. CoreClient.read (nebula_deploy_gate.py) retries HTTP 500/502/503/504, timeouts and reset or refused connections with bounded backoff (about 150 s), logs each retry, raises CoreUnavailable with the re-run-promote hint past the bound, and fails at once on 4xx; StagedDeployer and reconcile_operation's readback use it. deployment_post re-sends a new operation under its saved operation_id after a lost reply (Core returns the saved receipt and never dispatches an ID twice) and reads a still-running receipt until it settles; reconciliation POSTs are not re-sent. Selected: test_simulation_deploy_gate_reads.py (read retry, bound, 4xx, plain get unchanged), test_staged_deployer.py (a status read failing twice with 500 lets promotion continue; persistent 500 stops with the resume message and the rerun resumes the same journal without double-applying; 4xx fails at once), test_deployer_protocol.py (lost POST reply read back, not re-applied; bound; 4xx; reconcile not re-sent; running receipt settles), test_simulation_deploy_resume.py and test_simulation_dead_owner_activation.py (promote and resume paths through staged_deployer), tests/v3/test_deployment_inventory_reads.py (deploy gate reads).",
-  "exclusions": "test_simulation_host_activation.py, test_simulation_host_restart.py and test_simulation_postgres_backup.py do not reach the changed reads (they pass unchanged) and each has a test that also fails on pristine origin/main on this host (pidfd stop and PostgreSQL rollback environment). The other test_simulation_deployer_* files cover CI evidence, prebuild and retention, not Core reads. No API, UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
+  "change_digest": "aeb883e078c3bf1499deaa0bf87b62dba13481ebc9b72ac2bb06ed7009b6cb76",
+  "reviewed_by": "Claude Code, after an independent subagent review of the roller (7 findings, fixed with regression tests) and a scratch-Core rehearsal",
+  "reason": "Adds the in-Core project roller (runtime_project_roller.py), a compare-and-cancel withdraw_handoff and roll status in DeploymentCoordinator.status, and lets auto-admission ignore targets of unfinished handoffs. Selected: test_runtime_project_roller.py (new; K-parallel roll, retire after verify, pinned skip/withdraw/retry, held limit, restart mid-roll, operator deferral, withdraw racing transfer, prepare backoff, ledger steps and authenticated status; SQLite and PostgreSQL), test_admission_retry.py (auto-admission, plus the new handoff-target case), test_deployment_lifecycle.py (handoff, checkpoint and status the roller builds on), test_runtime_management.py (deployment operations ledger and status receipts; also enables the CI PostgreSQL runtime for the selection).",
+  "exclusions": "No UI, setting screen or operator chat workflow changed: the roller is configured by Core environment variables and reported only in authenticated /api/v1/deployment/status, which no UI reads, so no frontend, Playwright or settings-assistant change applies. The external deployer (scripts/simulation) is unchanged and its suites are not selected. Process-spawning supervisor suites (test_supervisor.py, test_execution_worker_process.py) do not exercise the roller, which reaches the supervisor only through RuntimeManagement.dispatch (covered by test_runtime_management.py). The real-Core evidence is the scratch-Core rehearsal recorded in docs/validation/rolling-core-releases.md.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 169,
+    "python": 114,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_deploy_gate_reads.py",
-    "tests/test_staged_deployer.py",
-    "tests/test_deployer_protocol.py",
-    "tests/test_simulation_deploy_resume.py",
-    "tests/test_simulation_dead_owner_activation.py",
-    "tests/v3/test_deployment_inventory_reads.py"
+    "tests/v3/test_runtime_project_roller.py",
+    "tests/v3/test_admission_retry.py",
+    "tests/v3/test_deployment_lifecycle.py",
+    "tests/v3/test_runtime_management.py"
   ],
   "frontend": [],
   "native": [],
