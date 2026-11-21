@@ -18,7 +18,7 @@ from nebula.v3.database import (
 from nebula.v3.process_identity import process_origin, same_process
 from nebula.v3 import runtime_processes
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
-from nebula.v3.runtime_coordination import CoordinationConflict
+from nebula.v3.runtime_coordination import CoordinationConflict, LeaseLost
 from nebula.v3.runtime_orphan_recovery import reconcile_dead_project
 from tests.v3.test_runtime_processes import managed as managed
 from tests.v3.test_runtime_coordination import location as location
@@ -512,3 +512,97 @@ async def test_boot_ended_only_after_every_runtime_from_that_boot_lapses(managed
     assert await managed.host.boot_ended("another-boot")
     await _expire(managed, execution.runtime_id)
     assert await managed.host.boot_ended(EARLIER_BOOT)
+
+
+class _ReconcileOnlyManagement:
+    """Dispatches only dead-owner reconciliation; starting a worker fails."""
+
+    def __init__(self, coordinator, host):
+        from nebula.v3.runtime_operations import DeploymentOperations
+
+        self.coordinator, self.host = coordinator, host
+        self.operations = DeploymentOperations(coordinator)
+        self.actions = []
+
+    def ledger(self):
+        return self.operations
+
+    async def dispatch(self, action, values, operation_id, actor_id):
+        from nebula.v3.runtime_coordination import ProjectLease
+
+        self.actions.append(action)
+        assert action == "reconcile_project", action
+        return await reconcile_dead_project(
+            self.coordinator,
+            ProjectLease(**values["expected_owner"]),
+            launch_origin=self.host.launch_origin,
+        )
+
+
+async def test_dead_owner_of_idle_project_is_released_and_health_recovers(managed):
+    # Live 2026-11-21: an idle project's worker exited. Its process stayed
+    # "ready" and health "degraded" for 12 hours, because nothing recovered
+    # or released a project with no demand, and retirement waits for that.
+    await managed.stage("v1")
+    coordinator = managed.coordinator
+    api = await managed.host.spawn("v1", "api")
+    await coordinator.promote_api(
+        api.runtime_id, expected_revision=(await coordinator.status()).revision
+    )
+    execution = await managed.host.spawn("v1", "execution")
+    lease = await coordinator.coordination.claim_project(
+        "synthetic-project", execution.runtime_id
+    )
+    assert (await coordinator.status()).health == "ready"
+    await _kill(managed, execution)
+
+    # The dead worker still owns its project, so it is retained, but it is
+    # no longer reported ready.
+    result = await managed.host.reconcile_processes()
+    assert execution.runtime_id not in result["retired_runtime_ids"]
+    (process,) = [
+        row
+        for row in (await coordinator.status()).processes
+        if row.runtime_id == execution.runtime_id
+    ]
+    assert (process.state, process.ready_verified) == ("unreachable", False)
+    # Marking is one transition, not a change on every pass.
+    revision = (await coordinator.status()).revision
+    await managed.host.reconcile_processes()
+    assert (await coordinator.status()).revision == revision
+
+    await _expire(managed, execution.runtime_id, project_id=lease.project_id)
+    management = _ReconcileOnlyManagement(coordinator, managed.host)
+    automatic = RuntimeAutoAdmission(
+        SimpleNamespace(
+            coordinator=coordinator,
+            store=managed.store,
+            host=managed.host,
+            management=management,
+        ),
+        default_version="v1",
+    )
+    await automatic._recover_expired()
+
+    # Settled without replay and released: no worker was started for it.
+    assert management.actions == ["reconcile_project"]
+    async with managed.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, lease.project_id)
+        assert (owner.runtime_id, owner.lease_expires_at_ms) == (None, 0)
+        assert owner.fencing_token == lease.fencing_token
+    # The dead incarnation's fencing token no longer authorizes anything.
+    with pytest.raises(LeaseLost):
+        async with coordinator.coordination.fenced(lease):
+            pass
+
+    result = await managed.host.reconcile_processes()
+    assert result["retired_runtime_ids"] == [execution.runtime_id]
+    status = await coordinator.status()
+    assert status.health == "ready"
+    assert execution.runtime_id not in {row.runtime_id for row in status.processes}
+    # The project starts on demand under a strictly newer grant.
+    replacement = await managed.host.spawn("v1", "execution")
+    regrant = await coordinator.coordination.claim_project(
+        lease.project_id, replacement.runtime_id
+    )
+    assert regrant.fencing_token > lease.fencing_token

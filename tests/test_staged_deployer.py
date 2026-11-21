@@ -748,7 +748,10 @@ def test_idle_unrestorable_sessions_are_stopped_without_waiting_out_grace():
     def post(path, request):
         receipt = original(path, request)
         if request["action"] == "handoff":
-            host.state["projects"][0]["blockers"] = [IDLE_SESSION, IDLE_SESSION.replace("7f265d4f", "df734f1a")]
+            host.state["projects"][0]["blockers"] = [
+                IDLE_SESSION,
+                IDLE_SESSION.replace("7f265d4f", "df734f1a"),
+            ]
         return receipt
 
     host.post = post
@@ -769,7 +772,8 @@ def test_other_blockers_still_get_their_grace():
         receipt = original(path, request)
         if request["action"] == "handoff":
             host.state["projects"][0]["blockers"] = [
-                IDLE_SESSION, "An accepted provider turn is finishing on its current runtime",
+                IDLE_SESSION,
+                "An accepted provider turn is finishing on its current runtime",
             ]
         return receipt
 
@@ -790,7 +794,9 @@ def test_promotion_retires_unowned_workers_of_older_versions():
     deployer = _recovery_deployer(host, record)
 
     assert deployer.promote("v2")["status"] == "promoted"
-    retired = [values["runtime_id"] for action, values in host.calls if action == "retire"]
+    retired = [
+        values["runtime_id"] for action, values in host.calls if action == "retire"
+    ]
     assert "spare-old" in retired
     assert host.state["resident_versions"] == ["v2"]
 
@@ -822,8 +828,92 @@ def _status_reads_with_moved_projects(count):
     return len(reads)
 
 
+GATE_SPEC = importlib.util.spec_from_file_location(
+    "staged_deployer_gate", SOURCE.with_name("nebula_deploy_gate.py")
+)
+gate = importlib.util.module_from_spec(GATE_SPEC)
+GATE_SPEC.loader.exec_module(gate)
+
+
+class FlakyCore(gate.CoreClient):
+    """The real promotion read path over the fake host, failing on cue."""
+
+    def __init__(self, host, *, fail_from_read, failures):
+        super().__init__("http://127.0.0.1:8000", "inert")
+        self.host, self.fail_from_read = host, fail_from_read
+        self.failures, self.reads = list(failures), 0
+
+    def _get_once(self, path, parameters):
+        self.reads += 1
+        if self.reads >= self.fail_from_read and self.failures:
+            raise self.failures.pop(0)
+        return self.host.get(path)
+
+
+def _flaky_deployer(monkeypatch, host, record, failures, *, fail_from_read=3):
+    clock, sleeps = [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    core = FlakyCore(host, fail_from_read=fail_from_read, failures=failures)
+    deployer = host.deployer(record)
+    deployer.get = core.read
+    return deployer, sleeps
+
+
+def _http(code):
+    return gate.HTTPError("http://core", code, "answer", {}, None)
+
+
+def _dispatched_once(host):
+    actions = [action for action, _ in host.calls]
+    assert len(host.calls) == len({(a, repr(v)) for a, v in host.calls})
+    return actions
+
+
+def test_status_read_failing_twice_with_500_lets_promotion_continue(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(
+        monkeypatch, host, record, [_http(500), _http(500)]
+    )
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert sleeps == [2.0, 4.0]
+    assert host.state["projects"][0]["runtime_version"] == "v2"
+    assert _dispatched_once(host).count("handoff") == 1
+
+
+def test_persistent_500_stops_after_the_bound_and_the_rerun_resumes(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(monkeypatch, host, record, [_http(500)] * 200)
+    with pytest.raises(gate.CoreUnavailable, match="re-run `nebula_deployer promote`"):
+        deployer.promote("v2")
+    assert sum(sleeps) <= gate.TRANSIENT_BUDGET_SECONDS
+    journal_id = record["runtime_deployment"]["id"]
+    sent_before = len(host.calls)
+    # Core answers again; the next run resumes the same journal.
+    assert host.deployer(record).promote("v2")["status"] == "promoted"
+    assert record["runtime_deployment"]["id"] == journal_id
+    assert len(host.calls) >= sent_before
+    assert _dispatched_once(host).count("promote_api") == 1
+
+
+def test_status_read_answered_4xx_fails_at_once(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(monkeypatch, host, record, [_http(403)])
+    with pytest.raises(gate.HTTPError) as raised:
+        deployer.promote("v2")
+    assert raised.value.code == 403 and sleeps == []
+
+
 def test_projects_already_moved_share_one_status_read_per_pass():
     # Deployment status lists every project; one read per skipped project made
     # a pass over a thousand projects take minutes.
     # The move of the first project ends with one fresh read for the rest.
-    assert _status_reads_with_moved_projects(200) <= _status_reads_with_moved_projects(0) + 1
+    assert (
+        _status_reads_with_moved_projects(200)
+        <= _status_reads_with_moved_projects(0) + 1
+    )

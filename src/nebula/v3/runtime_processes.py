@@ -1238,6 +1238,15 @@ class RuntimeProcessHost:
                         )
                 except CoordinationConflict as error:
                     # diagnostic-expected: a retirement conflict is retained as an explicit reconciliation blocker.
+                    if (
+                        worker.process_state == "gone"
+                        and worker.identity is not None
+                        and worker.identity.role == "execution"
+                    ):
+                        # Its project still names it until expired-owner
+                        # recovery recovers or releases that project; until
+                        # then it is retained, but never reported ready.
+                        await self.coordinator.mark_process_absent(worker.identity)
                     retained.append(
                         {
                             "runtime_id": worker.runtime_id,
