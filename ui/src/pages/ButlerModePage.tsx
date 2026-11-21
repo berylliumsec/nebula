@@ -137,6 +137,9 @@ export function ButlerModePage() {
   const [draft, setDraft] = useState("");
   const [target, setTarget] = useState<"new" | "reply">("new");
   const [about, setAbout] = useState<ButlerBoardItem>();
+  // "Ask about" fell back to a new thread only because this open thread was
+  // still answering; once it settles, the question goes to it instead.
+  const [aboutWaitsFor, setAboutWaitsFor] = useState<string>();
   // The operator's pick for new threads; until then they start in the origin project.
   const [projectChoice, setNewThreadProject] = useState<string>();
   const newThreadProject = projectChoice ?? originProject;
@@ -276,6 +279,7 @@ export function ButlerModePage() {
       return next;
     }, { replace: false });
     setTarget(sessionId ? "reply" : "new");
+    setAboutWaitsFor(undefined);
   }, [setParams]);
 
   const setPhoneTab = (tab: "board" | "threads") => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); if (tab === "board") next.delete("thread"); return next; });
@@ -591,13 +595,26 @@ export function ButlerModePage() {
   const briefIdRef = useRef(briefId);
   briefIdRef.current = briefId;
 
+  useEffect(() => {
+    if (!aboutWaitsFor) return;
+    if (!about || openThreadId !== aboutWaitsFor) { setAboutWaitsFor(undefined); return; }
+    const open = threads.find((thread) => thread.sessionId === aboutWaitsFor);
+    if (!open) return;
+    const answering = streams.current.has(open.sessionId) || Boolean(live[open.sessionId] && !live[open.sessionId].error);
+    if (askAboutTarget(open, about, answering) !== "reply") return;
+    setTarget("reply");
+    setAboutWaitsFor(undefined);
+  }, [about, aboutWaitsFor, live, openThreadId, threads]);
+
   const askAbout = (item: ButlerBoardItem) => {
     if (projectThreadId) updateParams((next) => next.delete("pthread"));
     setAbout(item);
     // Quote into the open thread when it can take it; otherwise start one.
     const open = threads.find((thread) => thread.sessionId === openThreadId);
     const answering = Boolean(open && (streams.current.has(open.sessionId) || (live[open.sessionId] && !live[open.sessionId].error)));
-    setTarget(askAboutTarget(open, item, answering));
+    const next = askAboutTarget(open, item, answering);
+    setTarget(next);
+    setAboutWaitsFor(open && next === "new" && open.project.id === item.project.id ? open.sessionId : undefined);
     setNewThreadProject(item.project.id);
     if (compact) setPhoneTab("threads");
     window.setTimeout(() => composerRef.current?.focus(), 0);
@@ -872,10 +889,10 @@ export function ButlerModePage() {
           : <button type="submit" className={styles.send} aria-label={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} title={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} disabled={!draft.trim() || starting || !api}><ArrowUp size={16} aria-hidden="true" /></button>}
       </div>
       <div className={styles.targets}>
-        <button type="button" className={styles.target} aria-pressed={target === "new"} onClick={() => setTarget("new")}>New thread</button>
-        {openThreadSummary && <button type="button" className={styles.target} aria-pressed={target === "reply"} onClick={() => setTarget("reply")}>Reply in this thread</button>}
+        <button type="button" className={styles.target} aria-pressed={target === "new"} onClick={() => { setTarget("new"); setAboutWaitsFor(undefined); }}>New thread</button>
+        {openThreadSummary && <button type="button" className={styles.target} aria-pressed={target === "reply"} onClick={() => { setTarget("reply"); setAboutWaitsFor(undefined); }}>Reply in this thread</button>}
         {target === "new" && <label className={styles.projectPick}><span className={styles.muted}>in</span>
-          <select value={newThreadProject ?? ""} onChange={(event) => { setNewThreadProject(event.target.value); if (about && about.project.id !== event.target.value) setAbout(undefined); }} aria-label="Project for the new thread">
+          <select value={newThreadProject ?? ""} onChange={(event) => { setNewThreadProject(event.target.value); setAboutWaitsFor(undefined); if (about && about.project.id !== event.target.value) setAbout(undefined); }} aria-label="Project for the new thread">
             {visibleProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
         </label>}

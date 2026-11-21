@@ -1,7 +1,7 @@
 {
-  "change_digest": "7ed95fcef056166606d6a6356d882c58cff4a554cf5a2fffe9143837cca47a82",
+  "change_digest": "10f6adc5c2f8a059a6ad0f345bcca38a44446a6b837ac50f8094debef3dab293",
   "reviewed_by": "Claude Code, building the operator-approved Butler resume-idle mockup (Figma tVEa0PXZaa7H4ZLflwgcb7, page 210:2)",
-  "reason": "Butler mode's status board gains Resume all idle (toolbar; reads every paused or blocked goal Core lists across projects via GET /butler/board?section=idle pages, then confirms), a checkbox on each resumable Idle card, Select all per project's Idle section, and a selection bar with Clear and Resume N. Each goal resumes through the existing POST chat/sessions/{id}/goal/actions resume action, re-reading the revision once on a stale conflict; Core's refusals stay on the card. No Core code changed. Selected: the board's unit and component suites (butlerBoard.test.ts, ButlerModePage.board.test.tsx, butlerThreads.test.ts), the real-Core LAN butler-mode spec now extended to tick and resume a paused card and to Resume all idle with confirmation (desktop, compact, Chromium 390, WebKit 390, the same projects #1263 selected), and test_product_knowledge.py by node ID because the settings-assistant guide gained a section that re-chunks later passages.",
+  "reason": "Butler mode's status board gains Resume all idle (toolbar; reads every paused or blocked goal Core lists across projects via GET /butler/board?section=idle pages, then confirms), a checkbox on each resumable Idle card, Select all per project's Idle section, and a selection bar with Clear and Resume N. Each goal resumes through the existing POST chat/sessions/{id}/goal/actions resume action, re-reading the revision once on a stale conflict; Core's refusals stay on the card. No Core code changed. Selected: the board's unit and component suites (butlerBoard.test.ts, ButlerModePage.board.test.tsx, butlerThreads.test.ts), the real-Core LAN butler-mode spec now extended to tick and resume a paused card and to Resume all idle with confirmation (desktop, compact, Chromium 390, WebKit 390, the same projects #1263 selected), and test_product_knowledge.py by node ID because the settings-assistant guide gained a section that re-chunks later passages. Also: Ask Butler about this, clicked while the project's open thread is still answering, now switches the composer to Reply in this thread once Core reports the thread idle (unless the operator chose a target); two component tests and the real-Core spec cover it, and the help text says so.",
   "exclusions": "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli and tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls already fail on pristine origin/main (the latter on the same 2 unreviewed signatures; this change only raised two existing butlerBoard.ts call counts, refreshed in the inventory). No Core route, setting or settings catalog entry changed (resume is an existing goal action, not a setting). Other butler-mode viewports (320, 430) and unrelated Playwright areas are not selected.",
   "python_versions": [
     "3.12"
@@ -10,7 +10,7 @@
   "python_node": false,
   "expected_tests": {
     "python": 90,
-    "frontend": 27,
+    "frontend": 29,
     "native": 0,
     "playwright": 4
   },

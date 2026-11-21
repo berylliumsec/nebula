@@ -1,14 +1,16 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ButlerModePage } from "./ButlerModePage";
 
 const requestIfChanged = vi.fn();
 const writeChatGoal = vi.fn();
 const getChatGoal = vi.fn();
 const confirm = vi.fn();
-const api = { requestIfChanged, writeChatGoal, getChatGoal };
+const listChatMessages = vi.fn(async () => []);
+const getPendingChatTurn = vi.fn(async () => null);
+const api = { requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn };
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: undefined, engagements: [], providers: [], harnesses: [], selectEngagement: vi.fn() }),
 }));
@@ -19,6 +21,7 @@ vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
 vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
+vi.mock("./ButlerChatBrief", () => ({ ButlerChatBrief: ({ onAsk }: { onAsk: (value: unknown) => void }) => <button type="button" onClick={() => onAsk(undefined)}>Ask Butler about this</button> }));
 
 const research = { id: "p1", name: "Research" };
 const bounty = { id: "p2", name: "Bounty" };
@@ -196,4 +199,39 @@ it("Select all in a project ticks every resumable idle goal Core lists there", a
   expect(within(within(board).getByRole("region", { name: "Selected idle goals" })).getByText("1 selected")).toBeVisible();
   await userEvent.click(selectAll);
   expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+});
+
+describe("asking about a chat while the open thread is answering", () => {
+  const thread = (state: string) => ({ session_id: "t1", title: "Earlier question", project: bounty, state, updated_at: "2026-11-20T10:00:00Z" });
+  const serveThreads = (states: string[]) => {
+    let reads = 0;
+    requestIfChanged.mockImplementation(async (path: string) => {
+      if (path.startsWith("butler/threads")) { const state = states[Math.min(reads, states.length - 1)]; reads += 1; return { value: { items: [thread(state)] }, etag: `"t${reads}"` }; }
+      return { value: poll, etag: '"b"' };
+    });
+  };
+  const mountOnThread = () => render(<MemoryRouter initialEntries={["/butler?thread=t1&chat=Install%20driver"]}><ButlerModePage /></MemoryRouter>);
+
+  it("starts as a new thread, then quotes into the thread once it settles", async () => {
+    serveThreads(["working", "idle"]);
+    mountOnThread();
+    const reply = await screen.findByRole("button", { name: "Reply in this thread" });
+    await userEvent.click(await screen.findByRole("button", { name: "Ask Butler about this" }));
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Install driver", { selector: "span" })).toBeVisible();
+    await waitFor(() => expect(reply).toHaveAttribute("aria-pressed", "true"), { timeout: 8000 });
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "false");
+  }, 15_000);
+
+  it("keeps the operator's own choice of a new thread", async () => {
+    serveThreads(["working", "idle"]);
+    mountOnThread();
+    const reply = await screen.findByRole("button", { name: "Reply in this thread" });
+    await userEvent.click(await screen.findByRole("button", { name: "Ask Butler about this" }));
+    await userEvent.click(screen.getByRole("button", { name: "New thread" }));
+    await waitFor(() => expect(requestIfChanged.mock.calls.filter(([path]) => String(path).startsWith("butler/threads")).length).toBeGreaterThan(1), { timeout: 8000 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reply).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
+  }, 15_000);
 });

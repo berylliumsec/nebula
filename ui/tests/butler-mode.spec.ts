@@ -487,16 +487,13 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const aboutThread = (await (await api.get("butler/threads")).json() as Threads).items.find(item => item.title === PROMPTS.about);
       expect(aboutThread?.project.id).toBe(bounty);
       // Asking about the same chat again quotes it into the open thread (same project).
-      // The answer text streams in before the thread settles, and the page
-      // picks the target once per click, so wait for Core to report the
-      // thread idle and retry the click until the page has seen it too.
-      await expect.poll(async () => ((await (await api.get("butler/threads")).json()) as Threads).items.find(item => item.session_id === aboutThread!.session_id)?.state, {timeout: 60_000}).toBe("idle");
+      // Asked right after the answer appears, the thread may still be
+      // settling: the composer starts a new thread, then switches to Reply
+      // once Core reports the thread idle.
       await showBoard(page);
-      await expect(async () => {
-        if (!await brief.isVisible()) await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
-        await brief.getByRole("button", {name: "Ask Butler about this"}).click();
-        await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 2_000});
-      }).toPass({timeout: 30_000});
+      if (!await brief.isVisible()) await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
+      await brief.getByRole("button", {name: "Ask Butler about this"}).click();
+      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
       await composer.fill("QUOTE-FOLLOW-UP Is it still running?");
       await page.getByRole("button", {name: "Send reply"}).click();
       await expect.poll(() => stub.prompts().find(prompt => prompt.endsWith("QUOTE-FOLLOW-UP Is it still running?")) ?? "", {timeout: 60_000})

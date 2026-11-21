@@ -1279,7 +1279,8 @@ returns to the board. In the brief, **Approve** and **Deny** answer a pending
 approval with the exact request shown; **Stop** stops a working chat's response
 after confirmation; **Pause goal** and **Resume goal** change its goal; **Ask
 Butler about this** quotes that chat into the open idle thread of its project,
-or starts a new thread there; and
+or starts a new thread there (if that thread is still answering, it switches
+to **Reply in this thread** when Butler finishes, unless you chose); and
 **Open full chat** shows the transcript in a pop-up over Butler mode (scroll
 it, then click outside or press Esc to return; **Open in workbench** leaves for
 the full chat). The pop-up reads the newest messages and older ones on request,
