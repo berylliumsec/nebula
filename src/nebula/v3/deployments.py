@@ -2339,6 +2339,21 @@ class DeploymentCoordinator:
         from .runtime_project_handoff import snapshot_project_checkpoint
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
+        # An already-verified recovery needs only its identity and digest. The
+        # project scan below serves only the prepared -> verified step. Running
+        # it first made each supervisor handoff pass re-read the whole project,
+        # and a busy project changes during that scan, so the pass never
+        # succeeded and the loop rescanned the project indefinitely.
+        async with self.coordination.fenced(lease) as session:
+            row = await session.get(RuntimeRecoveryRow, operation_id)
+            if (
+                row is not None
+                and row.phase == "verified"
+                and (row.project_id, row.target_runtime_id, row.target_fencing_token)
+                == (lease.project_id, lease.runtime_id, lease.fencing_token)
+                and checkpoint_digest(row.checkpoint) == restored_checkpoint_digest
+            ):
+                return
         scanned, generation = await snapshot_project_checkpoint(
             self, lease.project_id, lease=lease
         )
