@@ -6,6 +6,7 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .async_utils import MaybeAsync
 
 from .async_utils import async_done_callback, call_async, finish_cleanup
@@ -16785,7 +16786,7 @@ class HarnessRuntimeService:
                     }
                 )
         profiles = [
-            McpServerProfile.model_validate(item) for item in session.mcp_snapshot
+            decode_stored(McpServerProfile, item) for item in session.mcp_snapshot
         ]
         for profile in profiles:
             for tool in profile.capabilities.tools:
@@ -19780,7 +19781,7 @@ class HarnessRuntimeService:
         )
         frozen = session.metadata.get("scope_snapshot")
         if isinstance(frozen, dict):
-            scope = ScopePolicy.model_validate(frozen)
+            scope = decode_stored(ScopePolicy, frozen)
         else:
             engagement = await self.store.get(Engagement, session.engagement_id)
             scope = (
@@ -20340,7 +20341,7 @@ class HarnessRuntimeService:
                 ),
             )
         profiles = [
-            McpServerProfile.model_validate(item) for item in session.mcp_snapshot
+            decode_stored(McpServerProfile, item) for item in session.mcp_snapshot
         ]
         server = next(
             (
@@ -20482,7 +20483,7 @@ class HarnessRuntimeService:
         if event.server_id in {"codex", "claude"}:
             return await self._record_native_tool_event(turn, event)
         profiles = [
-            McpServerProfile.model_validate(item) for item in session.mcp_snapshot
+            decode_stored(McpServerProfile, item) for item in session.mcp_snapshot
         ]
         server = next(
             (
