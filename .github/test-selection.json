@@ -1,8 +1,8 @@
 {
-  "change_digest": "09956e0f668a6d56c1e80e57fe2c5a43d2a8d498eb206f0f44712f6ed2bc7192",
-  "reviewed_by": "Claude Code (operator request to remove the conversation catch-up card)",
-  "reason": "Removes the GUI chat catch-up card (ChatCatchUp) and everything that existed only for it: its render in SessionsPage, the component and its unit test, its CSS, the review-pending focus chain it drove, the catch-up Playwright area/spec/config, the guide step that described it, and its Butler workflow-registry entries. Core's catch-up/read-cursor API and the TUI /catchup command are unchanged. Selected: guides.test.tsx (guide catalog after the step removal), useSessionState.test.tsx (pending-state owner the card read), settingsCatalog.terminal.test.ts (terminal /catchup discovery stays intact). npm run build typechecks the whole UI including tests.",
-  "exclusions": "Playwright host-mode.spec.ts (now asserting the card is absent on reload) cannot run: tests/v3/host_mode_fixture.py calls the now-async make_runtime() synchronously and fails at startup on origin/main too. real-core.spec.ts lost only its card assertions. tests/v3/test_butler_workflow_registry.py fails identically on origin/main (2 unreviewed useProjectViewLease signatures); its checker shows this change removing exactly the card's 1 action and 2 signatures. No Core code changed.",
+  "change_digest": "5af21c3fbd18e01b8e6b6b49e79a63068466994c34ab8ac77844b053b89a6142",
+  "reviewed_by": "Claude Code, fixing the operator-reported repeated lifecycle hook rows in the chat area",
+  "reason": "Defect: a turn's Lifecycle hooks list showed one bare row per hook run (a tool.before hook on a 9-tool turn gave 9 identical lines), centered by the one-line status-pill class .chat-action-status, with the hook name and 'tool before' run together. Root cause (validated by a separate subagent and by reading SessionsPage.tsx): the list maps every NativeHookExecution 1:1 since per-tool-call hooks (12589f9), its container reused .chat-action-status (flex, centered, green 11px), and <strong>/<small> were adjacent inline elements. Fix: a HookOutcomes component groups clean runs (complete/reconciled, no error or reconciliation detail) by hook, event, status and side effects into one row with a count; failed, timed-out, interrupted, running and reconciled-with-detail runs keep their own rows with their error and late outcome. Events read 'Before tool'/'After tool'. The container gets its own left-aligned .chat-hook-outcomes list styling with wrapping rows and a gap between name and detail. The summary text is unchanged. Selected: HookOutcomes.test.tsx (labels, grouping, rendering), guides.test.tsx (the hook-outcomes guide anchor is kept), and Playwright area chat-tools-paths (desktop, compact, mobile-webkit-small), whose mocked lifecycle-hooks test now returns three runs and checks the grouped row, left alignment, the name/detail gap and Axe.",
+  "exclusions": "Real-Core LAN: provider-native-hooks-core (real-core.spec.ts 'provider selections survive reload and restart reconciliation') showed 'Lifecycle hooks \u00b7 2/2 completed' on load, reload and after hook removal with this change, then failed at line 3693 (pending-turn poll for restart reconciliation); the same test fails at the same line on origin/main, so the area is not selected. App.test.tsx 'refreshes operator revisions after activation' timed out once under host load ~9 and passes alone with and without this change; App.test.tsx is not selected. No Core, setting or catalog change.",
   "python_versions": [
     "3.12"
   ],
@@ -10,17 +10,18 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 24,
+    "frontend": 18,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [],
   "frontend": [
-    "ui/src/guides/guides.test.tsx",
-    "ui/src/pages/useSessionState.test.tsx",
-    "ui/src/settingsCatalog.terminal.test.ts"
+    "ui/src/components/HookOutcomes.test.tsx",
+    "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:chat-tools-paths"
+  ],
   "checks": []
 }
