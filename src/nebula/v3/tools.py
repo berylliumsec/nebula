@@ -20,7 +20,7 @@ import shutil
 import socket
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from enum import Enum
@@ -145,12 +145,20 @@ class ProjectHookPolicyDenied(PolicyDenied):
     """A project hook denied a command before it ran; its output is untrusted."""
 
     def __init__(
-        self, decision: PolicyDecision, *, hook_id: str, stdout: str, stderr: str
+        self,
+        decision: PolicyDecision,
+        *,
+        hook_id: str,
+        stdout: str,
+        stderr: str,
+        route_to: Sequence[str] = (),
     ) -> None:
         super().__init__(decision)
         self.hook_id = hook_id
         self.hook_stdout = stdout
         self.hook_stderr = stderr
+        # The tools the hook's manifest routes a denied command to.
+        self.route_to = tuple(route_to)
 
 
 class ToolNotPermitted(PolicyDenied):

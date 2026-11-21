@@ -582,7 +582,7 @@ async def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known
             f"grep -R needle {projects_root}",
         )
         for step, command in enumerate(broad_searches, start=1):
-            with pytest.raises(PolicyDenied, match="required project hook"):
+            with pytest.raises(PolicyDenied, match="required project hook") as denied:
                 await broker.execute(
                     tool_invocation(
                         engagement,
@@ -599,6 +599,9 @@ async def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known
             assert execution.status != "complete"
             assert "repo_search_guard (run_command)" in execution.stderr
             assert "capability_search" in execution.stderr
+            # The manifest's routing target, not the hook's output, names the
+            # tool the denial sends the model to.
+            assert denied.value.route_to == ("capability_search",)
             assert sessions == []
             assert (await store.list_entities(CommandExecution)) == []
 

@@ -2284,8 +2284,34 @@ def _normalize_routing_arguments(
 # How many routing responses in a row may end with Core answering their calls
 # itself (an unavailable tool, or a cut-off, unreadable or replayed call) before
 # the turn stops routing and answers from the results it has, like Cline's
-# mistake counter. Any call that runs resets the count.
+# mistake counter. Any call that runs resets the count, except a denial by a
+# project hook: the same hook denying this many calls in one turn stops routing
+# too, even with other calls running in between (see _repeated_hook_denial).
 _ROUTING_DEVIATION_LIMIT = 3
+
+
+def _repeated_hook_denial(
+    denials: dict[str, int], provider_result: object
+) -> str | None:
+    """Count a project hook's denial; return its ID once it reaches the limit.
+
+    A hook denial is a call that ran, so it resets the deviation count, and a
+    model that rewords a blocked command between other calls would otherwise
+    never stop. Only completed hook denials count: a command the hook allowed,
+    or a hook that failed to run, does not, and each hook counts on its own.
+    """
+
+    result = _decoded_result(provider_result)
+    if result is None or result.get("policy_rule") != "project_native_hook":
+        return None
+    hook = result.get("hook_output")
+    hook_id = hook.get("hook_id") if isinstance(hook, dict) else None
+    if not isinstance(hook_id, str) or not hook_id:
+        return None
+    denials[hook_id] = denials.get(hook_id, 0) + 1
+    return hook_id if denials[hook_id] >= _ROUTING_DEVIATION_LIMIT else None
+
+
 # Restart recovery is background work. A Core restart can surface many durable
 # provider turns at once, and each routing step validates and serializes the
 # turn's full tool history on the API event loop. Keep a small amount of
@@ -9740,6 +9766,9 @@ class ChatService:
             # Routing responses in a row whose calls Core answered itself.
             deviations = 0
             route_deviated = False
+            # Denials per project hook in this turn; they outlast calls that run.
+            hook_denials: dict[str, int] = {}
+            repeated_hook: str | None = None
             while (
                 turn.status != ChatTurnStatus.FINALIZING
                 and (await self._accepted_goal_completion(turn)) is None
@@ -9832,6 +9861,7 @@ class ChatService:
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
                                 "deviations": deviations,
+                                "repeated_hook_denial": repeated_hook,
                             },
                         )
                         break
@@ -10204,7 +10234,18 @@ class ChatService:
                     del batched_calls[: len(parallel_wave)]
                     for parallel_event in parallel_events:
                         yield parallel_event
+                        if parallel_event[0] == "tool_completed":
+                            repeated_hook = (
+                                _repeated_hook_denial(
+                                    hook_denials, parallel_event[1].get("receipt")
+                                )
+                                or repeated_hook
+                            )
                     prepared.turn = turn
+                    if repeated_hook is not None:
+                        # The queue never ran, so abandoning it is safe.
+                        deviations = _ROUTING_DEVIATION_LIMIT
+                        batched_calls = []
                     continue
                 routed = batched_calls.pop(0)
                 call, provider_call = routed.call, routed.provider_call
@@ -10530,6 +10571,16 @@ class ChatService:
                     # A completion proposal ends tool routing. The final
                     # answer and goal transition commit in one transaction.
                     break
+                denied_hook = _repeated_hook_denial(
+                    hook_denials, entry.get("provider_result")
+                )
+                if denied_hook is not None:
+                    # The model keeps rewording a command the same hook routes
+                    # elsewhere. Stop as at the deviation limit; the queued
+                    # calls never ran, so abandoning them is safe.
+                    repeated_hook = denied_hook
+                    deviations = _ROUTING_DEVIATION_LIMIT
+                    batched_calls = []
 
             turn = await self.store.update(
                 ChatTurn,
