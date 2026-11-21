@@ -1,21 +1,23 @@
 {
-  "change_digest": "29d5729f190498861330c6d8953ac79061dece4f861ac4588794d0a684281726",
+  "change_digest": "204ca582393b8d032eebaedbbf0c9b5a52375c69569c2d03835d2b12d916cc85",
   "reviewed_by": "Claude Code (deployer change for a two-step rollout the user asked for)",
-  "reason": "Adds `prepare --commit <sha>` to the simulation deployer so a release adding stored-entity fields can roll out after the first tolerant commit. Selected: tests/test_simulation_deployer_ci_default.py, which covers prepare's candidate selection (new: an earlier first-parent main commit is built, a commit main never received is refused, non-hex arguments are refused, the live commit reports current) plus the existing CI-evidence and default-prepare tests.",
-  "exclusions": "No Core, UI, setting or chat journey changed, so no frontend, Playwright or LAN-instance journey applies. promote, cycle and prebuild are unchanged (promote deploys whatever prepare recorded as pending). main_commit was also exercised against real git: 924ba13 resolves; PR-branch commits 1c80b2b and 61628bc are refused.",
+  "reason": "Adds `prepare --commit <sha>` to the simulation deployer so a release adding stored-entity fields can roll out after the first tolerant commit. Selected: tests/test_simulation_deployer_ci_default.py, which covers prepare's candidate selection (new: an earlier first-parent main commit is built, a commit main never received is refused, non-hex arguments are refused, the live commit reports current) plus the existing CI-evidence and default-prepare tests. Also repairs main's `mypy src/nebula/v3` gate, broken by #1275 (merged before its CI finished): typed attributes in runtime_host_services.py, and the supervisor's memory-budget route now answers 503 instead of raising AttributeError if host memory control has not started. Selected for that: test_runtime_host_services.py (the host-services listener whose attributes were typed) and test_memory_api.py (the memory-budget routes the supervisor forwards).",
+  "exclusions": "No Core, UI, setting or chat journey changed, so no frontend, Playwright or LAN-instance journey applies. promote, cycle and prebuild are unchanged (promote deploys whatever prepare recorded as pending). main_commit was also exercised against real git: 924ba13 resolves; PR-branch commits 1c80b2b and 61628bc are refused. Locally test_host_synchronizes_current_product_guidance_and_preserves_it_on_restart and test_guidance_mirror_failure_is_reported_while_packaged_help_remains_available fail identically on pristine origin/main in a fresh checkout (missing generated product_knowledge.sqlite3.b85).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 22,
+    "python": 84,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_simulation_deployer_ci_default.py"
+    "tests/test_simulation_deployer_ci_default.py",
+    "tests/v3/test_runtime_host_services.py",
+    "tests/v3/test_memory_api.py"
   ],
   "frontend": [],
   "native": [],
