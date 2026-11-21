@@ -1,26 +1,31 @@
 {
-  "change_digest": "8155099624e8c43799ed7af619725dc425ada851d86b7926c220c2cdd166c7c3",
-  "reviewed_by": "Claude Code, after diagnosing live supervisor CPU (root cause independently validated by a fresh subagent)",
-  "reason": "verify_recovery returns before the full project checkpoint scan when the recovery is already verified for the exact lease and restored digest; the prepared -> verified path is unchanged. Selected: test_runtime_recovery.py (new regression: a verified recovery re-confirms with zero scans while the project is changing, and a wrong digest still takes the full path; plus existing grant/verify/status tests), test_recovery_reconciliation.py (supervisor recovery advancement, prepared-worker activation, restart re-adoption), and test_checkpoint_heartbeat.py (verify_recovery under concurrent heartbeats; also enables the CI PostgreSQL runtime for the selection).",
-  "exclusions": "tests/v3/test_recovery_activation_no_relock.py replaces verify_recovery with a stub, so it does not exercise this change (locally it also fails on pristine origin/main because the local venv lacks pytest-asyncio). No API, UI, setting or operator workflow changed, so no frontend, Playwright or LAN-instance journey applies.",
+  "change_digest": "fe39194f11511405747a49181d5a0abc27f9a5b75601b8aae81e0e9e564a9b03",
+  "reviewed_by": "Claude Code, after diagnosing the Butler mode send delay (root cause independently validated by a fresh subagent)",
+  "reason": "Butler mode's send waited for three serial Core requests (Butler session read, assistant-config read, thread reservation POST through the project worker) before clearing the composer or showing the message. It now shows the message with a 'Starting Butler's response' line at once and returns the text to the composer, after anything typed meanwhile is kept, if Core cannot start the thread. Selected: the new ButlerModePage.send.test.tsx (optimistic display, failure restore, typed-meanwhile merge), the existing Butler mode board and thread helper unit tests, and the butler-mode real-Core LAN journey in desktop, compact, mobile Chromium 390 and mobile WebKit 390, whose startThread helper now requires the message to appear within 5 s.",
+  "exclusions": "No Core, API, setting or settings-assistant surface changed, so no Python tests or settings catalog update apply. The Butler side panel (NebulaControlAssistant) already shows its message before awaiting Core and is unchanged.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 92,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 16,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
-  "python": [
-    "tests/v3/test_runtime_recovery.py",
-    "tests/v3/test_recovery_reconciliation.py",
-    "tests/v3/test_checkpoint_heartbeat.py"
+  "python": [],
+  "frontend": [
+    "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/pages/butlerThreads.test.ts"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }
