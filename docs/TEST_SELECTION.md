@@ -111,7 +111,6 @@ Chromium/WebKit mobile 320/390/430). Select only journeys affected by the change
 | Area / spec basename | Fixture configuration |
 | --- | --- |
 | `assistant-browser-viewer`, `working-knowledge` | `playwright.application-model.config.ts` |
-| `catch-up` | `playwright.catch-up.config.ts` |
 | `host-mode` | `playwright.host-mode.config.ts` |
 | `project-deletion` | `playwright.project-deletion.config.ts` |
 | `workspace-quota` | `playwright.workspace-quota.config.ts` |
@@ -123,8 +122,8 @@ single invocation are rejected instead of silently running against the wrong
 server. For example, collect before running:
 
 ```sh
-npm --prefix ui run test:e2e -- tests/catch-up.spec.ts --project=model-desktop --list
-NEBULA_TEST_PYTHON='poetry run python' npm --prefix ui run test:e2e -- tests/catch-up.spec.ts --project=model-desktop
+npm --prefix ui run test:e2e -- tests/host-mode.spec.ts --project=model-desktop --list
+NEBULA_TEST_PYTHON='poetry run python' npm --prefix ui run test:e2e -- tests/host-mode.spec.ts --project=model-desktop
 ```
 
 Build the candidate production UI before browser execution. Fixtures own temporary

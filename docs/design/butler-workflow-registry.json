@@ -2033,34 +2033,6 @@
       }
     },
     {
-      "id": "ui.device_read_cursor",
-      "entry_point": "The transcript acknowledges only messages rendered on this device",
-      "ui_calls": [
-        "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
-        "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`"
-      ],
-      "core_owner": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
-      "butler": {
-        "discover": "not model-callable",
-        "read": "not model-callable",
-        "change": "not model-callable"
-      },
-      "authority": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
-      "observed_result_test": "tests/v3/test_chat_catchup.py::test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending",
-      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
-      "status": "supporting_transport",
-      "transport": {
-        "kind": "device_read_state",
-        "owner": "requesting_browser",
-        "model_operation": false,
-        "workflows": [
-          "chat.start_and_read",
-          "approval.review"
-        ],
-        "reason": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work."
-      }
-    },
-    {
       "id": "ui.resource_descriptors",
       "entry_point": "The browser resolves resource labels, relationship cards and available action menus",
       "ui_calls": [
@@ -4077,14 +4049,6 @@
     },
     {
       "key": "ui/src/components/ChatAttachments.tsx::request::GET `chat/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/preview`",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`",
       "count": 1
     },
     {

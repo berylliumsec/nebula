@@ -147,10 +147,6 @@
 .chat-follow-up-queue textarea { width: 100%; min-height: 80px; }
 
 
-.chat-catch-up { max-height: 30vh; overflow: auto; background: var(--surface); padding: 10px; border-radius: 10px; }
-.chat-catch-up header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.chat-catch-up ul { list-style: none; padding: 0; margin: 0; }
-.chat-catch-up li button { display: grid; text-align: left; white-space: normal; overflow-wrap: anywhere; min-height: 44px; }
 .chat-evidence { margin-block: 8px; color: var(--text-secondary); }
 .chat-evidence summary { cursor: pointer; min-height: 32px; }
 .chat-evidence pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -161,7 +157,7 @@
 .chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30cqh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
 .chat-operator-updates:empty { display: none; }
 .chat-operator-updates > * { margin: 6px 0; }
-.chat-operator-updates .chat-follow-up-queue, .chat-operator-updates .chat-catch-up { max-height: none; overflow: visible; }
+.chat-operator-updates .chat-follow-up-queue { max-height: none; overflow: visible; }
 .chat-follow-up-queue > header { flex-wrap: wrap; }
 .chat-follow-up-queue > p, .chat-follow-up-queue > [role="alert"] { padding: 8px 12px; }
 .chat-follow-up-queue li { grid-template-columns: minmax(0, 1fr); }
@@ -261,10 +257,8 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
   .chat-settings-setup-row { min-height: 56px; }
 }
 
-.chat-recovery-notice > .icon-button, .chat-catch-up header > .icon-button { flex: 0 0 44px; width: 44px; min-height: 44px; }
+.chat-recovery-notice > .icon-button { flex: 0 0 44px; width: 44px; min-height: 44px; }
 
-.chat-catch-up-recovery { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
-.chat-catch-up-recovery > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
 .chat-composer-context > .harness-status-rail { width: auto; max-width: calc(100% - 24px); justify-self: stretch; margin: 0 12px; border: 0; border-radius: 0; background: transparent; }
 .chat-composer-context > .harness-status-rail .harness-status-summary { min-height: 22px; gap: 6px; padding: 2px 0; flex-wrap: wrap; white-space: normal; }

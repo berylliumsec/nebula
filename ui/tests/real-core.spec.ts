@@ -6767,11 +6767,6 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.goto(url);
     await expect(page.locator(".chat-message.operator")).toHaveCount(3);
     await expect(page.locator(".chat-message.operator").nth(1)).toContainText("Queue second task");
-    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toBeVisible();
-    await page.getByRole("button", {name: "Dismiss catch-up", exact: true}).click();
-    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
-    await page.goto(url);
-    await expect(page.locator(".chat-message.operator")).toHaveCount(3);
     await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
     await page.locator(".chat-evidence").first().locator("summary").first().click();
     await expect(page.locator(".chat-evidence").first()).toContainText("No supporting citations");

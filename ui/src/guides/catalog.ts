@@ -340,10 +340,10 @@ export const guideCatalog: GuideDefinition[] = [
   {
     id: "missions-and-catch-up",
     title: "Hand work to a mission and catch up later",
-    summary: "Continue a harness chat in the background and see what changed when you return.",
+    summary: "Continue a harness chat in the background and follow it in Missions.",
     category: "assistant",
     pages: ["workbench"],
-    keywords: "mission background continue catch up away unread pending actions missions",
+    keywords: "mission background continue catch up away missions",
     steps: [
       {
         title: "Continue a harness chat as a mission",
@@ -362,12 +362,6 @@ export const guideCatalog: GuideDefinition[] = [
         ],
         route: context => workbench(context, { view: "missions" }),
         requiresProject: true,
-      },
-      {
-        title: "Catch up when you return",
-        body: [
-          "When a conversation moved on while you were away, Since you last read this conversation summarizes what changed. Review jumps to anything waiting for your decision, such as an approval.",
-        ],
       },
     ],
   },
