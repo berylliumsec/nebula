@@ -145,18 +145,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     expect(repeated.ok(), await repeated.text()).toBe(true);
     expect(await repeated.json()).toEqual(importedResult);
 
-    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Work import browser" } })).json() as { secret: string; confirmation_code: string };
-    await pairingApi.dispose();
-    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
-    await page.getByLabel("Device name").fill("Work import browser");
-    // Pairing clears the fragment before submit; await the replacement document.
-    const [pairedPage] = await Promise.all([
-      page.waitForNavigation({url: `${core.origin}/`, waitUntil: "load", timeout: 20_000}),
-      page.getByRole("button", { name: "Pair device" }).click(),
-    ]);
-    expect(pairedPage?.ok()).toBe(true);
-    await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0);
+    await pairBrowser(page, core, "Work import browser");
     await page.route("**/api/v1/work/agents", (route) => route.fulfill({ json: [{
       session_id: "sample-active-session", engagement_id: parentId,
       title: "Sample research handoff", state: "working", turn_id: "sample-turn",
@@ -269,6 +258,90 @@ test("work hub import finds a project and its saved task after refresh", async (
     const accessibility = await new AxeBuilder({ page }).include(".work-page").analyze();
     expect(accessibility.violations).toEqual([]);
     await testInfo.attach("work-import", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), projectId: selected.engagement_id }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopCore(core);
+  }
+});
+
+async function pairBrowser(page: import("@playwright/test").Page, core: TestCore, name: string): Promise<void> {
+  const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  const pairing = await (await pairingApi.post("auth/pairings", { data: { name } })).json() as { secret: string; confirmation_code: string };
+  await pairingApi.dispose();
+  await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill(name);
+  // WebKit can report the post-pairing reload without a response object; the paired shell is the evidence.
+  await Promise.all([
+    page.waitForURL(`${core.origin}/`, { waitUntil: "load", timeout: 20_000 }),
+    page.getByRole("button", { name: "Pair device" }).click(),
+  ]);
+  await expect(page.getByRole("button", { name: "Pair device" })).toHaveCount(0, { timeout: 20_000 });
+}
+
+test("work hub stages: define, view gaps, group and move items, resync from import", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startCore();
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    await waitForCoreApi(api);
+    const batch = (stage: string, updateId: string, status: string) => ({ source: "sample-tracker", projects: [
+      { external_id: "site", name: "Website refresh", status: "active", items: [
+        { external_id: "copy", title: "Home page copy", status: "in_progress", stage, update: { summary: `Now in ${stage}`, status, update_id: updateId } },
+        { external_id: "pricing", title: "Pricing table", status: "blocked", stage: "draft" },
+      ] },
+      { external_id: "docs", name: "Docs cleanup", status: "active" },
+    ] });
+    const imported = await coreMutation(api, "post", "work/import", batch("draft", "u1", "in_progress"));
+    expect(imported.ok(), await imported.text()).toBe(true);
+    const result = await imported.json() as { projects: Array<{ engagement_id: string; items: Array<{ item_id: string }> }> };
+    const siteId = result.projects[0].engagement_id;
+    const copyId = result.projects[0].items[0].item_id;
+
+    await pairBrowser(page, core, "Work stages browser");
+    await page.goto(`${core.origin}/projects/${siteId}/work?stages=edit`);
+    const editor = page.getByRole("dialog", { name: "Work stages" });
+    await expect(editor).toBeVisible({ timeout: 20_000 });
+    for (const [index, name] of ["Draft", "Review", "Ship"].entries()) {
+      await editor.getByRole("button", { name: "Add stage" }).click();
+      await editor.getByRole("textbox", { name: `Stage ${index + 1} name` }).fill(name);
+    }
+    await editor.getByRole("checkbox").nth(1).check();
+    await editor.getByRole("button", { name: "Save stages" }).click();
+    await expect(editor).toBeHidden({ timeout: 20_000 });
+    type Project = { work_stages: Array<{ key: string; label: string; flag_when_empty: boolean }> };
+    await expect.poll(async () => (await (await api.get(`engagements/${siteId}`)).json() as Project).work_stages.map((stage) => [stage.key, stage.flag_when_empty]))
+      .toEqual([["draft", false], ["review", true], ["ship", false]]);
+
+    await page.goto(`${core.origin}/projects`);
+    const strip = page.getByRole("list", { name: "Website refresh stages" });
+    await expect(strip.getByRole("link", { name: "Draft: 2 open, 1 blocked" })).toBeVisible({ timeout: 20_000 });
+    await expect(strip.getByRole("link", { name: "Review: none yet" })).toBeVisible();
+    await expect(page.locator(".work-project-list").getByRole("link", { name: "Define stages" }).first()).toBeVisible();
+    await page.getByRole("button", { name: /Missing a stage/ }).click();
+    await expect(page.locator(".work-project-list")).not.toContainText("Docs cleanup");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".work-projects").analyze()).violations).toEqual([]);
+
+    await strip.getByRole("link", { name: "Draft: 2 open, 1 blocked" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${siteId}/work\\?group=stage&stage=draft$`));
+    const board = page.getByRole("region", { name: "Project board by stage" });
+    await expect(board.locator(".work-column[data-focused]")).toContainText("Home page copy");
+    await board.getByRole("link", { name: /Home page copy/ }).click();
+    await page.getByRole("combobox", { name: "Stage" }).selectOption("review");
+    await expect.poll(async () => (await (await api.get(`engagements/${siteId}/work/${copyId}`)).json() as { stage?: string }).stage).toBe("review");
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "Stage" })).toHaveValue("review");
+    await expect(board.locator(".work-column").filter({ has: page.getByRole("heading", { name: "Review" }) })).toContainText("Home page copy");
+
+    // The source owns an imported item's stage: a resync moves it, and a new update_id posts another update.
+    await expect(page.locator(".work-live-state")).toHaveText("Live");
+    const resync = await coreMutation(api, "post", "work/import", batch("ship", "u2", "review"));
+    expect(resync.ok(), await resync.text()).toBe(true);
+    await expect(page.getByRole("combobox", { name: "Stage" })).toHaveValue("ship", { timeout: 20_000 });
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Now in ship");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".work-page").analyze()).violations).toEqual([]);
+    await testInfo.attach("work-stages", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), projectId: siteId }), contentType: "application/json" });
   } finally {
     await api.dispose();
     await stopCore(core);
