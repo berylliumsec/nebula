@@ -2,9 +2,12 @@
 
 import asyncio
 from dataclasses import asdict
+import os
 from pathlib import Path
 import secrets
+import socket
 import threading
+import time
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -15,18 +18,22 @@ from nebula.v3.database import RuntimeInstanceRow, RuntimeProcessRow
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.host_load import HostLoadSnapshot
 from nebula.v3.runtime_coordination import ProjectLease
+from nebula.v3.runtime_butler_actions import BUTLER_SUBMIT_ACTION
 from nebula.v3.runtime_host_pressure import HOST_PRESSURE, RemoteHostLoadGate
 from nebula.v3.process_identity import same_process
 from nebula.v3.runtime_host_services import (
     HOST_SOCKET_NAME,
+    PEER_HEADER,
     HostServiceClient,
     HostSharedServices,
     host_service_client,
+    inherited_host_services,
 )
 from nebula.v3.runtime_ipc import (
     UNDISPATCHED_HEADER,
     RuntimeIpcError,
     RuntimeIpcUndispatched,
+    RuntimeRpcClient,
     RuntimeRpcServer,
 )
 from nebula.v3.shared_memory_rpc import RemoteButlerMemory
@@ -675,3 +682,211 @@ async def test_peer_failures_fail_at_once_and_only_replacement_is_resent(shared)
         )
     assert closed.status_code == 503
     assert closed.headers.get(UNDISPATCHED_HEADER) == "1"
+
+
+def _holder_socket(tmp_path, *, mode=0o600):
+    """A listening Unix socket held the way a systemd socket unit holds it."""
+    directory = tmp_path / "holder"
+    directory.mkdir(mode=0o700)
+    path = directory / "host-services.sock"
+    holder = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    holder.bind(str(path))
+    os.chmod(path, mode)
+    holder.listen(64)
+    return holder, path
+
+
+async def test_inherited_host_services_socket_must_be_a_private_unix_listener(
+    tmp_path,
+):
+    holder, path = _holder_socket(tmp_path)
+    try:
+        adopted = inherited_host_services(os.dup(holder.fileno()))
+        assert adopted.getsockname() == str(path)
+        assert not adopted.get_inheritable()
+        adopted.close()
+        os.chmod(path, 0o666)
+        descriptor = os.dup(holder.fileno())
+        with pytest.raises(ValueError, match="owner-only"):
+            inherited_host_services(descriptor)
+        # A rejected descriptor is left open for its owner.
+        os.fstat(descriptor)
+        os.close(descriptor)
+    finally:
+        holder.close()
+    tcp = socket.socket()
+    tcp.bind(("127.0.0.1", 0))
+    tcp.listen()
+    abstract = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    abstract.bind("\0nebula-synthetic-" + uuid4().hex)
+    abstract.listen()
+    unlistened = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        for candidate, message in (
+            (tcp, "not a listening Unix socket"),
+            (abstract, "absolute path"),
+            (unlistened, "not a listening Unix socket"),
+        ):
+            with pytest.raises(ValueError, match=message):
+                inherited_host_services(candidate.fileno())
+            candidate.getsockname()
+    finally:
+        for candidate in (tcp, abstract, unlistened):
+            candidate.close()
+    regular = tmp_path / "regular"
+    regular.write_text("synthetic")
+    with open(regular) as stream:
+        with pytest.raises(ValueError, match="not a socket"):
+            inherited_host_services(stream.fileno())
+
+
+async def test_holder_socket_queues_worker_calls_across_a_supervisor_swap(
+    managed, tmp_path
+):
+    holder, path = _holder_socket(tmp_path)
+    clients = []
+    second = None
+    try:
+        first = HostSharedServices(
+            managed.host,
+            capacity_limits=_LIMITS,
+            listener=inherited_host_services(os.dup(holder.fileno())),
+        )
+        await first.start()
+        link = managed.host.socket_root / HOST_SOCKET_NAME
+        assert link.is_symlink() and os.readlink(link) == str(path)
+        await managed.stage("v1")
+        identity = await managed.host.spawn("v1", "execution")
+        async with managed.database.session() as session:
+            row = await session.get(RuntimeProcessRow, identity.runtime_id)
+            secret = managed.host.credentials.read(row.credential_reference)
+        # A plain client never resends: only the kernel queue carries a call
+        # made while no generation serves.
+        client = RuntimeRpcClient("unix://" + str(link), secret)
+        client.client.headers[PEER_HEADER.decode()] = identity.runtime_id
+        clients.append(client)
+        assert (await client.call("host.services/v1", {}))["capacity"] is True
+
+        await first.close()
+        await managed.host.close()
+        # The stopped generation leaves the link to the holder in place.
+        assert link.is_symlink() and path.exists()
+        waiting = asyncio.create_task(client.call("host.services/v1", {}))
+        await asyncio.sleep(0.5)
+        assert not waiting.done()
+
+        replacement = managed.new_host()
+        await replacement.start()
+        assert replacement.socket_root == managed.host.socket_root
+        second = HostSharedServices(
+            replacement,
+            capacity_limits=_LIMITS,
+            listener=inherited_host_services(os.dup(holder.fileno())),
+        )
+        await second.start()
+        assert (await asyncio.wait_for(waiting, 10))["capacity"] is True
+        assert (await client.call("host.services/v1", {}))["capacity"] is True
+    finally:
+        if second is not None:
+            await second.close()
+        await asyncio.gather(*(client.close() for client in clients))
+        holder.close()
+
+
+async def test_self_bound_generation_replaces_a_holder_link(managed, tmp_path):
+    link = managed.host.socket_root / HOST_SOCKET_NAME
+    link.symlink_to(tmp_path / "removed-holder.sock")
+    services = HostSharedServices(managed.host, capacity_limits=_LIMITS)
+    try:
+        await services.start()
+        assert not link.is_symlink() and link.exists()
+    finally:
+        await services.close()
+    assert not link.exists()
+
+
+async def test_read_only_calls_are_resent_after_swap_failures():
+    calls = []
+
+    async def closed_then_reconnecting(request):
+        calls.append(request)
+        if len(calls) == 1:
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response."
+            )
+        if len(calls) == 2:
+            # Queued in a holder's socket while no generation started.
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(
+            503, headers={UNDISPATCHED_HEADER: "1"}, json={"detail": "reconnecting"}
+        )
+
+    client = HostServiceClient(
+        "unix:///isolated/host.sock",
+        secrets.token_bytes(32),
+        transport=httpx.MockTransport(closed_then_reconnecting),
+    )
+    client.reconnect_seconds = 1.0
+    try:
+        with pytest.raises(RuntimeIpcUndispatched):
+            await client.call("host.services/v1", {})
+        assert len(calls) > 2
+        # A call with effects is never resent.
+        calls.clear()
+        with pytest.raises(httpx.RemoteProtocolError):
+            await client.call("memory.remember/v1", {})
+        assert len(calls) == 1
+        # A timed-out attempt may still be running, so a call that is
+        # idempotent only one after another is not resent after a timeout.
+        for operation in ("memory.remember/v1", BUTLER_SUBMIT_ACTION):
+            calls.clear()
+            calls.append(None)
+            with pytest.raises(httpx.ReadTimeout):
+                await client.call(operation, {})
+            assert len(calls) == 2
+    finally:
+        await client.close()
+
+
+async def test_a_call_its_caller_may_have_abandoned_never_runs(shared):
+    reached = []
+    original = shared.services._peer
+
+    async def counted(runtime_id):
+        reached.append(runtime_id)
+        return await original(runtime_id)
+
+    shared.services._peer = counted
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=shared.services.app),
+        base_url="http://isolated",
+    ) as gateway:
+        # Sent 26 s ago: it waited in a holder's queue across a swap.
+        stale = await gateway.post(
+            "/internal/nebula-runtime/v1/call",
+            headers={
+                "x-nebula-ipc-worker": shared.identity.runtime_id,
+                "x-nebula-ipc-time": str(int(time.time()) - 26),
+            },
+            content=b"{}",
+        )
+    assert stale.status_code == 503
+    assert stale.headers.get(UNDISPATCHED_HEADER) == "1"
+    assert reached == []
+    # A fresh call is still dispatched.
+    assert (await shared.remote.client.call("host.services/v1", {}))["capacity"]
+    assert reached == [shared.identity.runtime_id]
+
+
+async def test_a_failed_start_answers_waiting_calls_at_once(managed, monkeypatch):
+    services = HostSharedServices(managed.host, capacity_limits=_LIMITS)
+
+    async def broken(self):
+        raise RuntimeError("synthetic knowledge failure")
+
+    monkeypatch.setattr(HostSharedServices, "_initialize_knowledge", broken)
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(RuntimeError, match="synthetic knowledge failure"):
+        await services.start()
+    assert services._ready.is_set()
+    assert asyncio.get_running_loop().time() - started < 5

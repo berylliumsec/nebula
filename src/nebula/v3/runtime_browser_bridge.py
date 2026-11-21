@@ -1,4 +1,10 @@
-"""Volatile desktop-viewer registration shared by fenced execution workers."""
+"""Desktop-viewer registration shared by fenced execution workers.
+
+The registration is short-lived (it expires unless the desktop refreshes it),
+but it outlives one supervisor generation: a private file in the runtime
+directory carries it to the next generation, so a supervisor swap neither
+detaches the desktop browser nor turns its next refresh into a conflict.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,9 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 import ipaddress
+import json
+import os
+from pathlib import Path
 import re
 import secrets
 import time
@@ -19,6 +28,7 @@ from starlette.responses import JSONResponse
 from .authentication import secret_matches
 from .browser_engine import VisibleElectronAdapter
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
+from .diagnostics import record_caught_exception
 from .domain import NebulaModel
 from .execution_scope import current_execution_lease
 from .runtime_coordination import CoordinationConflict, LeaseLost, ProjectLease
@@ -28,6 +38,8 @@ from .shared_memory_rpc import MemoryAuthority
 BRIDGE_OPERATION = "host.desktop-browser/v1"
 BRIDGE_PROTOCOL = "nebula.desktop-browser/v1"
 BRIDGE_TTL_SECONDS = 180
+# The registration the next supervisor generation adopts, in the runtime root.
+BRIDGE_STATE_NAME = "browser-bridge.json"
 BRIDGE_UNAVAILABLE = (
     "The desktop browser is disconnected. Open Browser in the Electron app and retry."
 )
@@ -90,16 +102,142 @@ class _Viewer:
 
 
 class HostBrowserBridge:
-    def __init__(self, coordination, *, clock: Callable[[], float] = time.monotonic):
-        self.coordination, self.clock = coordination, clock
+    def __init__(
+        self,
+        coordination,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
+    ):
+        self.coordination, self.clock, self.wall_clock = coordination, clock, wall_clock
         self.enabled = False
         self.viewer: _Viewer | None = None
         self.closed = False
+        self.state_path: Path | None = None
 
     def _current(self):
-        if self.closed or (self.viewer and self.viewer.deadline <= self.clock()):
+        if self.viewer and self.viewer.deadline <= self.clock():
+            self.viewer = None
+            # Never leave an expired bearer token on disk.
+            self._forget()
+        if self.closed:
             self.viewer = None
         return self.viewer
+
+    def restore(self, state_path: Path) -> bool:
+        """Adopt the previous generation's unexpired registration.
+
+        Called once the supervisor holds the host lock, so no other process
+        writes the file. Returns whether a registration was adopted. An
+        unreadable or expired file is discarded: the desktop registers again
+        on its next refresh, as after a cold start.
+        """
+        from .runtime_launcher import read_private
+
+        self.state_path = state_path
+        try:
+            document = json.loads(read_private(state_path))
+        except FileNotFoundError:
+            # diagnostic-expected: no desktop viewer was attached to the previous generation.
+            return False
+        except (OSError, ValueError) as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.browser_bridge.restore_failed",
+                "The saved desktop browser registration was unreadable; the "
+                "desktop attaches again on its next refresh.",
+                error,
+                stage="startup",
+            )
+            self._forget()
+            return False
+        try:
+            if not isinstance(document, dict) or set(document) != {
+                "actor_id",
+                "registration",
+                "expires_at",
+            }:
+                raise ValueError("Unexpected desktop browser registration file")
+            actor_id = document["actor_id"]
+            if (
+                not isinstance(actor_id, str)
+                or not 1 <= len(actor_id) <= 512
+                or (actor_id != "operator" and not actor_id.startswith("device:"))
+            ):
+                raise ValueError("Invalid desktop browser registration actor")
+            registration = BridgeRegistration.model_validate(document["registration"])
+            if registration.registration_id is None:
+                raise ValueError("Saved desktop browser registration lacks its id")
+            expires_at = document["expires_at"]
+            if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+                raise ValueError("Invalid desktop browser registration expiry")
+        except (ValidationError, ValueError) as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.browser_bridge.restore_failed",
+                "The saved desktop browser registration was invalid; the "
+                "desktop attaches again on its next refresh.",
+                error,
+                stage="startup",
+            )
+            self._forget()
+            return False
+        remaining = min(float(expires_at) - self.wall_clock(), BRIDGE_TTL_SECONDS)
+        if remaining <= 0:
+            self._forget()
+            return False
+        self.enabled = True
+        self.viewer = _Viewer(actor_id, registration, self.clock() + remaining)
+        return True
+
+    def _save(self, viewer: _Viewer):
+        if self.state_path is None:
+            return
+        from .runtime_launcher import write_private
+
+        registration = viewer.registration.model_dump(mode="json")
+        registration["token"] = viewer.registration.token.get_secret_value()
+        try:
+            write_private(
+                self.state_path,
+                json.dumps(
+                    {
+                        "actor_id": viewer.actor_id,
+                        "registration": registration,
+                        "expires_at": self.wall_clock()
+                        + (viewer.deadline - self.clock()),
+                    }
+                ).encode(),
+            )
+        except OSError as error:
+            # The registration still serves this generation; only its
+            # survival across the next supervisor swap is lost.
+            record_caught_exception(
+                "runtime",
+                "runtime.browser_bridge.save_failed",
+                "The desktop browser registration was not saved; after the next "
+                "Core restart the desktop attaches again on its next refresh.",
+                error,
+                stage="browser-bridge",
+            )
+
+    def _forget(self):
+        if self.state_path is None:
+            return
+        try:
+            os.unlink(self.state_path)
+        except FileNotFoundError:
+            # diagnostic-expected: nothing was saved for this registration.
+            pass
+        except OSError as error:
+            record_caught_exception(
+                "runtime",
+                "runtime.browser_bridge.forget_failed",
+                "A revoked desktop browser registration could not be removed; "
+                "it expires within its lease.",
+                error,
+                stage="browser-bridge",
+            )
 
     def register_viewer(self, registration: BridgeRegistration, actor_id: str):
         if self.closed:
@@ -126,6 +264,7 @@ class HostBrowserBridge:
             )
         self.enabled = True
         self.viewer = _Viewer(actor_id, registration, self.clock() + BRIDGE_TTL_SECONDS)
+        self._save(self.viewer)
         return {
             "registration_id": registration.registration_id,
             "device_id": registration.device_id,
@@ -148,6 +287,7 @@ class HostBrowserBridge:
                 409, "This desktop viewer registration is no longer current"
             )
         self.viewer = None
+        self._forget()
         return {"revoked": True}
 
     def mount(self, app, authentication):
@@ -235,6 +375,8 @@ class HostBrowserBridge:
         rpc.register(BRIDGE_OPERATION, resolve)
 
     def close(self):
+        # The saved registration stays for the next generation; it expires
+        # by itself if none starts within its lease.
         self.closed, self.viewer = True, None
 
 

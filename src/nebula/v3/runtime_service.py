@@ -297,6 +297,7 @@ async def serve_runtime(
     diagnostics_level: str | None = None,
     startup_id: str | None = None,
     listener: socket.socket | None = None,
+    host_services_listener: socket.socket | None = None,
 ) -> None:
     if not sys.platform.startswith("linux"):
         raise ValueError(
@@ -333,6 +334,7 @@ async def serve_runtime(
         process_host,
         memory_budgets=budgets,
         knowledge_index_factory=create_host_knowledge_index,
+        listener=host_services_listener,
     )
     server = None
 

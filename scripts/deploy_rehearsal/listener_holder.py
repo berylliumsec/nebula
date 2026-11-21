@@ -3,13 +3,17 @@
 
 Holds 127.0.0.1:<port> open for the whole rehearsal and starts supervisor
 generations with the socket-activation protocol (fd 3, LISTEN_FDS=1,
-LISTEN_PID=<child>). Commands arrive one per line on a FIFO:
+LISTEN_PID=<child>). Unless REHEARSAL_HOST_SOCKET=0, it also holds the private
+host-services Unix socket (core/holder/host-services.sock, mode 0600) and
+passes it as fd 4 with --host-services-fd 4, the way a second socket unit
+does in production. Commands arrive one per line on a FIFO:
   start <PYTHONPATH>   start a generation running that code
   stop                 SIGTERM the current generation and wait for it to exit
   swap <PYTHONPATH>    stop, then start (what host activation does)
 Every command's outcome is appended to holder.log as JSON.
 """
 
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -32,6 +36,7 @@ FIFO = CORE / "holder.fifo"
 LOG = CORE / "holder.log"
 PY = os.getenv("REHEARSAL_PYTHON", str(Path.home() / "nebula-staging/venv/bin/python"))
 UI = os.getenv("REHEARSAL_UI_DIR", str(Path.home() / "nebula/ui/dist"))
+HOST_SOCKET = os.getenv("REHEARSAL_HOST_SOCKET", "1") != "0"
 
 
 def note(**values):
@@ -55,23 +60,47 @@ def main():
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", PORT))
     listener.listen(2048)
-    descriptor = listener.fileno()
+    # Pass copies above 4, so moving them to 3 and 4 never overwrites one.
+    descriptor = fcntl.fcntl(listener.fileno(), fcntl.F_DUPFD, 10)
+    services = None
+    if HOST_SOCKET:
+        directory = CORE / "holder"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        path = directory / "host-services.sock"
+        path.unlink(missing_ok=True)
+        services = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        services.bind(str(path))
+        os.chmod(path, 0o600)
+        services.listen(2048)
+    services_descriptor = (
+        fcntl.fcntl(services.fileno(), fcntl.F_DUPFD, 10) if services else None
+    )
     if not FIFO.exists():
         os.mkfifo(FIFO, 0o600)
-    note(event="holding", port=PORT, pid=os.getpid())
+    note(
+        event="holding",
+        port=PORT,
+        pid=os.getpid(),
+        host_services=services.getsockname() if services else None,
+    )
     child = None
 
     def start(pythonpath):
-        move = "" if descriptor == 3 else f"exec 3<&{descriptor} {descriptor}<&-; "
+        passed = (descriptor,) + ((services_descriptor,) if services else ())
+        move = f"exec 3<&{descriptor} {descriptor}<&-; "
+        extra = ""
+        if services is not None:
+            move += f"exec 4<&{services_descriptor} {services_descriptor}<&-; "
+            extra = " --host-services-fd 4"
         command = (
             move + 'LISTEN_PID=$$ LISTEN_FDS=1 exec "$0" -m nebula.v3.cli serve '
             f"--host 127.0.0.1 --port {PORT} --data-dir {CORE / 'data'} "
-            f"--static-dir {UI}"
+            f"--static-dir {UI}" + extra
         )
         output = open(CORE / "logs/core.out.log", "ab")
         process = subprocess.Popen(
             ["/bin/bash", "-c", command, PY],
-            pass_fds=(descriptor,),
+            pass_fds=passed,
             env=environment(pythonpath),
             stdout=output,
             stderr=subprocess.STDOUT,
