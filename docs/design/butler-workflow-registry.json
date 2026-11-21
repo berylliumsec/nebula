@@ -5431,7 +5431,7 @@
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::cancelChatTurn",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::decideApproval",
@@ -5455,7 +5455,7 @@
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/pages/ButlerModePage.tsx::listChatMessages",

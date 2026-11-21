@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, Square, ChevronRight, ExternalLink, MoreHorizontal, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { boardElapsed, cancelProposedGoalChat, goalChatProposalFromReceipt, startProposedGoalChat, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
@@ -135,6 +135,7 @@ export function ButlerModePage() {
   const newThreadProject = projectChoice ?? originProject;
   const [composerError, setComposerError] = useState("");
   const [starting, setStarting] = useState(false);
+  const [stopping, setStopping] = useState(false);
 
   const boardEtag = useRef<string | undefined>(undefined);
   const threadsEtag = useRef<string | undefined>(undefined);
@@ -657,6 +658,27 @@ export function ButlerModePage() {
 
   const openLive = openThreadId ? live[openThreadId] : undefined;
   const openActivity = openThreadId ? activity[openThreadId] : undefined;
+  // Replying to a thread Butler is still answering: the send button stops it.
+  const openAnswering = Boolean(openThreadSummary && (openThreadSummary.state === "working" || streams.current.has(openThreadSummary.sessionId) || (openLive && !openLive.error)));
+  const showStop = target === "reply" && openAnswering;
+  const stopOpenThread = async () => {
+    if (!api || !openThreadSummary || stopping) return;
+    const sessionId = openThreadSummary.sessionId;
+    setStopping(true);
+    setComposerError("");
+    try {
+      const turnId = openActivity?.turnId ?? openThreadSummary.turnId ?? (await api.getPendingChatTurn(sessionId))?.id;
+      if (turnId) await api.cancelChatTurn(turnId);
+      threadsEtag.current = undefined;
+      threadsPoll.current?.poke();
+      await loadMessages(sessionId);
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.thread_stop_failed", "Butler mode could not stop a thread's response.", caught, "butler_mode");
+      setComposerError(`${caught instanceof Error ? caught.message : "Core could not stop this response."} Butler may still be working; try again.`);
+    } finally {
+      setStopping(false);
+    }
+  };
   const threadMessages = openThreadId ? messages[openThreadId] ?? [] : [];
   const conversation = <section className={styles.conversation} aria-label={openThreadSummary ? `Thread: ${openThreadSummary.title}` : "New Butler thread"}>
     <div className={styles.threadBar}>
@@ -708,7 +730,9 @@ export function ButlerModePage() {
       {composerError && <div className={styles.error} role="alert">{composerError}</div>}
       <div className={styles.inputRow}>
         <textarea ref={composerRef} rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} aria-label="Message Butler" placeholder={target === "reply" && openThreadSummary ? "Reply in this thread" : "Ask Butler anything — each question runs as its own thread"} />
-        <button type="submit" className={styles.send} aria-label={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} title={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} disabled={!draft.trim() || starting || !api}><ArrowUp size={16} aria-hidden="true" /></button>
+        {showStop
+          ? <button type="button" className={`${styles.send} ${styles.stop}`} aria-label="Stop response" title="Stop Butler's response in this thread" disabled={stopping || !api} onClick={() => void stopOpenThread()}><Square size={14} aria-hidden="true" /></button>
+          : <button type="submit" className={styles.send} aria-label={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} title={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} disabled={!draft.trim() || starting || !api}><ArrowUp size={16} aria-hidden="true" /></button>}
       </div>
       <div className={styles.targets}>
         <button type="button" className={styles.target} aria-pressed={target === "new"} onClick={() => setTarget("new")}>New thread</button>

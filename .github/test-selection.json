@@ -1,8 +1,8 @@
 {
-  "change_digest": "9aa086e726e4be22c217125201cd72f42fc5ce138195a9de364c32f17f969aad",
-  "reviewed_by": "Claude Code, fixing the operator's report that quoting a chat in Butler mode starts a new thread instead of using the open one",
-  "reason": "In Butler mode, 'Ask Butler about this' always switched the composer to 'New thread' (askAbout set target 'new'), and a reply dropped the quoted chat because only new threads prefixed the message with butlerQuestionAbout. Now the quote goes into the open thread when that thread works in the chat's project and is not answering (a thread acts only inside its own project), otherwise a new thread in the chat's project; replies carry the quoted chat too. Selected: butlerThreads unit tests (new askAboutTarget cases), the real-Core Butler mode journey at desktop, compact and 390 px Chromium/WebKit (now asks about the same chat again, asserts 'Reply in this thread' is selected, that the model received the quoted chat with the reply, and that no second thread was created), and the product-knowledge tests for the updated guide sentence.",
-  "exclusions": "No Core change. The journey was not run locally; CI runs it. No new UI API calls (registry unchanged).",
+  "change_digest": "7fd897d932630ce7d0ddb9f2b0445acdd44829e3c1ccbbba65c1d50f59cec739",
+  "reviewed_by": "Claude Code, at the operator's request: Butler mode's send button should become Stop while Butler is working",
+  "reason": "In Butler mode, replying to a thread Butler is still answering showed a send button that only refused ('Butler is still answering this thread'). Like a normal chat, the button is now Stop response while the composer targets the open thread and Butler is answering it; it cancels that thread's turn through Core (cancelChatTurn, already linked in the workflow registry; the turn ID comes from the live activity, Core's thread list, or the pending turn) and re-reads the thread. With New thread selected the button still starts a parallel thread. Selected: the real-Core Butler mode journey (opening the still-working held thread now asserts Stop response replaces Send reply) and the product-knowledge tests for the guide sentence.",
+  "exclusions": "The journey does not click Stop: the held thread must finish later in the same journey, and the stub model holds only that one prompt. Stop calls the same Core cancel endpoint the board card's Stop already uses. No Core change; the journey was not run locally (CI runs it).",
   "python_versions": [
     "3.12"
   ],
@@ -10,7 +10,7 @@
   "python_node": false,
   "expected_tests": {
     "python": 4,
-    "frontend": 10,
+    "frontend": 0,
     "native": 0,
     "playwright": 4
   },
@@ -20,9 +20,7 @@
     "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
   ],
-  "frontend": [
-    "ui/src/pages/butlerThreads.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
     "butler-mode/assistant-real-desktop",

@@ -1316,7 +1316,9 @@ While Butler works on a thread, the thread shows the same **Activity** card as
 a normal chat: its tool steps as they run, or **Queued** with Core's reason and
 queue position when the turn waits for capacity (for example a turn Core
 resumed after a restart). The card comes back from Core after a reload or on
-another device. A finished answer keeps a collapsed card of its steps.
+another device. A finished answer keeps a collapsed card of its steps. While
+Butler answers the open thread, the send button becomes **Stop response**,
+which stops that answer like Stop in a normal chat; **New thread** still sends.
 
 ### Butler-proposed goal chats
 
