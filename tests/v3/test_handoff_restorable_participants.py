@@ -133,8 +133,19 @@ class InertAdapter(HarnessAdapter):
         )
 
 
-async def _harness(tmp_path):
+@pytest.fixture
+async def harness(tmp_path):
+    """The inert harness world; its store is closed so pytest can exit."""
+
     store = NebulaStore(tmp_path / "harness-handoff.db")
+    try:
+        yield await _harness(store, tmp_path)
+    finally:
+        await store.event_history.close()
+        await store.database.dispose()
+
+
+async def _harness(store, tmp_path):
     engagement = await store.create(Engagement(id="eng-a", name="Handoff"))
     profile = await store.create(
         HarnessProfile(
@@ -172,8 +183,8 @@ async def _send(service, engagement, profile, chat_id, prompt):
     return chat, owner, turn, await service.start_chat_turn(turn.id)
 
 
-async def test_idle_vendor_session_detaches_and_the_target_resumes_it(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_idle_vendor_session_detaches_and_the_target_resumes_it(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     chat, _, first, task = await _send(source, engagement, profile, None, "First")
     await asyncio.wait_for(task, 20)
@@ -212,8 +223,8 @@ async def test_idle_vendor_session_detaches_and_the_target_resumes_it(tmp_path):
     await target.shutdown()
 
 
-async def test_busy_vendor_session_stays_attached_and_pins(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_busy_vendor_session_stays_attached_and_pins(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     chat, _, first, task = await _send(source, engagement, profile, None, "First")
     await asyncio.wait_for(task, 20)
@@ -236,8 +247,8 @@ async def test_busy_vendor_session_stays_attached_and_pins(tmp_path):
     await source.shutdown()
 
 
-async def test_vendor_work_of_its_own_keeps_the_connection(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_vendor_work_of_its_own_keeps_the_connection(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     _, _, first, task = await _send(source, engagement, profile, None, "First")
     await asyncio.wait_for(task, 20)
@@ -248,8 +259,8 @@ async def test_vendor_work_of_its_own_keeps_the_connection(tmp_path):
     await source.shutdown()
 
 
-async def test_a_turn_sent_during_the_detach_resumes_instead_of_forking(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_a_turn_sent_during_the_detach_resumes_instead_of_forking(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     chat, _, first, task = await _send(source, engagement, profile, None, "First")
     await asyncio.wait_for(task, 20)
@@ -273,8 +284,8 @@ async def test_a_turn_sent_during_the_detach_resumes_instead_of_forking(tmp_path
     await source.shutdown()
 
 
-async def test_queued_chat_turn_pins_but_queued_mission_stage_does_not(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_queued_chat_turn_pins_but_queued_mission_stage_does_not(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     _, _, turn = await source.prepare_chat(
         engagement_id=engagement.id,
@@ -314,8 +325,8 @@ async def test_queued_chat_turn_pins_but_queued_mission_stage_does_not(tmp_path)
     await source.shutdown()
 
 
-async def test_sleeping_harness_schedule_is_restorable_until_it_wakes(tmp_path):
-    store, engagement, profile, adapter, service = await _harness(tmp_path)
+async def test_sleeping_harness_schedule_is_restorable_until_it_wakes(harness):
+    store, engagement, profile, adapter, service = harness
     source = service()
     task = asyncio.create_task(
         source._scheduled_mission_execute(
