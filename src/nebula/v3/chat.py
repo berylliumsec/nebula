@@ -2312,15 +2312,6 @@ def _repeated_hook_denial(
     return hook_id if denials[hook_id] >= _ROUTING_DEVIATION_LIMIT else None
 
 
-# Restart recovery is background work. A Core restart can surface many durable
-# provider turns at once, and each routing step validates and serializes the
-# turn's full tool history on the API event loop. Keep a small amount of
-# provider/network overlap without letting a recovery backlog monopolize the
-# process that serves operator requests. Turns started by the operator do not
-# use this gate, and neither do recovered direct-lane turns (the operator's own
-# messages, including Butler's): a recovered subagent or goal can hold a slot
-# for hours, and an operator's resumed message must not wait behind it.
-_AUTOMATIC_RECOVERY_CONCURRENCY = 2
 # A call Core answered without running it spends no budget.
 _REFUSED_BUDGET_CLASS = "refused"
 # An approved chat tool call whose turn ended is settled only after this long
@@ -2618,6 +2609,61 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
         and entry.get("arguments") == call.arguments
         for entry in history
     )
+
+
+def _intent_only_restart_entry(
+    intent: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Settle a step recorded as started whose ToolCall was never created.
+
+    Core restarted between the ledger intent and the broker's record, so
+    nothing says whether the call ran. A read changed nothing and can run
+    again; anything else is an unknown effect that must not be repeated.
+    Returns the settled entry and its ledger event type.
+    """
+
+    call_id = str(intent["tool_call_id"])
+    name = str(intent.get("name") or "unknown")
+    if name in RETRIEVAL_TOOL_NAMES:
+        observation = {
+            "schema": "nebula.restart-interrupted/v1",
+            "status": "interrupted",
+            "tool_call_id": call_id,
+            "tool_name": name,
+            "side_effects": "none",
+            "retry_safe": True,
+            "detail": (
+                "Core restarted before this read returned its result. It changed "
+                "nothing; call it again if you still need the result."
+            ),
+        }
+        return {
+            **intent,
+            "status": "failed",
+            "provider_result": serialize_model_result(observation),
+            "trusted_result": False,
+            "result_summary": "Interrupted by a Core restart; the read can run again.",
+            "recovered_from_restart_rerunnable": True,
+        }, "restart_rerunnable"
+    observation = {
+        "schema": "nebula.restart-uncertain/v1",
+        "status": "unknown",
+        "tool_call_id": call_id,
+        "tool_name": name,
+        "detail": (
+            "Core restarted after this invocation may have started, but no "
+            "trustworthy terminal receipt was recorded. Do not repeat the "
+            "same invocation. Inspect current state before any follow-up."
+        ),
+    }
+    return {
+        **intent,
+        "status": "failed",
+        "provider_result": serialize_model_result(observation),
+        "trusted_result": False,
+        "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+        "recovered_from_restart_unknown": True,
+    }, "restart_unknown"
 
 
 def _projected_result_entry(
@@ -3042,9 +3088,6 @@ class ChatService:
             self.provider_scheduler.config.global_tool_limit
         )
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
-        self._automatic_recovery_slots = asyncio.Semaphore(
-            _AUTOMATIC_RECOVERY_CONCURRENCY
-        )
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self._naming_sessions: set[str] = set()
         # Background compactions by conversation id (see _schedule_precompaction).
@@ -4039,6 +4082,50 @@ class ChatService:
             unknown_tools = [
                 item for item in unknown_tools if item not in projected_tools
             ]
+            # A step whose started intent reached the ledger before the broker
+            # created its ToolCall has no record the interruption scan could
+            # classify. Settle it here too, or it stays "running" in provider
+            # history for the rest of the turn.
+            for item in list(history):
+                intent_call_id = item.get("tool_call_id")
+                if item.get("status") != "running" or not isinstance(
+                    intent_call_id, str
+                ):
+                    continue
+                try:
+                    await self.store.get(ToolCall, intent_call_id)
+                except NotFoundError:  # diagnostic-expected: intent before ToolCall
+                    pass
+                else:
+                    continue
+                entry, event_type = _intent_only_restart_entry(item)
+                history = [
+                    other
+                    for other in history
+                    if other.get("tool_call_id") != intent_call_id
+                ]
+                history.append(entry)
+                ledger_sequence = max(
+                    ledger_sequence,
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=(
+                                f"{event_type.replace('_', '-')}:{intent_call_id}"
+                            ),
+                            event_type=event_type,
+                        )
+                    ),
+                )
+                step = item.get("step")
+                if isinstance(step, int) and not isinstance(step, bool):
+                    next_step = max(next_step, step + 1)
+                if event_type == "restart_rerunnable":
+                    rerun_tools.append(intent_call_id)
+                else:
+                    unknown_tools.append(intent_call_id)
+                    recorded_unknown.append(intent_call_id)
             # Missing ledger rows still cannot be replayed. Their IDs and every
             # uncertain hook remain in the durable audit metadata sent as an
             # instruction on resume.
@@ -4709,18 +4796,18 @@ class ChatService:
     ) -> None:
         admission: ProviderAdmission | None = None
         admission_task: asyncio.Task[ProviderAdmission] | None = None
-        recovery_slot = False
         producing = False
         cancelled = False
         try:
             assert prepared.turn is not None
-            if automatic_recovery and prepared.turn.capacity_lane != "direct":
-                # Before provider admission, so recovered turns waiting for this
-                # gate never hold provider slots an operator turn could use.
-                await self._automatic_recovery_slots.acquire()
-                recovery_slot = True
+            # Turns resumed after a restart were already running together, so
+            # they share ordinary provider admission. Holding a separate slot
+            # for a whole turn let two long recovered subagents serialize every
+            # other recovered turn for hours.
             admission_task = create_diagnostic_task(
-                self.provider_scheduler.admit(prepared.turn.id),
+                self.provider_scheduler.admit(
+                    prepared.turn.id, automatic_recovery=automatic_recovery
+                ),
                 feature="chat",
                 event_code="chat.provider_admission",
                 failure_message="A queued provider turn could not be admitted.",
@@ -4838,8 +4925,6 @@ class ChatService:
                     runtime.error = runtime.error or exc
                     raise
                 finally:
-                    if recovery_slot:
-                        self._automatic_recovery_slots.release()
                     if prepared.turn is not None:
                         await self._close_provider_journal(prepared.turn.id, runtime)
                     if not runtime.done:
