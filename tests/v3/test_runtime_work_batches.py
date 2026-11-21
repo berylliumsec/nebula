@@ -317,6 +317,32 @@ async def test_natural_import_retry_preserves_ids_and_operator_edits(batch):
     assert await batch.store.count(WorkItem) == 1
 
 
+async def test_batch_reimport_moves_source_stage_inside_project_fence(batch):
+    def body(stage):
+        return {
+            "source": "stable",
+            "projects": [
+                {
+                    "external_id": "project",
+                    "name": "Staged",
+                    "items": [{"external_id": "item", "title": "Item", "stage": stage}],
+                }
+            ],
+        }
+
+    first = await accepted(batch, "POST", body("draft"))
+    await batch.service.reconcile()
+    _, status, result = await page(batch, first)
+    assert status == 200
+    item_id = result["projects"][0]["items"][0]["item_id"]
+    assert (await batch.store.get(WorkItem, item_id)).stage == "draft"
+    again = await accepted(batch, "POST", body("review"))
+    await batch.service.reconcile()
+    assert (await page(batch, again))[1] == 200
+    assert (await batch.store.get(WorkItem, item_id)).stage == "review"
+    assert await batch.store.count(WorkItem) == 1
+
+
 async def test_multi_project_metadata_is_atomic_and_revision_checked(batch):
     await runtime(batch, "worker")
     leases = [

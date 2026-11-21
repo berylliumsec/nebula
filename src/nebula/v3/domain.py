@@ -873,6 +873,26 @@ class AssistantDefaults(NebulaModel):
     allow_agent_messaging: bool = True
 
 
+WORK_STAGE_KEY_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
+MAX_WORK_STAGES = 12
+
+
+class WorkStage(NebulaModel):
+    """One project-defined Work stage; the key links items, the label is shown."""
+
+    key: str = Field(pattern=WORK_STAGE_KEY_PATTERN)
+    label: str = Field(min_length=1, max_length=60)
+    flag_when_empty: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def label_must_have_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("stage label must not be blank")
+        return value
+
+
 class Engagement(Entity):
     entity_kind: ClassVar[str] = "engagements"
     name: str = Field(min_length=1, max_length=300)
@@ -883,6 +903,9 @@ class Engagement(Entity):
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     work_enabled: bool = True
+    work_stages: list[WorkStage] = Field(
+        default_factory=list, max_length=MAX_WORK_STAGES
+    )
     parent_engagement_id: str | None = None
     workspace_path: str | None = Field(default=None, max_length=4096)
     assistant_defaults: AssistantDefaults = Field(default_factory=AssistantDefaults)
@@ -897,6 +920,14 @@ class Engagement(Entity):
         if not candidate.is_absolute() or candidate == Path("/"):
             raise ValueError("workspace_path must be an absolute non-root folder")
         return str(candidate)
+
+    @field_validator("work_stages")
+    @classmethod
+    def work_stage_keys_must_be_unique(cls, value: list[WorkStage]) -> list[WorkStage]:
+        keys = [stage.key for stage in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Work stage keys must be unique in a project")
+        return value
 
 
 class WorkItem(Entity):
@@ -913,6 +944,7 @@ class WorkItem(Entity):
     assignee_session_id: str | None = Field(default=None, max_length=200)
     source_kind: Literal["chat", "mission", "manual", "import"] = "manual"
     source_id: str | None = Field(default=None, max_length=200)
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     last_update_at: datetime | None = None
 
 
@@ -926,6 +958,7 @@ class WorkUpdate(Entity):
     next_step: str | None = Field(default=None, max_length=2_000)
     blocker: str | None = Field(default=None, max_length=2_000)
     status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"]
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     actor_kind: Literal["operator", "agent", "import"]
     actor_id: str = Field(min_length=1, max_length=200)
     source_session_id: str | None = Field(default=None, max_length=200)

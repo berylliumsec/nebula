@@ -45,10 +45,7 @@ from .runtime_ipc import RuntimeIpcError
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NotFoundError, StoreTransaction
 from .work import (
-    WorkCheckIn,
-    WorkCreate,
     WorkImportBatch,
-    WorkImportItemResult,
     WorkImportProjectResult,
     WorkImportResult,
     WorkProjectBatchUpdate,
@@ -909,46 +906,12 @@ class RuntimeWorkBatches:
             item_results = []
             try:
                 for item_entry in entry.items:
-                    request_id = sha256(
-                        json.dumps(
-                            [entry.external_id, item_entry.external_id],
-                            separators=(",", ":"),
-                        ).encode()
-                    ).hexdigest()
-                    actor = "import:" + body.source
-                    item = await service.create(
-                        identity,
-                        WorkCreate(
-                            title=item_entry.title,
-                            description=item_entry.description,
-                            status=item_entry.status,
-                            priority=item_entry.priority,
-                            source_kind="import",
-                            source_id=item_entry.external_id,
-                            request_id=request_id,
-                        ),
-                        actor_id=actor,
-                        notify=False,
-                    )
-                    update_id = None
-                    if item_entry.update is not None:
-                        update = await service.check_in(
-                            identity,
-                            item.id,
-                            WorkCheckIn(
-                                **item_entry.update.model_dump(),
-                                request_id=request_id,
-                            ),
-                            actor_kind="import",
-                            actor_id=actor,
-                            notify=False,
-                        )
-                        update_id = update.id
                     item_results.append(
-                        WorkImportItemResult(
-                            external_id=item_entry.external_id,
-                            item_id=item.id,
-                            update_id=update_id,
+                        await service.import_item(
+                            identity,
+                            source=body.source,
+                            project_external_id=entry.external_id,
+                            entry=item_entry,
                         )
                     )
             finally:
