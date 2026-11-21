@@ -2,10 +2,16 @@ import type { ApiClient } from "./client";
 
 export type ButlerBoardState = "waiting" | "working" | "failed" | "idle";
 
+/** The board's sections, by goal status: running; paused, blocked or proposed; completed or cancelled. */
+export type ButlerBoardSection = "active" | "idle" | "completed";
+export const BOARD_SECTIONS: readonly ButlerBoardSection[] = ["active", "idle", "completed"];
+export const SECTION_LABEL: Record<ButlerBoardSection, string> = { active: "Active", idle: "Idle", completed: "Completed" };
+
 export interface ButlerBoardItem {
   sessionId: string;
   title: string;
   project: { id: string; name: string };
+  section: ButlerBoardSection;
   state: ButlerBoardState;
   backend: "provider" | "harness";
   providerProfileId?: string;
@@ -28,11 +34,18 @@ export interface ButlerBoardItem {
   sessionRevision?: number;
 }
 
+export type ButlerBoardCounts = Record<ButlerBoardSection, number>;
+
 export interface ButlerBoard {
-  counts: Record<ButlerBoardState, number>;
+  /** Exact goal chats per section, across every project. */
+  counts: ButlerBoardCounts;
+  /** Active chats by turn state (and Butler's proposals as waiting); only on a poll. */
+  states?: Record<Exclude<ButlerBoardState, "idle">, number>;
+  /** Every project with a goal chat, with exact section counts. */
+  projects: Array<{ id: string; name: string; counts: ButlerBoardCounts }>;
   items: ButlerBoardItem[];
   nextOffset?: number;
-  /** More active chats exist than Core returned; the counts stay exact. */
+  /** A section had more chats than Core returned; the counts stay exact. */
   truncated: boolean;
 }
 
@@ -40,6 +53,7 @@ interface WireItem {
   session_id: string;
   title: string;
   project: { id: string; name: string };
+  section?: ButlerBoardSection | null;
   state: ButlerBoardState;
   backend: "provider" | "harness";
   provider_profile_id?: string | null;
@@ -60,10 +74,19 @@ interface WireItem {
 }
 
 interface WireBoard {
-  counts: Record<ButlerBoardState, number>;
+  counts: ButlerBoardCounts;
+  states?: Record<Exclude<ButlerBoardState, "idle">, number> | null;
+  projects?: Array<{ id: string; name: string; counts: ButlerBoardCounts }> | null;
   items: WireItem[];
   next_offset?: number | null;
   truncated: boolean;
+}
+
+/** The section a goal status belongs to. */
+export function sectionOfGoalStatus(status: string | undefined): ButlerBoardSection {
+  if (status === "running") return "active";
+  if (status === "completed" || status === "cancelled") return "completed";
+  return "idle";
 }
 
 function mapItem(item: WireItem): ButlerBoardItem {
@@ -71,6 +94,7 @@ function mapItem(item: WireItem): ButlerBoardItem {
     sessionId: item.session_id,
     title: item.title,
     project: item.project,
+    section: item.section ?? sectionOfGoalStatus(item.goal?.status),
     state: item.state,
     backend: item.backend,
     providerProfileId: item.provider_profile_id ?? undefined,
@@ -102,10 +126,20 @@ function mapItem(item: WireItem): ButlerBoardItem {
   };
 }
 
-function boardQuery(options: { q?: string; state?: "active" | "idle"; offset?: number; limit?: number }): string {
+export interface ButlerBoardQuery {
+  q?: string;
+  /** One section's page; without it Core answers the poll (Active and Idle). */
+  section?: ButlerBoardSection;
+  projectId?: string;
+  offset?: number;
+  limit?: number;
+}
+
+function boardQuery(options: ButlerBoardQuery): string {
   const query = new URLSearchParams();
   if (options.q?.trim()) query.set("q", options.q.trim());
-  if (options.state === "idle") query.set("state", "idle");
+  if (options.section) query.set("section", options.section);
+  if (options.projectId) query.set("project_id", options.projectId);
   if (options.offset) query.set("offset", String(options.offset));
   if (options.limit) query.set("limit", String(options.limit));
   return query.size ? `?${query}` : "";
@@ -114,7 +148,7 @@ function boardQuery(options: { q?: string; state?: "active" | "idle"; offset?: n
 /** The board for a poll: undefined when Core answered 304 for ``etag``. */
 export async function getButlerBoardIfChanged(
   api: ApiClient,
-  options: { q?: string; state?: "active" | "idle"; offset?: number; limit?: number },
+  options: ButlerBoardQuery,
   etag: string | undefined,
   signal?: AbortSignal,
 ): Promise<{ board: ButlerBoard; etag?: string } | undefined> {
@@ -123,6 +157,8 @@ export async function getButlerBoardIfChanged(
   return {
     board: {
       counts: answer.value.counts,
+      states: answer.value.states ?? undefined,
+      projects: answer.value.projects ?? [],
       items: answer.value.items.map(mapItem),
       nextOffset: answer.value.next_offset ?? undefined,
       truncated: answer.value.truncated,
@@ -131,51 +167,114 @@ export async function getButlerBoardIfChanged(
   };
 }
 
+/** "project" groups by project (the default); "attention" is the Status grouping: the three sections. */
 export type ButlerBoardGrouping = "attention" | "project";
+
+export interface ButlerBoardSectionGroup {
+  section: ButlerBoardSection;
+  items: ButlerBoardItem[];
+  /** Core's exact count while the search matches Core's, else the matched cards. */
+  count: number;
+}
 
 export interface ButlerBoardGroup {
   key: string;
-  label: string;
-  items: ButlerBoardItem[];
-  counts: Record<ButlerBoardState, number>;
+  /** The project's name; none for the Status grouping. */
+  label?: string;
+  total: number;
+  sections: ButlerBoardSectionGroup[];
 }
 
-const STATE_LABEL: Record<Exclude<ButlerBoardState, "idle">, string> = { waiting: "Needs you", working: "Working", failed: "Failed" };
+/** The key that groups Completed pages and remembered sections for the Status grouping. */
+export const ALL_PROJECTS = "all";
+
 const STATE_ORDER: ButlerBoardState[] = ["waiting", "working", "failed", "idle"];
 
-function emptyCounts(): Record<ButlerBoardState, number> {
-  return { waiting: 0, working: 0, failed: 0, idle: 0 };
+function emptyCounts(): ButlerBoardCounts {
+  return { active: 0, idle: 0, completed: 0 };
 }
 
 /**
- * Group board cards. Chats needing the operator always come first: by
- * attention they form the first group; by project, projects with a chat
- * needing the operator lead, and each project lists those chats first.
- * Subagent chats fold into their parent unless ``showSubagents`` is set.
+ * Group board cards into Active, Idle and Completed. By project, each
+ * project holds the three sections, projects with a chat needing the operator
+ * first; the Status grouping is the three sections across projects. Active
+ * lists chats needing the operator first. Completed cards come from pages
+ * loaded on request (``completed`` by project ID, or ``ALL_PROJECTS``).
+ * ``projects`` carries Core's exact counts; with ``coreCounts`` false (the
+ * search box is ahead of Core's search) the counts are the matched cards.
  */
-export function groupButlerBoard(items: ButlerBoardItem[], grouping: ButlerBoardGrouping, showSubagents: boolean): ButlerBoardGroup[] {
-  const visible = showSubagents ? items : items.filter((item) => !item.isSubagent || item.state === "waiting");
-  if (grouping === "attention") {
-    return (["waiting", "working", "failed"] as const)
-      .map((state) => {
-        const groupItems = visible.filter((item) => item.state === state);
-        const counts = emptyCounts();
-        counts[state] = groupItems.length;
-        return { key: state, label: STATE_LABEL[state], items: groupItems, counts };
-      })
-      .filter((group) => group.items.length > 0);
-  }
-  const byProject = new Map<string, ButlerBoardGroup>();
-  for (const item of visible) {
-    const group = byProject.get(item.project.id) ?? { key: item.project.id, label: item.project.name || "Untitled project", items: [], counts: emptyCounts() };
-    group.items.push(item);
-    group.counts[item.state] += 1;
-    byProject.set(item.project.id, group);
-  }
+export function groupButlerBoard(
+  items: readonly ButlerBoardItem[],
+  grouping: ButlerBoardGrouping,
+  options: { projects?: ButlerBoard["projects"]; completed?: Record<string, readonly ButlerBoardItem[]>; coreCounts?: boolean } = {},
+): ButlerBoardGroup[] {
+  const projects = options.projects ?? [];
+  const completed = options.completed ?? {};
+  const coreCounts = options.coreCounts ?? true;
   const rank = (item: ButlerBoardItem) => STATE_ORDER.indexOf(item.state);
-  return [...byProject.values()]
-    .map((group) => ({ ...group, items: [...group.items].sort((a, b) => rank(a) - rank(b)) }))
-    .sort((a, b) => (b.counts.waiting - a.counts.waiting) || (b.counts.working - a.counts.working) || a.label.localeCompare(b.label));
+  const build = (key: string, label: string | undefined, listed: readonly ButlerBoardItem[], done: readonly ButlerBoardItem[], counts: ButlerBoardCounts | undefined): ButlerBoardGroup => {
+    const sections = BOARD_SECTIONS.map((section) => {
+      const sectionItems = section === "completed" ? [...done] : listed.filter((item) => item.section === section);
+      if (section === "active") sectionItems.sort((a, b) => rank(a) - rank(b));
+      return { section, items: sectionItems, count: coreCounts && counts ? counts[section] : sectionItems.length };
+    });
+    return { key, label, sections, total: sections.reduce((sum, entry) => sum + entry.count, 0) };
+  };
+  if (grouping === "attention") {
+    const totals = projects.reduce((sum, project) => {
+      for (const section of BOARD_SECTIONS) sum[section] += project.counts[section];
+      return sum;
+    }, emptyCounts());
+    const group = build(ALL_PROJECTS, undefined, items, completed[ALL_PROJECTS] ?? [], totals);
+    return group.total > 0 ? [group] : [];
+  }
+  const names = new Map<string, string>();
+  for (const project of projects) names.set(project.id, project.name);
+  for (const item of items) if (!names.has(item.project.id)) names.set(item.project.id, item.project.name);
+  const counts = new Map(projects.map((project) => [project.id, project.counts]));
+  const waiting = (group: ButlerBoardGroup) => group.sections[0].items.filter((item) => item.state === "waiting").length
+    + group.sections[1].items.filter((item) => item.state === "waiting").length;
+  return [...names.entries()]
+    .map(([id, name]) => build(id, name || "Untitled project", items.filter((item) => item.project.id === id), completed[id] ?? [], counts.get(id)))
+    .filter((group) => group.total > 0)
+    .sort((a, b) => (waiting(b) - waiting(a)) || (b.sections[0].count - a.sections[0].count) || (a.label ?? "").localeCompare(b.label ?? ""));
+}
+
+/** What a card's status says, after its section: "Needs you", "Paused", "Cancelled"… */
+export function boardStatusLabel(item: Pick<ButlerBoardItem, "section" | "state" | "goal" | "attention">): string {
+  if (item.section === "active") return ({ waiting: "Needs you", working: "Working", failed: "Failed", idle: "Running" } as const)[item.state];
+  if (item.section === "completed") return item.goal?.status === "cancelled" ? "Cancelled" : "Completed";
+  if (item.attention?.kind === "proposal") return "Proposed";
+  if (item.state === "waiting") return "Needs you";
+  return item.goal?.status === "blocked" ? "Blocked" : item.goal?.status === "draft" ? "Proposed" : "Paused";
+}
+
+/** Which sections are open, as this device remembers them: ``"<group>:<section>"`` → open. */
+export type BoardSectionOpenState = Record<string, boolean>;
+
+/** Completed starts collapsed; Active and Idle start open. */
+export function boardSectionOpen(state: BoardSectionOpenState, groupKey: string, section: ButlerBoardSection): boolean {
+  return state[`${groupKey}:${section}`] ?? section !== "completed";
+}
+
+/** Parse the remembered open sections; anything unreadable is forgotten. */
+export function parseBoardSectionState(stored: string | null): BoardSectionOpenState {
+  if (!stored) return {};
+  try {
+    const value = JSON.parse(stored) as unknown;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean"));
+  } catch {
+    return {}; // diagnostic-expected: a damaged preference falls back to the default sections
+  }
+}
+
+/** Toggle one section, keeping at most ``limit`` remembered choices (the newest). */
+export function toggleBoardSection(state: BoardSectionOpenState, groupKey: string, section: ButlerBoardSection, limit = 200): BoardSectionOpenState {
+  const key = `${groupKey}:${section}`;
+  const open = !boardSectionOpen(state, groupKey, section);
+  const rest = Object.entries(state).filter(([entry]) => entry !== key);
+  return Object.fromEntries([...rest.slice(Math.max(0, rest.length - limit + 1)), [key, open]]);
 }
 
 /** Compact elapsed time for a card: "45s", "12m", "3h", "2d". */

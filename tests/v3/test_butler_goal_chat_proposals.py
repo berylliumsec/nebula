@@ -236,9 +236,11 @@ async def test_board_lists_proposals_as_waiting_and_labels_butler_starts(reads):
     await goal(proposal)
     cancelled = await chat("Rejected idea", proposed_by="butler")
     await goal(cancelled, ChatGoalStatus.CANCELLED)
+    # An operator's unstarted draft is not a Butler proposal and stays off the board.
     plain_draft = await chat("Operator draft")
     await goal(plain_draft)
     butler_started = await chat("Butler run", butler_initiated=True)
+    await goal(butler_started, ChatGoalStatus.RUNNING)
     await store.create(
         ChatTurn(
             engagement_id=project.id,
@@ -252,10 +254,12 @@ async def test_board_lists_proposals_as_waiting_and_labels_butler_starts(reads):
     answer = await reads.client.get("/api/v1/butler/board", headers=AUTH)
     assert answer.status_code == 200, answer.text
     body = answer.json()
-    assert body["counts"] == {"waiting": 1, "working": 1, "failed": 0, "idle": 2}
+    assert body["counts"] == {"active": 1, "idle": 1, "completed": 1}
+    assert body["states"] == {"waiting": 1, "working": 1, "failed": 0}
     items = {item["title"]: item for item in body["items"]}
-    assert list(items) == ["Triage crash logs", "Butler run"]
+    assert list(items) == ["Butler run", "Triage crash logs"]
     waiting = items["Triage crash logs"]
+    assert waiting["section"] == "idle"
     assert waiting["state"] == "waiting"
     assert waiting["attention"]["kind"] == "proposal"
     assert waiting["attention"]["action_id"] == proposal.id
@@ -266,11 +270,11 @@ async def test_board_lists_proposals_as_waiting_and_labels_butler_starts(reads):
     assert waiting["goal"]["status"] == "draft"
     assert isinstance(waiting["goal"]["revision"], int)
     assert waiting["session_revision"] == proposal.revision
+    assert items["Butler run"]["section"] == "active"
     assert items["Butler run"]["started_by"] == "butler"
 
-    idle = await reads.client.get(
-        "/api/v1/butler/board", params={"state": "idle"}, headers=AUTH
+    done = await reads.client.get(
+        "/api/v1/butler/board", params={"section": "completed"}, headers=AUTH
     )
-    idle_ids = {item["session_id"] for item in idle.json()["items"]}
-    assert idle_ids == {cancelled.id, plain_draft.id}
-    assert all(item["started_by"] is None for item in idle.json()["items"])
+    assert [item["session_id"] for item in done.json()["items"]] == [cancelled.id]
+    assert all(item["started_by"] is None for item in done.json()["items"])
