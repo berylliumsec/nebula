@@ -1,24 +1,21 @@
 {
-  "change_digest": "e1a0e4156dc154a01b0e567b04bd06060f53d2567cffe4d42e9558f166c0e633",
-  "reviewed_by": "Claude Code, after a scratch-Core supervisor-swap rehearsal and an independent subagent review whose findings were fixed",
-  "reason": "Holder-owned host-services socket (--host-services-fd, endpoint symlink, listen-before-ready, stop-accepting-first, stale-call refusal, wider read-only resend) and a saved desktop browser-bridge registration. Selected: test_runtime_host_services.py (adoption checks, a call queued in the holder across a real generation swap with a non-resending client, self-bound link replacement, resend rules, stale-call refusal, failed-start release), test_runtime_browser_bridge.py (registration survives a generation swap and a real supervisor restart, expiry, revoke, damaged file), test_runtime_host_settings.py (reads browser_bridge.enabled from the shared services), and test_runtime_service.py (serve_runtime composition and the public inherited-listener path next to --host-services-fd). All 114 pass locally on SQLite and PostgreSQL.",
-  "exclusions": "No UI, settings or API shape change: no frontend, Playwright or settings-assistant update applies (--host-services-fd is a deployment flag, not an operator setting). The deployer and socket-unit wiring belong to the separate socket-unit change, so test_simulation_* and the deployer tests are not selected. The supervisor, admission and handoff suites are unaffected: only the host-services gateway's start/stop order and the bridge registry changed. Real-Core evidence: scratch Core rehearsal recorded in docs/validation/rolling-core-releases.md (E8).",
+  "change_digest": "29d5729f190498861330c6d8953ac79061dece4f861ac4588794d0a684281726",
+  "reviewed_by": "Claude Code (deployer change for a two-step rollout the user asked for)",
+  "reason": "Adds `prepare --commit <sha>` to the simulation deployer so a release adding stored-entity fields can roll out after the first tolerant commit. Selected: tests/test_simulation_deployer_ci_default.py, which covers prepare's candidate selection (new: an earlier first-parent main commit is built, a commit main never received is refused, non-hex arguments are refused, the live commit reports current) plus the existing CI-evidence and default-prepare tests.",
+  "exclusions": "No Core, UI, setting or chat journey changed, so no frontend, Playwright or LAN-instance journey applies. promote, cycle and prebuild are unchanged (promote deploys whatever prepare recorded as pending). main_commit was also exercised against real git: 924ba13 resolves; PR-branch commits 1c80b2b and 61628bc are refused.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 114,
+    "python": 22,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_browser_bridge.py",
-    "tests/v3/test_runtime_host_services.py",
-    "tests/v3/test_runtime_host_settings.py",
-    "tests/v3/test_runtime_service.py"
+    "tests/test_simulation_deployer_ci_default.py"
   ],
   "frontend": [],
   "native": [],

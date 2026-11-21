@@ -2297,8 +2297,15 @@ def prepare(
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
     require_ci_evidence: bool = False,
+    commit: str | None = None,
 ) -> dict[str, Any]:
     """Build and accept origin/main for this Core host.
+
+    ``commit`` selects an earlier commit on main's first-parent history
+    instead of its head. A release that adds stored-entity fields
+    (``storage.entity-field-additions/v1``) can start only once every running
+    version reads unknown fields, so such a rollout deploys the first
+    tolerant commit before main.
 
     Every pull request merges only after its own CI passes, so by default the
     candidate is not re-checked against CI runs here: main push runs share a
@@ -2314,8 +2321,48 @@ def prepare(
             pr_ci_run_ids=pr_ci_run_ids,
             pr_playwright_run_ids=pr_playwright_run_ids,
             require_ci_evidence=require_ci_evidence,
+            commit=commit,
             timings=timings,
         )
+
+
+COMMIT_ARGUMENT = re.compile(r"[0-9a-f]{7,40}\Z")
+
+
+def main_commit(commit: str) -> str:
+    """Resolve ``commit`` to a full SHA on origin/main's first-parent history.
+
+    Only commits that main itself received are deployable: a merged pull
+    request's own branch commits, or anything off main, never are.
+    """
+    if not COMMIT_ARGUMENT.fullmatch(commit):
+        raise RuntimeError("--commit must be a hexadecimal commit ID")
+    sha = run(
+        "git",
+        "-C",
+        str(REPO),
+        "rev-parse",
+        "--verify",
+        f"{commit}^{{commit}}",
+        capture=True,
+    )
+    if not SHA.fullmatch(sha):
+        raise RuntimeError("--commit did not resolve to one exact commit")
+    history = run(
+        "git",
+        "-C",
+        str(REPO),
+        "rev-list",
+        "--first-parent",
+        "origin/main",
+        capture=True,
+    ).split()
+    if sha not in history:
+        raise RuntimeError(
+            f"{sha} is not on origin/main's first-parent history; only commits "
+            "main received can be deployed"
+        )
+    return sha
 
 
 def _prepare(
@@ -2324,6 +2371,7 @@ def _prepare(
     pr_ci_run_ids: list[str] | None,
     pr_playwright_run_ids: list[str] | None,
     require_ci_evidence: bool = False,
+    commit: str | None = None,
     timings: StepTimings,
 ) -> dict[str, Any]:
     check_ci = require_ci_evidence or ci_run_ids is not None
@@ -2338,6 +2386,8 @@ def _prepare(
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
     sha = run("git", "-C", str(REPO), "rev-parse", "origin/main", capture=True)
+    if commit is not None:
+        sha = main_commit(commit)
     if sha == previous:
         if (
             ci_run_ids is not None
@@ -7216,6 +7266,13 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--commit",
+        help=(
+            "prepare this commit on origin/main's first-parent history instead "
+            "of its head (for a release that must roll out in two steps)"
+        ),
+    )
+    parser.add_argument(
         "--require-ci-evidence",
         action="store_true",
         help=(
@@ -7306,6 +7363,8 @@ def main() -> int:
         raise RuntimeError("--ci-run-id is supported only with prepare")
     if args.require_ci_evidence and args.action != "prepare":
         raise RuntimeError("--require-ci-evidence is supported only with prepare")
+    if args.commit is not None and args.action != "prepare":
+        raise RuntimeError("--commit is supported only with prepare")
     if args.backup and args.action not in {"promote", "cycle"}:
         raise RuntimeError("--backup is supported only with promote or cycle")
     if (
@@ -7394,6 +7453,7 @@ def main() -> int:
                 pr_ci_run_ids=args.ci_pr_run_id,
                 pr_playwright_run_ids=args.ci_playwright_run_id,
                 require_ci_evidence=args.require_ci_evidence,
+                commit=args.commit,
             )
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
