@@ -3705,7 +3705,7 @@
   "ui_api_calls": [
     {
       "key": "ui/src/api/butlerBoard.ts::getChatGoal",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/api/butlerBoard.ts::request::\"DELETE\" `chat-sessions/${encodeURIComponent(sessionId)}`",
@@ -3717,7 +3717,7 @@
     },
     {
       "key": "ui/src/api/butlerBoard.ts::writeChatGoal",
-      "count": 1
+      "count": 2
     },
     {
       "key": "ui/src/api/butlerBrief.ts::request::GET `butler/sessions/${encodeURIComponent(sessionId)}/brief?before=${before}`",

@@ -987,3 +987,89 @@
 
 .proposal dt { color: var(--muted); }
 .proposal dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Resuming idle goals: a checkbox per paused or blocked card, Select all per Idle section, and a floating bar. */
+.sectionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.selectAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--type-secondary);
+  cursor: pointer;
+}
+
+.selectAll input,
+.cardSelect input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.cardRow {
+  display: flex;
+  min-width: 0;
+}
+
+.cardRow .cardSummary { flex: 1; min-width: 0; }
+
+.cardSelect {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  width: 40px;
+  min-height: var(--touch-target);
+  padding-top: 12px;
+  margin-right: -12px;
+  cursor: pointer;
+}
+
+.card[data-selected="true"] { border-color: var(--blue); }
+.cardNote[data-failed="true"] { color: var(--orange); }
+
+.cardNote {
+  color: var(--muted-strong);
+  font-size: var(--type-meta);
+  overflow-wrap: anywhere;
+}
+
+.resumeStatus {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--type-secondary);
+}
+
+.resumeStatus[data-failed="true"] { color: var(--orange); }
+.resumeStatus .link { align-self: center; color: var(--muted); }
+
+.selectionBar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  align-self: center;
+  max-width: 100%;
+  padding: 6px 6px 6px 18px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+
+.selectionBar .link { align-self: center; color: var(--muted); }
+.selectionCount { color: var(--text); font-weight: var(--weight-medium); white-space: nowrap; }

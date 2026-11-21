@@ -362,3 +362,76 @@ export function goalChatProposalFromReceipt(receipt: Record<string, unknown> | u
     startError: typeof receipt?.start_error === "string" ? receipt.start_error : undefined,
   };
 }
+
+/** An idle goal the operator can resume: paused or blocked. Proposed drafts start from their card instead. */
+export function isResumableIdle(item: Pick<ButlerBoardItem, "section" | "goal" | "attention">): boolean {
+  return item.section === "idle" && item.attention?.kind !== "proposal" && (item.goal?.status === "paused" || item.goal?.status === "blocked");
+}
+
+/**
+ * Every resumable idle goal chat Core lists, across projects or in one
+ * (``projectId``), matching ``q``: not only the cards the poll returned.
+ */
+export async function listResumableIdle(api: ApiClient, options: { q?: string; projectId?: string } = {}, signal?: AbortSignal): Promise<ButlerBoardItem[]> {
+  const found: ButlerBoardItem[] = [];
+  let offset: number | undefined = 0;
+  // Core pages a section by recent activity; the guard stops a misbehaving cursor.
+  for (let pages = 0; offset !== undefined && pages < 500; pages += 1) {
+    const answer = await getButlerBoardIfChanged(api, { q: options.q, section: "idle", projectId: options.projectId, offset, limit: 200 }, undefined, signal);
+    if (!answer) break;
+    found.push(...answer.board.items.filter(isResumableIdle));
+    offset = answer.board.nextOffset !== undefined && answer.board.nextOffset > offset ? answer.board.nextOffset : undefined;
+  }
+  const seen = new Set<string>();
+  return found.filter((item) => !seen.has(item.sessionId) && seen.add(item.sessionId));
+}
+
+export interface ResumeOutcome {
+  sessionId: string;
+  /** Core's reason when it did not resume the goal. */
+  error?: string;
+}
+
+/**
+ * Resume goals through Core's per-goal action, a few at a time, so Core
+ * applies its usual checks (holds, budgets, recovery) to each one. A goal
+ * whose revision moved since the board read is re-read and tried once more.
+ */
+export async function resumeIdleGoals(
+  api: ApiClient,
+  items: ReadonlyArray<Pick<ButlerBoardItem, "sessionId" | "goal">>,
+  onProgress?: (done: number, outcome: ResumeOutcome) => void,
+  concurrency = 4,
+): Promise<ResumeOutcome[]> {
+  const outcomes: ResumeOutcome[] = [];
+  let next = 0;
+  const resumeOne = async (item: Pick<ButlerBoardItem, "sessionId" | "goal">): Promise<ResumeOutcome> => {
+    let revision = item.goal?.revision;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        if (revision === undefined) revision = (await api.getChatGoal(item.sessionId)).revision;
+        await api.writeChatGoal(item.sessionId, { expectedRevision: revision, action: "resume" });
+        return { sessionId: item.sessionId };
+      } catch (caught) { // diagnostic-expected: a refused resume returns Core's reason to the board, which logs the batch's refusals
+        const status = (caught as { status?: unknown })?.status;
+        if (attempt === 0 && status === 409 && /changed on another device/i.test(caught instanceof Error ? caught.message : "")) {
+          revision = undefined;
+          continue;
+        }
+        return { sessionId: item.sessionId, error: caught instanceof Error && caught.message ? caught.message : "Core did not resume the goal." };
+      }
+    }
+    return { sessionId: item.sessionId, error: "The goal kept changing; open the chat to resume it." };
+  };
+  const worker = async () => {
+    while (next < items.length) {
+      const item = items[next];
+      next += 1;
+      const outcome = await resumeOne(item);
+      outcomes.push(outcome);
+      onProgress?.(outcomes.length, outcome);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  return outcomes;
+}
