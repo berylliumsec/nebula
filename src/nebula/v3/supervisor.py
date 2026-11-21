@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 import threading
 
-from fastapi import Depends, FastAPI, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 import httpx
 from sqlalchemy import and_, or_, select
 from starlette.requests import HTTPConnection
@@ -292,7 +292,12 @@ class RuntimeSupervisor:
         async def memory_control(request: Request):
             if request.url.path.endswith("/apply"):
                 return _Forward(self.proxy)
-            return _Forward(self.shared_services.memory_control.app)
+            control = self.shared_services.memory_control
+            if control is None:
+                # Shared services open before the host serves; a request in
+                # that window gets a retryable answer, not an AttributeError.
+                raise HTTPException(503, "Host memory control is starting")
+            return _Forward(control.app)
 
         @api.api_route(
             "/{path:path}",

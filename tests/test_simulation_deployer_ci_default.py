@@ -461,3 +461,66 @@ def test_supervisor_promotion_backs_up_only_on_request(tmp_path, monkeypatch):
     result = deployer.promote(backup=True)
     assert len(backups) == 1 and backups[0].startswith(f"operator-pre-{NEW}-")
     assert result["operator_backup"] == str(tmp_path / backups[0])
+
+
+TOLERANT = "d" * 40
+
+
+def _prepare_commit(tmp_path, monkeypatch, *, history, resolves=TOLERANT):
+    """Prepare up to the selection step with a fake git: main's first-parent
+    history is `history`, newest first, and `rev-parse --verify` gives `resolves`."""
+    calls, _candidate = _prepare_until_acceptance(tmp_path, monkeypatch, [])
+    candidates: list[str] = []
+    monkeypatch.setattr(
+        deployer, "candidate", lambda sha: candidates.append(sha) or tmp_path / sha
+    )
+
+    def git(*args, capture=False, **_kwargs):
+        if "rev-list" in args:
+            assert args[-2:] == ("--first-parent", "origin/main")
+            return "\n".join(history)
+        if "--verify" in args:
+            return resolves
+        if "rev-parse" in args:
+            return NEW
+        return ""
+
+    monkeypatch.setattr(deployer, "run", git)
+    return calls, candidates
+
+
+def test_prepare_builds_an_earlier_main_commit_when_named(tmp_path, monkeypatch):
+    """A release that adds entity fields rolls out after the first tolerant
+    commit, so the operator prepares that commit instead of main's head."""
+    calls, candidates = _prepare_commit(
+        tmp_path, monkeypatch, history=[NEW, TOLERANT, OLD]
+    )
+    with pytest.raises(_Stop):
+        deployer.prepare(commit=TOLERANT[:12])
+    assert candidates == [TOLERANT]
+    assert calls["local_plan"] is True
+
+
+def test_prepare_refuses_a_commit_main_never_received(tmp_path, monkeypatch):
+    calls, candidates = _prepare_commit(tmp_path, monkeypatch, history=[NEW, OLD])
+    with pytest.raises(RuntimeError, match="not on origin/main's first-parent"):
+        deployer.prepare(commit=TOLERANT)
+    assert candidates == [] and "local_plan" not in calls
+
+
+@pytest.mark.parametrize("value", ["HEAD~1", "origin/main", "--all", "abc", "g" * 40])
+def test_prepare_commit_must_be_a_hexadecimal_id(tmp_path, monkeypatch, value):
+    _calls, candidates = _prepare_commit(
+        tmp_path, monkeypatch, history=[NEW, TOLERANT, OLD]
+    )
+    with pytest.raises(RuntimeError, match="hexadecimal commit ID"):
+        deployer.prepare(commit=value)
+    assert candidates == []
+
+
+def test_prepare_named_live_commit_is_already_current(tmp_path, monkeypatch):
+    _calls, candidates = _prepare_commit(
+        tmp_path, monkeypatch, history=[NEW, OLD], resolves=OLD
+    )
+    assert deployer.prepare(commit=OLD) == {"status": "current", "commit": OLD}
+    assert candidates == []

@@ -11,7 +11,7 @@ import socket
 import stat
 import time
 from uuid import uuid4
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import uvicorn
@@ -319,8 +319,8 @@ class HostSharedServices:
         )
         self.capacity_limits = capacity_limits
         self.endpoint: str | None = None
-        self.server = None
-        self.task = None
+        self.server: _HostServer | None = None
+        self.task: asyncio.Task[Any] | None = None
         self.closed = False
         # A holder-owned socket outlives this generation (see
         # inherited_host_services); otherwise this instance binds its own.
@@ -331,13 +331,13 @@ class HostSharedServices:
         self._accepting = True
         self._close_task = None
         self._start_lock = asyncio.Lock()
-        self._peers = {}
+        self._peers: dict[str, Any] = {}
         self._peer_lock = asyncio.Lock()
         self._slots = asyncio.Semaphore(8)
         self._requests: set[asyncio.Task] = set()
-        self._socket_identity = None
+        self._socket_identity: tuple[int, int] | None = None
         self.product_guidance = {"state": "unavailable"}
-        self.memory_control = None
+        self.memory_control: HostMemoryControl | None = None
         self.browser_bridge = HostBrowserBridge(self.coordination)
         self.host_settings = HostSettings(host)
         self.work_batches: RuntimeWorkBatches | None = None
@@ -680,7 +680,7 @@ class HostSharedServices:
         self._ready.set()
 
     async def _listen(self, path: Path):
-        options = {}
+        options: dict[str, Any] = {}
         if self.listener is None:
             if path.is_symlink():
                 # A holder-backed generation published this link; this one
@@ -690,7 +690,7 @@ class HostSharedServices:
         else:
             self._publish_link(path, self.listener.getsockname())
         self.endpoint = "unix://" + str(path)
-        self.server = _HostServer(
+        server = self.server = _HostServer(
             uvicorn.Config(
                 self.app,
                 interface="asgi3",
@@ -701,8 +701,8 @@ class HostSharedServices:
                 **options,
             )
         )
-        self.task = create_diagnostic_task(
-            self.server.serve(
+        task = self.task = create_diagnostic_task(
+            server.serve(
                 sockets=[self.listener] if self.listener is not None else None
             ),
             feature="runtime",
@@ -711,9 +711,9 @@ class HostSharedServices:
             name="nebula-host-services",
         )
         async with asyncio.timeout(10):
-            while not self.server.started:
-                if self.task.done():
-                    await self.task
+            while not server.started:
+                if task.done():
+                    await task
                     raise RuntimeIpcError("Shared host listener did not start")
                 await asyncio.sleep(0.01)
         if self.listener is None:

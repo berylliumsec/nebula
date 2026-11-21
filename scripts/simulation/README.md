@@ -119,6 +119,26 @@ Do not delete that state during an unverified recovery just to meet the normal
 one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
+## Deploy a release in two steps
+
+A release that adds stored-entity fields declares
+`storage.entity-field-additions/v1`. Core refuses to start it while the
+execution target or any running worker lacks `storage.tolerant-entities/v1`
+(#1271): the new supervisor would refuse the API after the host swap. Deploy
+the first tolerant commit, let projects move to it and the older workers
+retire, then deploy main:
+
+```sh
+python3 -m nebula_deployer prepare --commit <first-tolerant-commit>
+python3 -m nebula_deployer promote
+# after deployment status shows only that version resident
+python3 -m nebula_deployer prepare
+python3 -m nebula_deployer promote
+```
+
+`--commit` accepts only a hexadecimal ID on `origin/main`'s first-parent
+history; it never builds a pull request's own branch commit.
+
 `nebula_deployer.py prepare` accepts CI evidence only; it never runs tests
 on this host. For every first-parent commit from the live release to
 `origin/main` it finds the newest successful `main` push run of
