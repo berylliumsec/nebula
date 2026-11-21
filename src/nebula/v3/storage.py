@@ -2736,9 +2736,7 @@ class NebulaStore:
                     "revision": expected_revision + 1,
                 }
             )
-            updated_entity, _ = validate_update(
-                model, row["payload"], payload, changes
-            )
+            updated_entity, _ = validate_update(model, row["payload"], payload, changes)
             result = await connection.execute(
                 update(EntityRow)
                 .where(
@@ -2919,9 +2917,7 @@ class NebulaStore:
                     "revision": expected_revision + 1,
                 }
             )
-            updated_entity, _ = validate_update(
-                model, row["payload"], payload, changes
-            )
+            updated_entity, _ = validate_update(model, row["payload"], payload, changes)
             result = await connection.execute(
                 update(EntityRow)
                 .where(

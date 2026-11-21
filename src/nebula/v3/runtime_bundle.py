@@ -72,7 +72,9 @@ def _check_entity_fields(payload: dict, manifest: dict) -> None:
     ) and ENTITY_FIELD_ADDITION_FEATURE not in manifest.get("features", []):
         raise ValueError(
             "Stored entity fields differ from the tolerant-reader baseline; "
-            "declare " + ENTITY_FIELD_ADDITION_FEATURE + " in runtime-compatibility.json"
+            "declare "
+            + ENTITY_FIELD_ADDITION_FEATURE
+            + " in runtime-compatibility.json"
         )
 
 

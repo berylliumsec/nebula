@@ -277,7 +277,11 @@ def _anchored_index(parent: Any, step: PathStep, anchor: ListAnchor) -> Any:
             if isinstance(item, Mapping) and item.get("id") == anchor.item_id
         ]
         return matches[0] if len(matches) == 1 else _MISSING
-    if isinstance(step, int) and step < len(parent) and parent[step] == anchor.item_known:
+    if (
+        isinstance(step, int)
+        and step < len(parent)
+        and parent[step] == anchor.item_known
+    ):
         return step
     return _MISSING
 

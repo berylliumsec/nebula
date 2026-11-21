@@ -111,7 +111,9 @@ def register_integration_credentials(rpc, runtime_id, coordination, credentials)
                             or policy_row.kind != AutomationProjectPolicy.entity_kind
                         ):
                             raise ValueError("Project has no selected VPN")
-                        policy = decode_stored(AutomationProjectPolicy, policy_row.payload)
+                        policy = decode_stored(
+                            AutomationProjectPolicy, policy_row.payload
+                        )
                         if (
                             policy.engagement_id != lease.project_id
                             or policy.vpn_profile_id != profile.id

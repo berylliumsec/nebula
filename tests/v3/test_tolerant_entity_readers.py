@@ -197,7 +197,10 @@ async def test_every_update_path_keeps_the_newer_release_keys(store, update_path
     assert "future_grant_note" not in stored["grants"][0]
     # A second rewrite through the returned entity keeps them too.
     again = await store.update(
-        ScopePolicy, policy.id, {"local_only": False}, expected_revision=updated.revision
+        ScopePolicy,
+        policy.id,
+        {"local_only": False},
+        expected_revision=updated.revision,
     )
     stored = await _stored_payload(store, again.id)
     assert stored["future_top"] == FUTURE_TOP
@@ -493,7 +496,10 @@ def test_a_new_entity_field_needs_a_reviewed_addition_flag():
     assert entity_fields_digest((*ENTITY_MODELS, _Added)) != current
     with pytest.raises(ValueError, match="entity fields changed"):
         _check_entity_fields(
-            {"entity_fields_sha256": "0" * 64, "entity_fields_tolerant_baseline_sha256": "0" * 64},
+            {
+                "entity_fields_sha256": "0" * 64,
+                "entity_fields_tolerant_baseline_sha256": "0" * 64,
+            },
             manifest,
         )
     reviewed = {
@@ -504,5 +510,8 @@ def test_a_new_entity_field_needs_a_reviewed_addition_flag():
         _check_entity_fields(reviewed, manifest)
     _check_entity_fields(
         reviewed,
-        {**manifest, "features": [*manifest["features"], ENTITY_FIELD_ADDITION_FEATURE]},
+        {
+            **manifest,
+            "features": [*manifest["features"], ENTITY_FIELD_ADDITION_FEATURE],
+        },
     )
