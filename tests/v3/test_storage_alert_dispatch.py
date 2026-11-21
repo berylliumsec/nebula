@@ -138,8 +138,11 @@ async def alerts(host, monkeypatch):
     # Retire an idle worker at once; the idle grace has its own tests.
     value.automatic.idle_grace_ms = 0
 
-    async def recovery(owner, action, parameters):
+    async def recovery(owner, action, parameters, *, stage=None):
         value.recoveries.append((owner["project_id"], action))
+        if action == "prepare_execution":
+            # Recovery claims only an attachable prepared target.
+            return {"runtime_id": await worker(host, "alerts")}
         return {"runtime_id": "recovery-target"}
 
     monkeypatch.setattr(value.automatic, "_recovery_operation", recovery)

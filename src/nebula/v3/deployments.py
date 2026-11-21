@@ -2024,7 +2024,11 @@ class DeploymentCoordinator:
             reasons.append(
                 f"Provider turn {running} needs explicit interrupted-effect reconciliation"
             )
-        target = await session.get(RuntimeProcessRow, target_runtime_id)
+        target = (
+            await session.get(RuntimeProcessRow, target_runtime_id)
+            if target_runtime_id is not None
+            else None
+        )
         if target is not None:
             release = await session.get(RuntimeReleaseRow, target.version)
             supported = (
@@ -2690,6 +2694,54 @@ class DeploymentCoordinator:
                 process_birth=row.process_birth,
                 endpoint=row.endpoint,
             )
+
+    async def mark_process_absent(self, identity: WorkerIdentity) -> bool:
+        """Stop reporting a provably exited execution worker as ready.
+
+        The host calls this when it observed this exact incarnation gone but
+        its retirement is still blocked (its project owner is not yet
+        recovered or released). The row stays resident, so its blockers keep
+        holding retirement, but it is ``unreachable``: never attached, never
+        reported ready. Only the state changes; nothing is replayed or
+        settled here. Returns whether the row changed.
+        """
+        if identity.role != "execution" or same_process(
+            identity.pid, identity.process_birth
+        ):
+            return False
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            row = await session.get(
+                RuntimeProcessRow,
+                identity.runtime_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.role != "execution"
+                or row.state not in {"ready", "starting"}
+                or (row.pid, row.process_birth, row.endpoint, row.version)
+                != (
+                    identity.pid,
+                    identity.process_birth,
+                    identity.endpoint,
+                    identity.version,
+                )
+                or host.api_runtime_id == row.runtime_id
+            ):
+                return False
+            if same_process(identity.pid, identity.process_birth):
+                return False
+            row.state = "unreachable"
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            host.revision += 1
+            await self._receipt(
+                session,
+                "worker.process_absent",
+                identity.model_dump(mode="json"),
+            )
+            return True
 
     async def retired(self, identity: WorkerIdentity) -> None:
         """Called only after the host has verified this exact process is gone."""
