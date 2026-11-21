@@ -1,24 +1,25 @@
 {
-  "change_digest": "bf8936b3ff253908a0723b7228d934fb96a68ab6edff3bd2b77e24f7227f776d",
-  "reviewed_by": "Claude Code, at the operator's request: fix auto-resumed provider turns failing with 'problem' after a worker crash",
-  "reason": "Live Core 2c1c67c: 21 of ~44 turns auto-resumed after worker 332fadd7's LeaseLost failed with error 'problem' (str of KeyError). The ledger appends a step's started intent before the broker creates its ToolCall; a crash between the two leaves a 'running' step with no ToolCall, which crash recovery (built only from ToolCall rows) never settles. When the checkpoint later folds that step, _write_checkpoint deletes failure['problem'] after matching None == None and raises. Fix: restart recovery settles intent-only running steps (reads as rerunnable, others as outcome unknown, never as not having happened), _failure_facts classifies a folded running step as outcome_unknown, and the checkpoint only deletes a problem that exists. Selected: the restart recovery lifecycle suite (with two new regression tests that fail on origin/main with the live KeyError) and the checkpoint/compaction suites that exercise _write_checkpoint and _failure_facts.",
-  "exclusions": "Backend-only recovery and ledger change with no UI, settings or API shape change, so no frontend, Playwright, native or LAN Core run. The 20 restart/recovery tests in tests/v3/test_chat.py (-k 'restart or recover') passed locally; the file is not selected whole because test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] is already red on origin/main in CI.",
+  "change_digest": "40f9e89293a8633e7aa750242712a87ee05ba8f1258dda1358cc5d0b9ee0b820",
+  "reviewed_by": "Claude Code, at the operator's request: remove the restart-recovery concurrency cap",
+  "reason": "Live Core: after a worker crash, 44 turns were auto-resumed in one project, and a hardcoded per-worker semaphore of 2 (_AUTOMATIC_RECOVERY_CONCURRENCY), held for each turn's whole lifetime, serialized them behind two multi-hour subagents while provider capacity (60/58) sat mostly free. The semaphore is removed; recovered turns use ordinary provider admission and, although they resume in a running status, now wait out host-load pressure like new queued turns (admit(automatic_recovery=True)). Selected: the admission cleanup suite holding the changed and new tests, restart recovery lifecycle, async recovery, host load and shutdown admission suites.",
+  "exclusions": "No UI, settings, or API shape change, so no frontend, Playwright, settings-assistant or LAN Core run: the path only runs when an execution worker dies with durable provider turns, which a disposable LAN Core cannot produce through operator entry points; the new tests drive start_provider_turn(automatic_recovery=True) and ProviderScheduler.admit directly. Broader chat suites are not selected because only the recovery admission path changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 49,
+    "python": 62,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_async_admission_cleanup.py",
     "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_midturn_compaction.py",
-    "tests/v3/test_tool_history_memory.py",
-    "tests/v3/test_turn_prompt_cache.py"
+    "tests/v3/test_async_recovery.py",
+    "tests/v3/test_host_load.py",
+    "tests/v3/test_shutdown_admission.py"
   ],
   "frontend": [],
   "native": [],
