@@ -456,6 +456,16 @@ def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
     assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
 
 
+def test_product_search_finds_work_stages_and_their_butler_tools(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    define = search_product_knowledge("How do I define Work stages for a project?")
+    assert any("nebula.work.set_work_stages" in str(item["text"]) for item in define)
+    gaps = search_product_knowledge(
+        "Which projects are missing a stage on All projects?"
+    )
+    assert any("Missing a stage" in str(item["text"]) for item in gaps)
+
+
 def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

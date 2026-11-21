@@ -28,7 +28,7 @@ describe("assistant app destinations", () => {
   });
 
   it("resolves every listed route with the selected project and preserves encoded IDs", () => {
-    expect(assistantDestinations).toHaveLength(23);
+    expect(assistantDestinations).toHaveLength(24);
     expect(destinationToOpen("open Butler scheduled activity")?.path).toBe("/settings#butler-oversight");
     expect(new Set(assistantDestinations.map((entry) => entry.id)).size).toBe(assistantDestinations.length);
     for (const destination of assistantDestinations) {
