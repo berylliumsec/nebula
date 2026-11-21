@@ -1,42 +1,26 @@
 {
-  "change_digest": "caf454e36603c7a42a22f7c0d793a201108fe9b8b182cb164b434a5641ac4198",
-  "reviewed_by": "Claude Code, building the operator-approved Butler goal board mockup (Figma tVEa0PXZaa7H4ZLflwgcb7, node 208:3)",
-  "reason": "The Butler mode status board now lists goal chats only, in Active, Idle and Completed sections per project. GET /butler/board selects chat_goals rows by kind and project, joins their chats by ID, returns exact section counts in total and per project, pages within a section (section=, project_id=; state=idle still pages Idle), reads pending turns from the status index and each Active chat's newest turn with one backward index step, and encodes its body once for the ETag and response. Selected: the board's real-Core API suites (test_runtime_global_project_reads.py, test_butler_goal_chat_proposals.py), the brief, file-attribution and polling-cost suites that share butler_board helpers, chat_turn_headers and conditional_reads, the Butler mode product-help tests by node ID including the new goal-sections check, the board's unit and component tests, and the butler-mode real-Core LAN journey in desktop, compact, Chromium 390 and WebKit 390.",
-  "exclusions": "tests/v3/test_product_knowledge.py is selected by node ID: test_product_search_finds_headless_core_and_paired_butler_cli already fails on pristine origin/main. No other surface reads /butler/board (git grep across ui/ and src/). The Butler workflow registry is unchanged: no UI API call signature changed (the check still reports the same 2 unreviewed signatures as main). Other butler-mode viewports (320, 430) and unrelated Playwright areas are not selected.",
+  "change_digest": "e2c135621d229566198d4290614808f142a4cbb84eed56569596c919826d8201",
+  "reviewed_by": "Claude Code, after diagnosing deployment_receipts sequential scans on live Core (independently validated by a fresh subagent)",
+  "reason": "Migration 0055 adds ix_deployment_receipt_action_time (action, occurred_at_ms) and the matching model index, so the supervisor admission reconcile's api.promoted and project.quiesced lookups (about once a second) stop reading the whole deployment_receipts table. Selected: the new migration test (SQLite + PostgreSQL: rows saved before the index are found, the Postgres plan uses the index instead of a sequential scan, downgrade drops only the index), test_runtime_bundle.py for the reviewed compatibility head and migration-tree digest, and test_storage_open_rows.py as the neighbouring index-only migration test. ci.yml adds the new test to the selected-PostgreSQL gates so its Postgres variant runs.",
+  "exclusions": "No API, UI, setting or operator workflow changes, so no frontend, Playwright or LAN-instance journey applies; product help and settings assistant are unaffected. Query code is unchanged, so the runtime admission and retirement suites are not selected. Behaviour on live data was checked separately (57 api.promoted and 90 project.quiesced rows out of 180k).",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 55,
-    "frontend": 21,
+    "python": 15,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_global_project_reads.py",
-    "tests/v3/test_butler_goal_chat_proposals.py",
-    "tests/v3/test_chat_brief.py",
-    "tests/v3/test_file_attribution.py",
-    "tests/v3/test_chat_polling_cost.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_board_goal_sections",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
+    "tests/v3/test_deployment_receipt_index.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_storage_open_rows.py"
   ],
-  "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/butlerThreads.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }
