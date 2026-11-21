@@ -500,8 +500,8 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
             "line_count": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 200,
-                "description": "Maximum 200 lines; follow continuation_cursor for more.",
+                "maximum": 400,
+                "description": "Maximum 400 lines and 8 KiB per page; follow continuation_cursor for more.",
             },
             "continuation_cursor": {"type": "string", "maxLength": 4096},
         },
@@ -16762,8 +16762,10 @@ class HarnessRuntimeService:
                             f"{actual_name}. "
                             + "Raw stdout/stderr are captured as immutable artifacts. The "
                             "result is a nebula.tool-result/v2 receipt. Use its "
-                            "complete redacted output_preview when present; otherwise "
-                            "inspect with tool_output.search or tool_output.read. Nebula supplies "
+                            "redacted output_preview when present; a partial one shows "
+                            "only the head and tail, so read its omitted lines with "
+                            "tool_output.read. Otherwise inspect with "
+                            "tool_output.search or tool_output.read. Nebula supplies "
                             "idempotency internally; never add idempotency_key or _meta."
                             + foreground_note
                         )[:10_000],

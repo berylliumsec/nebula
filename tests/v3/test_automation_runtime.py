@@ -2869,6 +2869,53 @@ async def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
     ).output_preview == []
 
 
+async def test_large_text_command_output_gets_a_partial_preview(tmp_path):
+    from types import SimpleNamespace
+
+    from nebula.v3.tool_results import MAX_EXCERPT_BYTES, model_result_bytes
+
+    manager, store, artifacts, engagement, _ = await runtime(tmp_path)
+    raw = b"".join(b"row %05d ok\n" % n for n in range(1, 5_001)) + (
+        b"done: token=abcdefghijklmnop\n"
+    )
+    out = await store.create(
+        artifacts.put_bytes(
+            raw,
+            engagement_id=engagement.id,
+            filename="stdout",
+            media_type="text/plain",
+        )
+    )
+    execution = await store.create(
+        CommandExecution(
+            engagement_id=engagement.id,
+            session_id="session",
+            process_id="process",
+            command="synthetic fixture only",
+            command_sha256="a" * 64,
+            runtime_digest="sha256:" + "b" * 64,
+            policy_revision=1,
+            status=CommandExecutionStatus.COMPLETED,
+            exit_code=0,
+            stdout_artifact_id=out.id,
+            observed_stdout_bytes=out.size,
+        )
+    )
+    receipt = await AutomationBroker(
+        manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
+    )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
+
+    (preview,) = receipt.output_preview
+    assert preview.artifact_id == out.id and preview.partial
+    assert preview.text.startswith("row 00001 ok\n")
+    assert preview.text.endswith("done: token=[REDACTED]\n")
+    assert preview.total_lines == 5_001
+    assert preview.omitted is not None and preview.omitted.start_line > 1
+    assert "tool_output.read" in receipt.next_actions
+    assert receipt.warnings == ["Process output is available through artifact tools."]
+    assert model_result_bytes(receipt.as_model_result()) <= MAX_EXCERPT_BYTES
+
+
 async def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
     async def scenario():
         manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)

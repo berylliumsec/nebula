@@ -6,6 +6,7 @@ from .async_utils import resolve_workspace
 
 from copy import deepcopy
 
+import asyncio
 import json
 import re
 from collections.abc import Mapping
@@ -50,13 +51,15 @@ from .providers import ModelProvider
 from .storage import NebulaStore, StoreTransaction
 from .tool_results import (
     ArtifactKind,
+    MAX_TOOL_OUTPUT_READ_LINES,
+    ToolOutputPreview,
     ToolResultReceipt,
     ToolResultStatus,
     ToolTimingReceipt,
     ToolOutputService,
     WorkspaceOutputService,
     artifact_ref,
-    small_output_preview,
+    command_output_preview,
 )
 from .research_results import ResearchResultService
 from .tools import (
@@ -188,7 +191,7 @@ def command_specs(
         ToolSpec(
             name="tool_output.read",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Read a bounded redacted excerpt from one tool artifact. Use continuation_cursor to resume within a long line; starting_line remains available for line-based reads.",
+            description="Read a bounded redacted excerpt (up to 400 lines and 8 KiB) from one tool artifact. Use continuation_cursor to resume within a long line; starting_line remains available for line-based reads.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -197,7 +200,11 @@ def command_specs(
                         "description": "Artifact ID from an authorized tool result receipt; sha256 is a content digest, not an artifact ID.",
                     },
                     "starting_line": {"type": "integer", "minimum": 1},
-                    "line_count": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "line_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_TOOL_OUTPUT_READ_LINES,
+                    },
                     "continuation_cursor": {"type": "string", "maxLength": 4096},
                 },
                 "required": ["artifact_id"],
@@ -875,52 +882,58 @@ class AutomationBroker:
             except OSError:
                 # diagnostic-expected: optional error hint; the original failed receipt remains visible.
                 pass  # The original receipt and artifact reference remain authoritative.
-        preview = (
-            []
-            if running
-            else small_output_preview(
-                self.output_service.artifact_store, stream_artifacts
-            )
-        )
-        return ToolResultReceipt(
-            tool_call_id=receipt_call_id,
-            tool_name=name,
-            tool_version="1",
-            process_id=execution.process_id,
-            status=status,
-            exit_code=execution.exit_code,
-            summary=(
-                "Command failed: some files were unreadable. Partial output is preserved. Use workspace.search for project-file inspection; the container user may differ from the linked folder owner."
-                if unreadable
-                else f"Process is running with id {execution.process_id}"
-                if running
-                else f"Command finished with status {execution.status.value}"
-            ),
-            timing=ToolTimingReceipt(
-                started_at=execution.started_at.isoformat(),
-                completed_at=(
-                    execution.completed_at.isoformat()
-                    if execution.completed_at is not None
-                    else None
+
+        def build(preview: list[ToolOutputPreview]) -> ToolResultReceipt:
+            complete = bool(preview) and not any(item.partial for item in preview)
+            return ToolResultReceipt(
+                tool_call_id=receipt_call_id,
+                tool_name=name,
+                tool_version="1",
+                process_id=execution.process_id,
+                status=status,
+                exit_code=execution.exit_code,
+                summary=(
+                    "Command failed: some files were unreadable. Partial output is preserved. Use workspace.search for project-file inspection; the container user may differ from the linked folder owner."
+                    if unreadable
+                    else f"Process is running with id {execution.process_id}"
+                    if running
+                    else f"Command finished with status {execution.status.value}"
                 ),
-            ),
-            artifacts=refs,
-            output_preview=preview,
-            truncated=execution.stdout_truncated or execution.stderr_truncated,
-            incomplete=running or unreadable,
-            warnings=(
-                ["Process output is available through artifact tools."]
-                if refs and not preview
-                else []
-            ),
-            next_actions=(
-                [PROCESS_IO_NAME]
-                if running
-                else []
-                if preview
-                else ["tool_output.search", "tool_output.read"]
-            ),
+                timing=ToolTimingReceipt(
+                    started_at=execution.started_at.isoformat(),
+                    completed_at=(
+                        execution.completed_at.isoformat()
+                        if execution.completed_at is not None
+                        else None
+                    ),
+                ),
+                artifacts=refs,
+                output_preview=preview,
+                truncated=execution.stdout_truncated or execution.stderr_truncated,
+                incomplete=running or unreadable,
+                warnings=(
+                    ["Process output is available through artifact tools."]
+                    if refs and not complete
+                    else []
+                ),
+                next_actions=(
+                    [PROCESS_IO_NAME]
+                    if running
+                    else []
+                    if complete
+                    else ["tool_output.search", "tool_output.read"]
+                ),
+            )
+
+        if running:
+            return build([])
+        preview = await asyncio.to_thread(
+            command_output_preview,
+            self.output_service.artifact_store,
+            stream_artifacts,
+            lambda candidate: build(candidate).as_model_result(),
         )
+        return build(preview)
 
 
 class CompositeBroker:

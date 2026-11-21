@@ -55,7 +55,10 @@ from .tool_results import (
     MAX_GENERATED_BYTES,
     MAX_GENERATED_FILES,
     MAX_MODEL_ARTIFACT_REFS,
+    MAX_TOOL_OUTPUT_READ_LINES,
+    DEFAULT_TOOL_OUTPUT_READ_LINES,
     ParserState,
+    ToolOutputPreview,
     ToolParserReceipt,
     ToolResultStatus,
     ToolTimingReceipt,
@@ -66,7 +69,7 @@ from .tool_results import (
     WebResultObservation,
     WorkspaceOutputService,
     artifact_ref,
-    small_output_preview,
+    command_output_preview,
     bytes_are_searchable,
 )
 
@@ -1458,31 +1461,44 @@ class StoreToolEvidenceRecorder:
             warnings.append(
                 f"{warning_count - len(warnings)} additional warnings are available in execution diagnostics"
             )
-        preview = small_output_preview(self.artifact_store, stream_artifacts)
-        receipt = ToolResultReceipt(
-            tool_call_id=call.id,
-            tool_name=spec.name,
-            tool_version=spec.version,
-            status=status,
-            exit_code=result.exit_code,
-            summary=_compact_tool_summary(result, status),
-            observations=_compact_tool_observations(result),
-            timing=ToolTimingReceipt(
-                started_at=result.execution.get("started_at"),
-                completed_at=result.execution.get("completed_at"),
-                duration_seconds=result.execution.get("duration_seconds"),
-            ),
-            artifacts=model_references,
-            output_preview=preview,
-            next_actions=[] if preview else ["tool_output.search", "tool_output.read"],
-            truncated=truncated,
-            incomplete=incomplete,
-            parser=ToolParserReceipt(
-                state=parser_state,
-                artifact_id=parsed_artifact_id,
-                contract=spec.parser_contract,
-            ),
-            warnings=warnings,
+
+        def build_receipt(preview: list[ToolOutputPreview]) -> ToolResultReceipt:
+            complete = bool(preview) and not any(item.partial for item in preview)
+            return ToolResultReceipt(
+                tool_call_id=call.id,
+                tool_name=spec.name,
+                tool_version=spec.version,
+                status=status,
+                exit_code=result.exit_code,
+                summary=_compact_tool_summary(result, status),
+                observations=_compact_tool_observations(result),
+                timing=ToolTimingReceipt(
+                    started_at=result.execution.get("started_at"),
+                    completed_at=result.execution.get("completed_at"),
+                    duration_seconds=result.execution.get("duration_seconds"),
+                ),
+                artifacts=model_references,
+                output_preview=preview,
+                next_actions=(
+                    [] if complete else ["tool_output.search", "tool_output.read"]
+                ),
+                truncated=truncated,
+                incomplete=incomplete,
+                parser=ToolParserReceipt(
+                    state=parser_state,
+                    artifact_id=parsed_artifact_id,
+                    contract=spec.parser_contract,
+                ),
+                warnings=warnings,
+            )
+
+        receipt = build_receipt(
+            await asyncio.to_thread(
+                command_output_preview,
+                self.artifact_store,
+                stream_artifacts,
+                lambda candidate: build_receipt(candidate).as_model_result(),
+            )
         )
         receipt_payload = json.dumps(
             receipt.as_model_result(),
@@ -1690,7 +1706,7 @@ def register_artifact_retrieval_tools(
         ),
         (
             "tool_output.read",
-            "Read at most 200 lines and 8 KiB from one authorized tool artifact. Follow continuation_cursor to resume inside a long line.",
+            f"Read at most {MAX_TOOL_OUTPUT_READ_LINES} lines and 8 KiB from one authorized tool artifact. Follow continuation_cursor to resume inside a long line.",
             {
                 "type": "object",
                 "properties": {
@@ -1702,8 +1718,8 @@ def register_artifact_retrieval_tools(
                     "line_count": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 200,
-                        "default": 100,
+                        "maximum": MAX_TOOL_OUTPUT_READ_LINES,
+                        "default": DEFAULT_TOOL_OUTPUT_READ_LINES,
                     },
                     "continuation_cursor": {"type": "string", "maxLength": 4096},
                 },
