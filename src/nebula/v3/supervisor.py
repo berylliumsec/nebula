@@ -22,6 +22,7 @@ from .async_utils import cancel_and_join, finish_cleanup
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
 from .database import (
+    DatabaseBusyError,
     DeploymentHostRow,
     ProjectOwnershipRow,
     ProjectHandoffRow,
@@ -261,6 +262,19 @@ class RuntimeSupervisor:
         @api.exception_handler(CoordinationConflict)
         async def conflict(_request, error):
             return JSONResponse({"detail": str(error)}, status_code=409)
+
+        @api.exception_handler(DatabaseBusyError)
+        async def database_busy(_request, _error):
+            # The pool wait ran out; nothing was decided. Answer like the
+            # execution kernel does, so callers retry instead of seeing a 500.
+            return JSONResponse(
+                {
+                    "detail": "Database capacity is busy. Refresh saved state before retrying.",
+                    "code": "database_busy",
+                },
+                status_code=503,
+                headers={"Retry-After": "1", "Cache-Control": "private, no-store"},
+            )
 
         @api.get(
             "/api/v1/deployment/status",
