@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3 import automation_runtime, tool_results
+from nebula.v3 import automation_runtime, tool_results, workspace_provenance
 from nebula.v3.automation_runtime import (
     AutomationRuntimeManager,
     AutomationPolicyDenied,
@@ -324,6 +324,7 @@ def command_hook(
     name: str = "command-policy",
     block: bool = False,
     inherit_to_descendants: bool = False,
+    events: tuple[str, ...] = ("tool.before", "tool.after"),
 ) -> None:
     directory = workspace / ".agents" / "hooks" / name
     directory.mkdir(parents=True)
@@ -347,7 +348,7 @@ def command_hook(
             {
                 "version": 1,
                 "name": name,
-                "events": ["tool.before", "tool.after"],
+                "events": list(events),
                 "command": ["run.py"],
                 "timeout_seconds": 5,
                 "side_effects": "none",
@@ -472,6 +473,79 @@ async def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_pa
         executions = await store.list_entities(NativeHookExecution)
         assert len(executions) == 4
         assert all(item.owner_id == "chat-1" for item in executions)
+
+    (await scenario())
+
+
+async def test_before_only_tool_hook_takes_no_unfinished_workspace_baseline(
+    tmp_path, monkeypatch
+):
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
+        workspace = tmp_path / "workspaces" / engagement.id
+        log = tmp_path / "command-hooks.jsonl"
+        command_hook(workspace, log, events=("tool.before",))
+        snapshots: list[Path] = []
+        original = workspace_provenance.snapshot
+
+        def counted(path, **kwargs):
+            snapshots.append(path)
+            return original(path, **kwargs)
+
+        monkeypatch.setattr(workspace_provenance, "snapshot", counted)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        await broker.execute(
+            tool_invocation(
+                engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
+            ),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
+        )
+
+        [event] = [json.loads(line) for line in log.read_text().splitlines()]
+        assert event["event"] == "tool.before"
+        receipt = event["workspace_provenance"]
+        assert receipt["schema"] == "nebula.workspace-provenance/v1"
+        assert receipt["actor_id"] == "chat:chat-1"
+        assert receipt["supported"] is False
+        assert receipt["unsupported_reason"] == "no_tool_after_hook"
+        # Nothing would ever finish the baseline, so none is hashed or stored.
+        assert snapshots == []
+        assert (await store.list_entities(WorkspaceProvenanceObservation)) == []
+
+    (await scenario())
+
+
+async def test_after_only_tool_hook_still_receives_a_finished_observation(tmp_path):
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
+        workspace = tmp_path / "workspaces" / engagement.id
+        log = tmp_path / "command-hooks.jsonl"
+        command_hook(workspace, log, events=("tool.after",))
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        await broker.execute(
+            tool_invocation(
+                engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
+            ),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
+        )
+
+        [event] = [json.loads(line) for line in log.read_text().splitlines()]
+        assert event["event"] == "tool.after"
+        receipt = event["workspace_provenance"]
+        assert receipt["unsupported_reason"] != "tool_baseline_is_missing"
+        assert receipt["status"] == "complete"
+        [observation] = await store.list_entities(WorkspaceProvenanceObservation)
+        assert observation.status == "complete"
 
     (await scenario())
 

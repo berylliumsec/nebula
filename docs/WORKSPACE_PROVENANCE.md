@@ -46,12 +46,20 @@ those paths. It does not walk the workspace. Non-Git workspaces and snapshots
 that exceed the 10-second wall-clock budget return an unsupported receipt
 rather than a false or partial attribution. There is no fixed path-count or
 dirty-byte limit. The `unsupported_reason` reports
-`snapshot_time_limit_exceeded:10s` when the budget expires.
+`snapshot_time_limit_exceeded:10s` when the budget expires. Each Core process
+reuses the fingerprint of a dirty file whose path, device, inode, size,
+modification time and change time are unchanged, so repeated snapshots of a
+checkout full of unchanged untracked artifacts read only what changed, and a
+snapshot that ran out of time keeps the files it finished for the next one.
 
 Before/after observations are recorded around selected chat lifecycle hooks and
 automatically discovered `tool.before`/`tool.after` hooks. A chat turn records
 its observation only when a selected hook subscribes to a `chat.turn.*` event;
-tool hooks keep their own per-call observation. Core takes snapshots off its
+tool hooks keep their own per-call observation. A tool call records a
+baseline only when a discovered hook subscribes to `tool.after`, which is the
+only event that can compare against it; this holds for a `tool.after`-only hook
+too. Without one, a `tool.before` hook receives an unsupported receipt with
+`unsupported_reason` `no_tool_after_hook` and Core hashes nothing for the call. Core takes snapshots off its
 event loop, so a slow checkout delays only the turn or tool call it belongs to.
 If another actor's observation overlaps, matching mutations are marked
 uncertain. Hooks must not treat uncertain, unknown, or unsupported paths as

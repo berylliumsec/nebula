@@ -285,6 +285,60 @@ async def test_large_dirty_checkout_has_no_path_byte_or_mutation_ceiling(tmp_pat
     assert completed.attribution["preexisting"][0]["path"] == "large.bin"
 
 
+def test_snapshot_reuses_fingerprints_of_unchanged_dirty_files(tmp_path, monkeypatch):
+    root = _repository(tmp_path)
+    workspace_provenance._FINGERPRINTS.clear()
+    for index in range(3):
+        (root / f"artifact-{index}.bin").write_bytes(b"x" * (index + 1))
+    hashed: list[str] = []
+    original = workspace_provenance._hash_file
+
+    def counted(path, deadline):
+        hashed.append(path.name)
+        return original(path, deadline)
+
+    monkeypatch.setattr(workspace_provenance, "_hash_file", counted)
+
+    first = snapshot(root)
+    assert first.supported
+    assert sorted(hashed) == ["artifact-0.bin", "artifact-1.bin", "artifact-2.bin"]
+
+    hashed.clear()
+    (root / "artifact-1.bin").write_bytes(b"changed")
+    second = snapshot(root)
+
+    # Only the rewritten file is read again; the others reuse their fingerprint.
+    assert hashed == ["artifact-1.bin"]
+    assert second.paths["artifact-0.bin"] == first.paths["artifact-0.bin"]
+    assert second.paths["artifact-1.bin"]["sha256"] != first.paths["artifact-1.bin"]["sha256"]
+    assert second.paths["artifact-1.bin"]["size"] == len(b"changed")
+
+
+def test_timed_out_snapshot_keeps_progress_for_the_next_snapshot(tmp_path, monkeypatch):
+    root = _repository(tmp_path)
+    workspace_provenance._FINGERPRINTS.clear()
+    for index in range(4):
+        (root / f"artifact-{index}.bin").write_bytes(b"y" * 8)
+    budget = {"files": 2}
+    original = workspace_provenance._hash_file
+
+    def limited(path, deadline):
+        if budget["files"] == 0:
+            raise workspace_provenance._SnapshotTimeLimit()
+        budget["files"] -= 1
+        return original(path, deadline)
+
+    monkeypatch.setattr(workspace_provenance, "_hash_file", limited)
+
+    assert not snapshot(root).supported
+    budget["files"] = 2
+    completed = snapshot(root)
+
+    # Two files per attempt are enough because the first attempt's work stays.
+    assert completed.supported
+    assert len(completed.paths) == 4
+
+
 async def test_large_unchanged_checkout_shares_chunks_and_queries_only_compact_index(
     tmp_path, monkeypatch
 ):
