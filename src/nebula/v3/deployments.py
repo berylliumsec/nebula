@@ -67,6 +67,15 @@ from .runtime_coordination import (
 from .process_identity import same_process
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
+# A replaced API keeps serving the requests and streams it already holds for
+# this long. It exceeds the API's 35 s idempotent-acceptance wait, so accepted
+# work commits before the supervisor retires the process; clients reconnect
+# their streams to the promoted API. Its process then has the worker's 5 s
+# graceful shutdown and the 30 s retirement wait to exit.
+API_DRAIN_GRACE_MS = 60_000
+# Past this, a replaced API that is still resident means automatic retirement
+# failed; aggregate health reports it instead of hiding it.
+API_DRAIN_BOUND_MS = 180_000
 EXECUTION_FAILED_RECEIPT = "project.execution_failed"
 _UNFINISHED = ("queued", "running", "uncertain")
 _PENDING_STORAGE_ALERT = "A recorded storage alert has not opened its incident chat yet"
@@ -535,7 +544,9 @@ class DeploymentCoordinator:
             if host.api_runtime_id and host.api_runtime_id != runtime_id:
                 previous = await session.get(RuntimeProcessRow, host.api_runtime_id)
                 if previous is not None:
-                    previous.state = "draining"
+                    # The drain starts now; the supervisor retires the
+                    # previous API once API_DRAIN_GRACE_MS has passed.
+                    previous.state, previous.updated_at_ms = "draining", now
             host.api_runtime_id, host.revision = runtime_id, host.revision + 1
             host.detail = (
                 "API traffic is promoted. Execution owners continue independently."
@@ -2070,7 +2081,11 @@ class DeploymentCoordinator:
             reasons.append(
                 f"Provider turn {running} needs explicit interrupted-effect reconciliation"
             )
-        target = await session.get(RuntimeProcessRow, target_runtime_id)
+        target = (
+            await session.get(RuntimeProcessRow, target_runtime_id)
+            if target_runtime_id is not None
+            else None
+        )
         if target is not None:
             release = await session.get(RuntimeReleaseRow, target.version)
             supported = (
@@ -2705,6 +2720,35 @@ class DeploymentCoordinator:
                 {"runtime_id": identity.runtime_id, "version": identity.version},
             )
 
+    async def drained_apis(self, *, grace_ms: int = API_DRAIN_GRACE_MS) -> list[str]:
+        """Replaced APIs whose drain grace has passed, oldest first.
+
+        Only a promotion moves an API to draining outside shutdown, so these
+        own no project, command or resource; ``begin_retirement`` still
+        rechecks every hold before the process is asked to stop.
+        """
+        async with self.database.session() as session:
+            host = await session.get(DeploymentHostRow, "host")
+            if host is None or host.shutdown_requested:
+                return []
+            now = await self.coordination._clock_ms(session)
+            return list(
+                await session.scalars(
+                    select(RuntimeProcessRow.runtime_id)
+                    .where(
+                        RuntimeProcessRow.role == "api",
+                        RuntimeProcessRow.state == "draining",
+                        RuntimeProcessRow.updated_at_ms <= now - grace_ms,
+                        *(
+                            [RuntimeProcessRow.runtime_id != host.api_runtime_id]
+                            if host.api_runtime_id is not None
+                            else []
+                        ),
+                    )
+                    .order_by(RuntimeProcessRow.updated_at_ms)
+                )
+            )
+
     async def begin_retirement(self, runtime_id: str) -> WorkerIdentity:
         async with self.coordination._write() as session:
             host = await self._host(session)
@@ -2736,6 +2780,54 @@ class DeploymentCoordinator:
                 process_birth=row.process_birth,
                 endpoint=row.endpoint,
             )
+
+    async def mark_process_absent(self, identity: WorkerIdentity) -> bool:
+        """Stop reporting a provably exited execution worker as ready.
+
+        The host calls this when it observed this exact incarnation gone but
+        its retirement is still blocked (its project owner is not yet
+        recovered or released). The row stays resident, so its blockers keep
+        holding retirement, but it is ``unreachable``: never attached, never
+        reported ready. Only the state changes; nothing is replayed or
+        settled here. Returns whether the row changed.
+        """
+        if identity.role != "execution" or same_process(
+            identity.pid, identity.process_birth
+        ):
+            return False
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            row = await session.get(
+                RuntimeProcessRow,
+                identity.runtime_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.role != "execution"
+                or row.state not in {"ready", "starting"}
+                or (row.pid, row.process_birth, row.endpoint, row.version)
+                != (
+                    identity.pid,
+                    identity.process_birth,
+                    identity.endpoint,
+                    identity.version,
+                )
+                or host.api_runtime_id == row.runtime_id
+            ):
+                return False
+            if same_process(identity.pid, identity.process_birth):
+                return False
+            row.state = "unreachable"
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            host.revision += 1
+            await self._receipt(
+                session,
+                "worker.process_absent",
+                identity.model_dump(mode="json"),
+            )
+            return True
 
     async def retired(self, identity: WorkerIdentity) -> None:
         """Called only after the host has verified this exact process is gone."""
@@ -2915,9 +3007,25 @@ class DeploymentCoordinator:
                     )
                 )
             )
+
+            def replaced_api(row: RuntimeProcessRow) -> bool:
+                return (
+                    row.role == "api"
+                    and row.state == "draining"
+                    and not host.shutdown_requested
+                    and row.runtime_id != host.api_runtime_id
+                )
+
+            # A replaced API is expected to wind down, so its lapsing lease
+            # is not a fault until its drain outlives the bound.
             degraded = bool(failures) or any(
                 row.state == "unreachable"
-                or (row.state in _RESIDENT and row.runtime_id not in live_runtimes)
+                or (replaced_api(row) and now - row.updated_at_ms >= API_DRAIN_BOUND_MS)
+                or (
+                    row.state in _RESIDENT
+                    and row.runtime_id not in live_runtimes
+                    and not replaced_api(row)
+                )
                 for row in processes.values()
             )
             return DeploymentStatus(

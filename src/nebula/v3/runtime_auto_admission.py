@@ -1177,6 +1177,45 @@ class RuntimeAutoAdmission:
                 .limit(1)
             )
 
+    async def _release_dead_owner(self, owner: dict) -> bool:
+        """Clear a reconciled dead owner whose project wants no worker.
+
+        The project then starts on demand like any idle project, and its dead
+        process can retire. Returns False when something still needs a
+        worker (a resource to restore, an unfinished transfer); the caller
+        then recovers the project as if it had demand.
+        """
+        from .runtime_coordination import ProjectLease
+        from .runtime_orphan_recovery import release_dead_owner
+
+        try:
+            await release_dead_owner(
+                self.supervisor.coordinator,
+                ProjectLease(**owner),
+                launch_origin=getattr(self.supervisor.host, "launch_origin", None),
+            )
+        except CoordinationConflict as error:
+            # diagnostic-expected: a refused release is recorded below and the project is recovered instead.
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.project_recovery.release_refused",
+                "An idle project's stopped worker left work that needs a "
+                "worker; Core recovers the project instead of releasing it.",
+                outcome="recovering",
+                stage="recovery",
+                metadata={
+                    "entity_id": owner["project_id"],
+                    "kind": "project",
+                    "detail": str(error)[:400],
+                },
+            )
+            return False
+        self._recovery_blocked.pop(owner["project_id"], None)
+        self._recovery_backoff_noted.pop(owner["project_id"], None)
+        await self._clear_hold(owner["project_id"])
+        return True
+
     async def _recovery_target(
         self, owner: dict, version: str, gone: dict
     ) -> tuple[str, int]:
@@ -1594,20 +1633,26 @@ class RuntimeAutoAdmission:
             project_work = project_worker_commands(
                 ProjectOwnershipRow.project_id, ("queued", "running")
             )
-            query = select(ProjectOwnershipRow, project_work).where(
+            demanded = or_(
+                open_chat,
+                pending_chat_start,
+                legacy_chat_start,
+                project_work,
+                # An open project view is demand, as in admission.
+                live_view_lease(ProjectOwnershipRow.project_id, now),
+                # A storage alert recorded before the owner died opens its
+                # incident chat only from a recovered worker.
+                pending_storage_dispatches(
+                    ProjectOwnershipRow.project_id, session.bind.dialect.name
+                ),
+            )
+            # Every expired owner is considered, not only those with demand:
+            # a dead owner of an idle project would otherwise keep its
+            # project unavailable and its dead process resident forever.
+            # Without demand the project is released instead of recovered.
+            query = select(ProjectOwnershipRow, project_work, demanded).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
-                or_(
-                    open_chat,
-                    pending_chat_start,
-                    legacy_chat_start,
-                    project_work,
-                    # A storage alert recorded before the owner died opens its
-                    # incident chat only from a recovered worker.
-                    pending_storage_dispatches(
-                        ProjectOwnershipRow.project_id, session.bind.dialect.name
-                    ),
-                ),
             )
             if self._recovery_cursor is not None:
                 query = query.where(
@@ -1639,7 +1684,7 @@ class RuntimeAutoAdmission:
         # expired lease. Once it is provably unresponsive the host kills it,
         # and the normal dead-owner recovery below runs in this same pass.
         retire_unresponsive = getattr(supervisor.host, "retire_unresponsive", None)
-        expired = {owner.runtime_id for owner, _work in owners}
+        expired = {owner.runtime_id for owner, _work, _demanded in owners}
         for worker in discovered:
             if (
                 retire_unresponsive is None
@@ -1664,7 +1709,7 @@ class RuntimeAutoAdmission:
                     stage="recovery",
                     metadata={"entity_id": worker.runtime_id, "kind": "runtime"},
                 )
-        for owner, has_project_work in owners:
+        for owner, has_project_work, has_demand in owners:
             worker = observed.get(owner.runtime_id)
             if worker is None:
                 continue
@@ -1673,11 +1718,16 @@ class RuntimeAutoAdmission:
                 if blocked[2] > now:
                     continue
             try:
-                project = await supervisor.store.get(Engagement, owner.project_id)
-                if project.status == "archived" and not has_project_work:
-                    # As in admission: an archived project's chats keep no
-                    # worker, but its delete or unarchive request does.
-                    continue
+                # As in admission: an archived project's chats keep no
+                # worker, but its delete or unarchive request does. A project
+                # without demand is not read: host work has no project entity.
+                idle = not has_demand or (
+                    not has_project_work
+                    and (
+                        await supervisor.store.get(Engagement, owner.project_id)
+                    ).status
+                    == "archived"
+                )
                 expected_owner = {
                     "project_id": owner.project_id,
                     "runtime_id": owner.runtime_id,
@@ -1728,6 +1778,8 @@ class RuntimeAutoAdmission:
                     "reconcile_project",
                     {"expected_owner": expected_owner},
                 )
+                if idle and await self._release_dead_owner(expected_owner):
+                    continue
                 target_runtime_id, attempt = await self._recovery_target(
                     expected_owner,
                     target_version or worker.identity.version,
