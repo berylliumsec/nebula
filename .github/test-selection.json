@@ -1,42 +1,42 @@
 {
-  "change_digest": "ebc321ecddbc53cc786746425a52d4dc827b7dcba97f908538b2081bda1b5057",
-  "reviewed_by": "Claude Code, at the operator's request: stop the provider routing loop from rewording commands a project hook keeps denying",
-  "reason": "Live Core logged 844 native hook denials across 326 provider turns, up to 16 in one turn: the search-routing hook blocks shell find/grep/tree and the model rewords the command, while every call that runs resets the routing deviation count. A hook manifest can now declare route_to tool names; the denial names them (problem, next_action, use_instead), and without route_to the text is unchanged. The routing loop counts completed denials per hook per turn (serial and parallel waves) and the third denial by the same hook ends routing through the existing deviation-limit path. Selected: the new focused tests, the routing/tolerance and tool-loop suites, the native hook suite, the seven project-hook tests of the automation broker suite by node ID (the fixture hook now declares route_to), chat, and the other tests/v3 files matching _ROUTING_DEVIATION_LIMIT, deviation or NativeHook.",
-  "exclusions": "No UI or settings change, so no frontend, Playwright or LAN Core run. tests/v3/test_universal_agent_tools.py is excluded (it matched only the NativeHook grep and has 17 failures already on origin/main from un-awaited coroutine rot); test_automation_runtime.py is selected only for its project-hook tests, since 4 of its host-mode and network-scope tests already fail on origin/main. test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] also fails on pristine origin/main. CI run 44859045248 then showed two more environment-only failures: test_chat.py::test_runtime_switch_to_equal_limits_needs_no_confirmation_over_target[postgresql] (NEBULA_V3_DB_ADMIN_RESERVE unset in CI; also red on main) and test_automation_runtime.py::test_inherited_shared_search_hook_enforces_real_host_run_command_and_process_io (needs the protected host memory runner, absent in CI). test_runtime_orphan_recovery.py (which only made CI start PostgreSQL; this change does not touch recovery) and that host-runner test are no longer selected.",
+  "change_digest": "caf454e36603c7a42a22f7c0d793a201108fe9b8b182cb164b434a5641ac4198",
+  "reviewed_by": "Claude Code, building the operator-approved Butler goal board mockup (Figma tVEa0PXZaa7H4ZLflwgcb7, node 208:3)",
+  "reason": "The Butler mode status board now lists goal chats only, in Active, Idle and Completed sections per project. GET /butler/board selects chat_goals rows by kind and project, joins their chats by ID, returns exact section counts in total and per project, pages within a section (section=, project_id=; state=idle still pages Idle), reads pending turns from the status index and each Active chat's newest turn with one backward index step, and encodes its body once for the ETag and response. Selected: the board's real-Core API suites (test_runtime_global_project_reads.py, test_butler_goal_chat_proposals.py), the brief, file-attribution and polling-cost suites that share butler_board helpers, chat_turn_headers and conditional_reads, the Butler mode product-help tests by node ID including the new goal-sections check, the board's unit and component tests, and the butler-mode real-Core LAN journey in desktop, compact, Chromium 390 and WebKit 390.",
+  "exclusions": "tests/v3/test_product_knowledge.py is selected by node ID: test_product_search_finds_headless_core_and_paired_butler_cli already fails on pristine origin/main. No other surface reads /butler/board (git grep across ui/ and src/). The Butler workflow registry is unchanged: no UI API call signature changed (the check still reports the same 2 unreviewed signatures as main). Other butler-mode viewports (320, 430) and unrelated Playwright areas are not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 372,
-    "frontend": 0,
+    "python": 55,
+    "frontend": 21,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_hook_denial_routing.py",
-    "tests/v3/test_chat_routing_tolerance.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_malformed_tool_call_feedback.py",
-    "tests/v3/test_specialist_routing_tolerance.py",
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
-    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
-    "tests/v3/test_automation_runtime.py::test_inherited_blocking_before_hook_denies_nested_workspace_command",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_broad_search_and_allows_known_file",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_shell_stdin_search_before_process_write",
-    "tests/v3/test_automation_runtime.py::test_inherited_shared_search_hook_blocks_process_write_without_parent_context",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_startup_unreadable_rows.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_api.py"
+    "tests/v3/test_runtime_global_project_reads.py",
+    "tests/v3/test_butler_goal_chat_proposals.py",
+    "tests/v3/test_chat_brief.py",
+    "tests/v3/test_file_attribution.py",
+    "tests/v3/test_chat_polling_cost.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_board_goal_sections",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/pages/butlerThreads.test.ts",
+    "ui/src/pages/ButlerModePage.board.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
   "checks": []
 }
