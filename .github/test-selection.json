@@ -1,32 +1,30 @@
 {
-  "change_digest": "7fd897d932630ce7d0ddb9f2b0445acdd44829e3c1ccbbba65c1d50f59cec739",
-  "reviewed_by": "Claude Code, at the operator's request: Butler mode's send button should become Stop while Butler is working",
-  "reason": "In Butler mode, replying to a thread Butler is still answering showed a send button that only refused ('Butler is still answering this thread'). Like a normal chat, the button is now Stop response while the composer targets the open thread and Butler is answering it; it cancels that thread's turn through Core (cancelChatTurn, already linked in the workflow registry; the turn ID comes from the live activity, Core's thread list, or the pending turn) and re-reads the thread. With New thread selected the button still starts a parallel thread. Selected: the real-Core Butler mode journey (opening the still-working held thread now asserts Stop response replaces Send reply) and the product-knowledge tests for the guide sentence.",
-  "exclusions": "The journey does not click Stop: the held thread must finish later in the same journey, and the stub model holds only that one prompt. Stop calls the same Core cancel endpoint the board card's Stop already uses. No Core change; the journey was not run locally (CI runs it).",
+  "change_digest": "d8e2b5aace23f995afbc641681298855d66e29d2f29dc95bd3efee88dd192b9a",
+  "reviewed_by": "Claude Code, at the operator's request: a provider goal should wait for its working subagents instead of running turns that poll them",
+  "reason": "After a provider goal turn completed, _continue_running_goal_after_turn started the next goal turn even while the goal's subagents were still working, so the parent ran full-context turns that only polled them (live Core: 321 wait_subagents and 291 list_subagents calls in 3 days). It now settles the goal's active time and returns when has_working_subagents is true, as the harness path and the idle reconciler already do; the subagent report delivery path (deliver_pending -> _continue_goal) resumes the goal once every subagent has finished. Goals with no working subagents continue as before. Selected: the subagent and subagent-lifecycle suites (new regression test: a running provider goal with two working subagents starts no continuation after its turn, and continues exactly once when both finish together), the goal suites, the goal-continuation settings test, the provider stream tests that stub the continuation, and test_chat.py for the changed module.",
+  "exclusions": "Harness goal continuation is unchanged and its suites are not selected. No UI, settings or operator-visible control changes, so no browser, settings-assistant or LAN Core validation applies; the behaviour is covered by the real ChatService with a scripted provider.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 236,
     "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_archiving_and_deleting_butler_threads",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_thread_activity"
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_subagent_lifecycle.py",
+    "tests/v3/test_runtime_chat_stream.py",
+    "tests/v3/test_subagent_choice_sticks.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_goal_execution_waiting.py",
+    "tests/v3/test_chat.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
-  ],
+  "playwright": [],
   "checks": []
 }
