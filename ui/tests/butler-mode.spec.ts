@@ -417,6 +417,16 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       expect(stub.prompts().find(prompt => prompt.endsWith(PROMPTS.about))).toContain(`About the chat "${workTitle}" (conversation ${workId} in this project)`);
       const aboutThread = (await (await api.get("butler/threads")).json() as Threads).items.find(item => item.title === PROMPTS.about);
       expect(aboutThread?.project.id).toBe(bounty);
+      // Asking about the same chat again quotes it into the open thread (same project).
+      await showBoard(page);
+      if (!await brief.isVisible()) await card.getByRole("button", {name: new RegExp(titlePattern)}).click();
+      await brief.getByRole("button", {name: "Ask Butler about this"}).click();
+      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true");
+      await composer.fill("QUOTE-FOLLOW-UP Is it still running?");
+      await page.getByRole("button", {name: "Send reply"}).click();
+      await expect.poll(() => stub.prompts().find(prompt => prompt.endsWith("QUOTE-FOLLOW-UP Is it still running?")) ?? "", {timeout: 60_000})
+        .toContain(`About the chat "${workTitle}" (conversation ${workId} in this project)`);
+      expect(((await (await api.get("butler/threads")).json()) as Threads).items.filter(item => item.project.id === bounty).map(item => item.session_id)).toEqual([aboutThread!.session_id]);
 
       // Stop from the brief; the board shows the change only after Core reports it.
       await showBoard(page);
@@ -494,7 +504,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named; Stop ended the chat's response and the board dropped the card after Core reported it idle; the working thread showed the chat Activity card, live and again from Core after a reload; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response and the board dropped the card after Core reported it idle; the working thread showed the chat Activity card, live and again from Core after a reload; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }

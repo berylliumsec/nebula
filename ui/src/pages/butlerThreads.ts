@@ -1,5 +1,5 @@
 import { assistantTurnOptions } from "../components/nebulaAssistantActions";
-import type { ButlerBoardItem } from "../api/butlerBoard";
+import type { ButlerBoardItem, ButlerThread } from "../api/butlerBoard";
 import type { ChatAssistantConfig, ChatCompletionRequest, HarnessProfile, ProviderHealth } from "../api/types";
 
 /**
@@ -96,6 +96,15 @@ export function butlerQuestionAbout(item: ButlerBoardItem | undefined, prompt: s
   if (!item) return prompt;
   const status = item.now ? ` Current status: ${item.now}.` : "";
   return `About the chat "${item.title}" (conversation ${item.sessionId} in this project).${status}\n\n${prompt}`;
+}
+
+/**
+ * Where "Ask Butler about this" sends its question: into the open thread when
+ * that thread works in the chat's project and has finished answering (a thread
+ * acts only inside its own project), otherwise into a new thread there.
+ */
+export function askAboutTarget(openThread: Pick<ButlerThread, "project" | "state"> | undefined, item: Pick<ButlerBoardItem, "project">, answering = false): "reply" | "new" {
+  return openThread && openThread.project.id === item.project.id && openThread.state !== "working" && !answering ? "reply" : "new";
 }
 
 /**

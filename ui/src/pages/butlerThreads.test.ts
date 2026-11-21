@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatAssistantConfig, HarnessProfile, ProviderHealth } from "../api/types";
-import { butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, filterProjectPicker, projectPickerGroups } from "./butlerThreads";
+import { askAboutTarget, butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, filterProjectPicker, projectPickerGroups } from "./butlerThreads";
 
 const config: ChatAssistantConfig = {
   backend: "provider",
@@ -122,5 +122,19 @@ describe("Butler mode search", () => {
     expect(filterBoardItems(items, "DEEPSEEK").map((item) => item.title)).toEqual(["Run exact-build simulation"]);
     expect(filterBoardItems(items, "sim lab crash").map((item) => item.title)).toEqual(["Triage crashes"]);
     expect(filterBoardItems(items, "nothing")).toEqual([]);
+  });
+});
+
+describe("askAboutTarget", () => {
+  const research = { project: { id: "research", name: "Research" } };
+  it("quotes into the open thread when it works in the chat's project and is not answering", () => {
+    expect(askAboutTarget({ ...research, state: "idle" }, research)).toBe("reply");
+    expect(askAboutTarget({ ...research, state: "waiting" }, research)).toBe("reply");
+  });
+  it("starts a new thread otherwise", () => {
+    expect(askAboutTarget(undefined, research)).toBe("new");
+    expect(askAboutTarget({ project: { id: "other", name: "Other" }, state: "idle" }, research)).toBe("new");
+    expect(askAboutTarget({ ...research, state: "working" }, research)).toBe("new");
+    expect(askAboutTarget({ ...research, state: "idle" }, research, true)).toBe("new");
   });
 });
