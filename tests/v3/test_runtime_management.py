@@ -1,12 +1,13 @@
 """Management envelopes keep auth, replay and post-response shutdown on the host."""
 
 import asyncio
+import json
 
 import httpx
 import pytest
 from sqlalchemy import func, select
 
-from nebula.v3.database import DeploymentOperationRow
+from nebula.v3.database import DatabaseBusyError, DeploymentOperationRow
 from nebula.v3.process_identity import same_process
 from nebula.v3.runtime_coordination import CoordinationConflict
 from tests.v3.test_release_store import bundle
@@ -413,3 +414,20 @@ async def test_handoff_receipt_carries_only_its_project_row(recovery, monkeypatc
     assert receipt["state"] == "succeeded", receipt
     assert receipt["result"]["project"]["project_id"] == "project-7"
     assert "projects" not in receipt["result"]
+
+
+async def test_supervisor_answers_busy_database_with_a_retryable_503(recovery):
+    # Deployment status timed out its pool wait during live handoffs and the
+    # supervisor, with no handler for DatabaseBusyError, answered 500. The
+    # handler is called directly: replacing the coordinator would also feed
+    # the error to the supervisor's background loops that read status.
+    # The fixture's process only exits cleanly once its client has been used.
+    healthy = await recovery.client.get("/api/v1/deployment/status", headers=AUTH)
+    assert healthy.status_code == 200
+    handler = recovery.root.app.app.exception_handlers[DatabaseBusyError]
+    response = await handler(
+        None, DatabaseBusyError("Database connection capacity is busy")
+    )
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+    assert json.loads(response.body)["code"] == "database_busy"
