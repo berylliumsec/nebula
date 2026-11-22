@@ -24,7 +24,7 @@ and then pausing them one by one. It did not hold:
 |---|---|
 | Place | `POST /api/v1/engagements/{project}/hold` with `reason`, optional `deployment_id` (repeating it returns the same hold) and `grace_seconds` (default 180). Every running goal is paused with the hold's mark (`metadata.project_hold_id`). |
 | Holding | No chat turn starts in the project. Operator and API sends, resumes, goal starts and resumes answer 409 with code `project_held`. Background producers defer without failing anything. Running turns may finish until `grace_until`. |
-| Grace ends | Core's 15-second chat pass stops every turn that is still active, using the same stop an operator uses, and records each stop. |
+| Grace ends | Core's 15-second chat pass stops every turn that is still active, using the same stop an operator uses, and records each stop. Stops run in the background, up to 8 at a time and outside the project's lock, because each one waits for its turn's in-flight step and subagents to unwind. Placing, releasing and reading a hold never stop turns and never wait for a stop. |
 | Held | Once no turn is active the hold is `held` and `held_at` is set. `GET .../hold` reports `held`, `active_turns` and `running_goals`. |
 | Release | `POST .../hold/{hold}/release`. Core resumes exactly the goals carrying this hold's mark and starts their work. Goals paused before the hold stay paused. A goal that cannot resume (for example, its budget is spent) stays paused without the mark, so its operator can resume it normally. Deferred subagent reports and queued follow-ups are woken. |
 
@@ -55,7 +55,7 @@ progress and keeps starting new work in the same project. A chat hold is a
 
 | Step | What Core does |
 |---|---|
-| Place | `POST /api/v1/engagements/{project}/holds` with `session_ids` or `all_active: true`, optional `reason` and `grace_seconds`. One hold per chat, all sharing a returned `batch_id`. `all_active` holds the top chat of every chat with a running goal or active turn. Holding a held chat again returns its hold. No confirmation step. |
+| Place | `POST /api/v1/engagements/{project}/holds` with `session_ids` or `all_active: true`, optional `reason` and `grace_seconds`. One hold per chat, all sharing a returned `batch_id`. `all_active` holds the top chat of every chat with a running goal or active turn. Holding a held chat again returns its hold. No confirmation step. The request returns once the holds exist and their goals are paused; it does not wait for running turns to stop. |
 | Coverage | The chat and every subagent or goal-child chat beneath it (walking `parent_session_id` through those links only). Forks and chats started later are not covered, so new chats and goals start normally. |
 | Holding | The same contract as a project hold, limited to covered chats: their goals pause with the hold's mark (children before parents, so release restores both), their turns get the grace period and are then stopped, and their subagent reports, follow-ups, schedules and callbacks wait. Sending to a held chat answers 409 `project_held`. |
 | Read | `GET .../hold` lists active `chat_holds`; `GET /api/v1/chat-sessions/{id}/hold` says whether a chat is held and by which hold. |

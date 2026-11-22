@@ -506,3 +506,93 @@ async def test_a_held_goal_keeps_its_running_turn_until_the_grace_ends(tmp_path)
     assert resumed.status == ChatGoalStatus.RUNNING
     assert HOLD_MARKER not in resumed.metadata
     await ChatService._assert_execution_owner(worker_view, prepared)
+
+
+async def _routing_turns(store, session_ids):
+    turns = {}
+    for session_id in session_ids:
+        if session_id != "session":
+            await _chat(store, session_id)
+        turns[session_id] = await store.create(
+            ChatTurn(
+                engagement_id="project",
+                session_id=session_id,
+                provider_profile_id="provider",
+                model="model",
+                status=ChatTurnStatus.ROUTING,
+            )
+        )
+    return turns
+
+
+async def test_placing_and_reading_holds_never_stop_turns(tmp_path):
+    """Placement and reads return at once; only Core's pass stops turns.
+
+    A stop waits for its turn to unwind. When placement stopped turns inside
+    the request, holding 70 busy chats kept the project's command lane busy
+    for 41 minutes and every read of the hold timed out.
+    """
+
+    store, _goals, service, recorder = await _setup(tmp_path)
+    turns = await _routing_turns(store, ["session", "other"])
+
+    _batch, holds = await service.place_chats(
+        "project", ChatHoldPlace(session_ids=["session", "other"], grace_seconds=0)
+    )
+    await service.view("project")
+    await service.chat_view("session")
+    assert recorder.provider_stops == []
+    assert {hold.status for hold in holds} == {"holding"}
+
+    await service.tick("project")
+    assert sorted(recorder.provider_stops) == sorted(t.id for t in turns.values())
+
+
+async def test_a_pass_stops_turns_together_and_reads_do_not_wait(tmp_path):
+    import anyio
+
+    store, _goals, service, _recorder = await _setup(tmp_path)
+    turns = await _routing_turns(store, ["session", "a", "b", "c"])
+    await service.place_chats(
+        "project",
+        ChatHoldPlace(session_ids=["session", "a", "b", "c"], grace_seconds=0),
+    )
+    started: list[str] = []
+    release = anyio.Event()
+
+    async def slow_stop(turn_id: str) -> None:
+        started.append(turn_id)
+        await release.wait()
+        turn = await store.get(ChatTurn, turn_id)
+        await store.update(
+            ChatTurn,
+            turn_id,
+            {"status": ChatTurnStatus.CANCELLED},
+            expected_revision=turn.revision,
+        )
+
+    service.stop_provider_turn = slow_stop
+
+    # The periodic pass returns while its stops are still unwinding.
+    with anyio.fail_after(5):
+        await service.tick_all()
+        while len(started) < len(turns):
+            await anyio.sleep(0.01)
+    # Every stop started before any finished: they run together.
+    assert sorted(started) == sorted(t.id for t in turns.values())
+
+    # A read and a second periodic pass neither wait nor stop again.
+    with anyio.fail_after(5):
+        view = await service.view("project")
+        await service.tick_all()
+    assert len(view["chat_holds"]) == 4 and len(started) == 4
+
+    release.set()
+    with anyio.fail_after(5):
+        await service.wait_for_passes()
+    view = await service.view("project")
+    assert {hold["status"] for hold in view["chat_holds"]} == {"held"}
+    assert all(
+        [item["outcome"] for item in hold["interrupted_turns"]] == ["stopped"]
+        for hold in view["chat_holds"]
+    )
