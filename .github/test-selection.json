@@ -1,34 +1,32 @@
 {
-  "change_digest": "fe6737947564607a6f521a2aa19a1413fadd5bb7f11e7bf7202852c25e18c55e",
-  "reviewed_by": "Claude Code, implementing the operator's request to mark chats and projects high priority so Core and Butler favor them without being told",
-  "reason": "Every queue where work waits for shared capacity was FIFO, a poll race or alphabetical. Chats and projects can now be marked high (PATCH chat-sessions priority, PUT engagements/{id}/priority, Butler nebula.work.set_priority). A chat inherits from the chat it reports to and from its project; forks do not. High work goes first in: host-wide provider/background/tool slots (a high request that does not fit records a waiting reservation; normal requests wait while taking a slot would leave it short; stale waiters expire after 10 s), the host pressure line (high ahead of normal, FIFO within each), the Host command queue (high first, then the existing fair order), and project worker admission (high projects admitted first and never retired to make room). Butler reads show priority and list high chats first; the Butler board leads each section with high chats. Selected: test_work_priority.py (new: inheritance, project marking, capacity preference, waiter expiry and withdrawal, host-load order, Host command order, routes, Butler tool, board order) plus the existing suites of each touched module: runtime capacity, chat runtime capacity, host load and pressure, worker admission retry, Butler home scope, idle retirement dispatch, view leases, memory API (Host commands), Butler work tools and the board.",
-  "exclusions": "No UI change in this PR (priority toggles and badges come with the UI PR), so no frontend or Playwright tests. PostgreSQL variants skip locally without a server and run in CI where configured. The product knowledge index does not read docs/design/work-priority.md.",
+  "change_digest": "06df04e271436c121d300f65d075a82bf86e750f18e9dade97eb312abddf6728",
+  "reviewed_by": "Claude Code, fixing goal pause failing the goal's in-flight turn",
+  "reason": "Pausing a running goal cleared its execution claim while its turn still ran, so the turn's next ownership check discarded its output as stale and failed it; a quick resume was then left paused by that failure. ChatGoalService.write now keeps the claim on pause while a live (not ended) turn holds it, so the turn finishes and releases it and a still-paused goal starts no next step. A claim no live turn holds is released as before, so settle-time pauses after a failed or interrupted turn are unchanged. A chat or project hold's pause keeps the claim as #1289 made it. Selected: test_chat_goals.py (new regressions for pause, pause-then-resume and the released-claim case), test_chat_holds.py (hold pause keeps the claim), plus the suites that pause goals or reconcile claims: recovery controls, project holds, goal execution waiting, goal revision races, subagent lifecycle, harness chat goals and orphan recovery.",
+  "exclusions": "No UI, native or Playwright change: the goal API's response shape is unchanged and only the claim fields on a paused goal differ while a turn runs. Locally 194 passed and 63 skipped (PostgreSQL-only cases); CI runs them.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 191,
+    "python": 257,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_work_priority.py",
-    "tests/v3/test_runtime_capacity.py",
-    "tests/v3/test_chat_runtime_capacity.py",
-    "tests/v3/test_host_load.py",
-    "tests/v3/test_host_pressure.py",
-    "tests/v3/test_admission_retry.py",
-    "tests/v3/test_butler_home_scope.py",
-    "tests/v3/test_idle_retirement_dispatch.py",
-    "tests/v3/test_project_view_leases.py",
-    "tests/v3/test_memory_api.py",
-    "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_butler_goal_chat_proposals.py"
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_holds.py",
+    "tests/v3/test_recovery_controls.py",
+    "tests/v3/test_project_holds.py",
+    "tests/v3/test_goal_execution_waiting.py",
+    "tests/v3/test_goal_revision_races.py",
+    "tests/v3/test_chat_subagent_lifecycle.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_runtime_orphan_recovery.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "checks": []
 }

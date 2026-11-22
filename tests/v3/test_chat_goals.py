@@ -1828,3 +1828,117 @@ async def test_restart_recovery_finishes_the_turn_on_a_goals_last_budget(
         assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.RUNNING
     finally:
         await service.shutdown()
+
+
+@pytest.mark.parametrize("resume", [False, True], ids=["pause", "pause-resume"])
+async def test_pausing_a_goal_keeps_its_running_turns_claim(tmp_path, resume):
+    """Pause stops the goal continuing; it does not fail the turn in flight.
+
+    Clearing the goal's claim made the running turn's next ownership check
+    discard its output, fail the turn and leave a quick resume paused.
+    """
+
+    from types import SimpleNamespace
+
+    store, goals = await setup_goal(tmp_path)
+    chat = ChatService(store, worker_id="worker")
+    draft = await goals.create(
+        "session", GoalCreate(objective="Finish", completion_criteria=["Done"])
+    )
+    running = await goals.write(
+        "session", GoalWrite(action="start", expected_revision=draft.revision)
+    )
+    claimed_at = utc_now()
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="project",
+            session_id="session",
+            goal_id=running.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.ROUTING,
+            execution_owner_id="worker",
+            execution_claim_id="claim",
+            execution_claimed_at=claimed_at,
+        )
+    )
+    running = await store.update(
+        ChatGoal,
+        running.id,
+        {
+            "execution_owner_id": "worker",
+            "execution_claim_id": "claim",
+            "execution_claimed_at": claimed_at,
+        },
+        expected_revision=running.revision,
+    )
+
+    paused = await goals.write(
+        "session", GoalWrite(action="pause", expected_revision=running.revision)
+    )
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert (paused.execution_owner_id, paused.execution_claim_id) == (
+        "worker",
+        "claim",
+    )
+    if resume:
+        resumed = await goals.write(
+            "session", GoalWrite(action="resume", expected_revision=paused.revision)
+        )
+        assert resumed.status == ChatGoalStatus.RUNNING
+
+    prepared = SimpleNamespace(turn=turn, execution_claim_id="claim")
+    owned = await chat._assert_execution_owner(prepared)
+    assert owned.status == ChatTurnStatus.ROUTING
+
+    # The turn's own release still frees the goal for its next step.
+    await chat._release_execution(prepared)
+    released = await goals.get("session")
+    assert released.execution_claim_id is None
+    assert released.status == (
+        ChatGoalStatus.RUNNING if resume else ChatGoalStatus.PAUSED
+    )
+
+
+async def test_pausing_a_goal_releases_a_claim_no_live_turn_holds(tmp_path):
+    """A turn that ended and pauses its own goal leaves no claim behind."""
+
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
+        "session", GoalCreate(objective="Finish", completion_criteria=["Done"])
+    )
+    running = await goals.write(
+        "session", GoalWrite(action="start", expected_revision=draft.revision)
+    )
+    claimed_at = utc_now()
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id="project",
+                session_id="session",
+                goal_id=running.id,
+                provider_profile_id="provider",
+                model="model",
+                status=ChatTurnStatus.FAILED,
+                execution_owner_id="worker",
+                execution_claim_id="claim",
+                execution_claimed_at=claimed_at,
+            )
+        )
+    )
+    running = await store.update(
+        ChatGoal,
+        running.id,
+        {
+            "execution_owner_id": "worker",
+            "execution_claim_id": "claim",
+            "execution_claimed_at": claimed_at,
+        },
+        expected_revision=running.revision,
+    )
+
+    paused = await goals.write(
+        "session", GoalWrite(action="pause", expected_revision=running.revision)
+    )
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert (paused.execution_owner_id, paused.execution_claim_id) == (None, None)
