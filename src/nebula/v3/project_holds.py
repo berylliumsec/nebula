@@ -8,9 +8,13 @@ starting new turns. A hold is enforced by Core itself:
 * Placing it pauses every running goal with the hold's mark. Every producer
   of chat work refuses or defers in a held project (``project_hold_gate``),
   and no one but this hold's release can resume the goals it paused.
-* Running turns may finish for ``grace_seconds``. After that each tick stops
-  what is still active, through the same stop an operator uses, and the hold
-  becomes ``held`` once no turn is active.
+* Running turns may finish for ``grace_seconds``. After that Core's periodic
+  pass stops what is still active, through the same stop an operator uses,
+  and the hold becomes ``held`` once no turn is active. Placing a hold and
+  reading it never stop turns: a stop waits for the turn's in-flight step and
+  its subagents to unwind, so a request that stopped turns would hold the
+  project's command lane for as long as every stop took. The periodic pass
+  stops turns concurrently, outside the project's lock.
 * Release resumes exactly the goals carrying its mark, then wakes the
   subagent deliveries and queued follow-ups it deferred.
 
@@ -29,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -37,7 +41,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from .chat_goals import ChatGoalService
-from .diagnostics import record_caught_exception
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     ChatBackend,
     ChatGoal,
@@ -71,6 +75,9 @@ ACTIVE_TURN_STATUSES = [
 ]
 STOP_REASON = "Stopped by a project hold"
 MAX_CHAT_HOLDS = 200
+# Turns one pass stops at the same time. Each stop mostly waits for its own
+# turn to unwind, so a few run together without loading the store.
+STOP_CONCURRENCY = 8
 
 
 class HoldPlace(BaseModel):
@@ -119,6 +126,10 @@ class ProjectHoldService:
         self.wake_subagents = wake_subagents
         self.wake_queues = wake_queues
         self._locks: dict[str, asyncio.Lock] = {}
+        # Turns a pass is stopping now, so an overlapping pass skips them.
+        self._stopping: set[str] = set()
+        # The periodic pass per project, so a slow one is never started twice.
+        self._passes: dict[str, asyncio.Task[Any]] = {}
 
     def _lock(self, project_id: str) -> asyncio.Lock:
         return self._locks.setdefault(project_id, asyncio.Lock())
@@ -136,7 +147,8 @@ class ProjectHoldService:
         )
 
     async def view(self, project_id: str) -> dict[str, Any]:
-        hold = await self.tick(project_id)
+        # A read refreshes statuses but never waits on stops.
+        hold = await self.tick(project_id, stop=False)
         latest = hold
         if latest is None:
             recent = await self.store.find_entities(
@@ -161,7 +173,7 @@ class ProjectHoldService:
         """Whether this chat is held, and by which hold (its own or a parent's)."""
 
         session = await self.store.get(ChatSession, session_id)
-        await self.tick(session.engagement_id)
+        await self.tick(session.engagement_id, stop=False)
         hold = await active_hold(self.store, session.engagement_id, session_id)
         return {
             "session_id": session_id,
@@ -190,7 +202,7 @@ class ProjectHoldService:
                 )
             )
             hold = await self._pause_running_goals(hold)
-        return await self.tick(project_id) or hold
+        return await self.tick(project_id, stop=False) or hold
 
     async def place_chats(
         self, project_id: str, body: ChatHoldPlace
@@ -230,7 +242,7 @@ class ProjectHoldService:
                     )
                     hold = await self._pause_running_goals(hold)
                 holds.append(hold)
-        await self.tick(project_id)
+        await self.tick(project_id, stop=False)
         return batch_id, [await self.store.get(ProjectHold, hold.id) for hold in holds]
 
     async def release_chats(
@@ -278,19 +290,31 @@ class ProjectHoldService:
             chains[session_id] = await hold_chain(self.store, session_id)
         return hold.session_id in chains[session_id]
 
-    async def _pause_running_goals(self, hold: ProjectHold) -> ProjectHold:
+    async def _pause_running_goals(
+        self,
+        hold: ProjectHold,
+        *,
+        running: list[ChatGoal] | None = None,
+        chains: dict[str, list[str]] | None = None,
+        taken: set[str] | None = None,
+    ) -> ProjectHold:
         """Pause every running goal it covers with this hold's mark; record each.
 
         Child goals are paused before their parents: a parent's pause pauses
         its children without a mark, and release would then leave them paused.
+        A pass over many holds passes one read of the running goals, the
+        chats' lineage, and the goals an earlier hold of the pass already
+        paused (``taken``), instead of reading them again for every hold.
         """
 
         paused = {item.goal_id for item in hold.paused_goals}
         added: list[ProjectHoldGoal] = []
-        chains: dict[str, list[str]] = {}
-        running = await self._running_goals(hold.engagement_id)
+        chains = {} if chains is None else chains
+        taken = set() if taken is None else taken
+        if running is None:
+            running = await self._running_goals(hold.engagement_id)
         for goal in sorted(running, key=lambda item: -_goal_depth(item, running)):
-            if goal.id in paused:
+            if goal.id in paused or goal.id in taken:
                 continue
             if not await self._covered(hold, goal.session_id, chains):
                 continue
@@ -304,7 +328,9 @@ class ProjectHoldService:
                 )
             except (ConflictError, NotFoundError):
                 # diagnostic-expected: the goal stopped running on its own.
+                taken.add(goal.id)
                 continue
+            taken.add(goal.id)
             added.append(ProjectHoldGoal(goal_id=goal.id, session_id=goal.session_id))
         if not added:
             return hold
@@ -320,90 +346,151 @@ class ProjectHoldService:
 
         return await revise_latest(self.store, ProjectHold, hold.id, plan)
 
-    async def tick(self, project_id: str) -> ProjectHold | None:
+    async def tick(self, project_id: str, *, stop: bool = True) -> ProjectHold | None:
         """Advance every active hold in the project.
+
+        One pass reads the project's running goals and active turns once and
+        shares the chats' lineage across its holds. With ``stop`` it stops the
+        covered turns whose grace has ended, concurrently and outside the
+        project's lock, so placement, release and reads never wait for a stop
+        to unwind. Reads and placement pass ``stop=False``.
 
         Returns the project-wide hold, or None when only chat holds (or none)
         are active.
         """
 
+        chains: dict[str, list[str]] = {}
         async with self._lock(project_id):
-            project_hold: ProjectHold | None = None
-            for hold in await active_holds(self.store, project_id):
-                hold = await self._tick_hold(hold)
-                if not hold.session_id:
-                    project_hold = hold
-            return project_hold
-
-    async def _covered_turns(self, hold: ProjectHold) -> list[ChatTurn]:
-        chains: dict[str, list[str]] = {}
-        return [
-            turn
-            for turn in await self._active_turns(hold.engagement_id)
-            if await self._covered(hold, turn.session_id, chains)
-        ]
-
-    async def _tick_hold(self, hold: ProjectHold) -> ProjectHold:
-        # A goal started or resumed in the moment before the hold existed
-        # is caught here and paused under the hold as well.
-        hold = await self._pause_running_goals(hold)
-        active = await self._covered_turns(hold)
-        grace_until = hold.grace_until or hold.created_at + timedelta(
-            seconds=hold.grace_seconds
-        )
-        if active and utc_now() >= grace_until:
-            hold = await self._stop_turns(hold, active)
-            active = await self._covered_turns(hold)
-        status = "holding" if active else "held"
-        if status != hold.status:
-            hold = await revise_latest(
-                self.store,
-                ProjectHold,
-                hold.id,
-                lambda latest: (
-                    None
-                    if latest.status == "released"
-                    else {
-                        "status": status,
-                        "held_at": utc_now() if status == "held" else None,
-                    }
-                ),
-            )
-        return hold
-
-    async def _stop_turns(
-        self, hold: ProjectHold, turns: list[ChatTurn]
-    ) -> ProjectHold:
-        stopped: list[ProjectHoldTurn] = []
-        for turn in turns:
-            try:
-                if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
-                    await self.stop_harness_turn(turn.harness_turn_id, STOP_REASON)
-                else:
-                    await self.stop_provider_turn(turn.id)
-                outcome = "stopped"
-            except Exception as exc:
-                record_caught_exception(
-                    "chat",
-                    "chat.project_hold.stop_failed",
-                    "A project hold could not stop a running turn; the next tick retries.",
-                    exc,
-                    stage="project-hold",
-                )
-                outcome = f"stop failed: {type(exc).__name__}"
-            stopped.append(
-                ProjectHoldTurn(
-                    turn_id=turn.id, session_id=turn.session_id, outcome=outcome
-                )
-            )
-        chains: dict[str, list[str]] = {}
-        subagents = [
-            record.id
-            for record in await self.store.find_entities(
+            holds = await self._pause_for_holds(project_id, chains)
+            covered = await self._covered_by_hold(project_id, holds, chains)
+            due: dict[str, list[ChatTurn]] = {}
+            if stop:
+                now = utc_now()
+                for hold in holds:
+                    turns = [
+                        turn
+                        for turn in covered[hold.id]
+                        if turn.id not in self._stopping
+                    ]
+                    if turns and now >= _grace_until(hold):
+                        due[hold.id] = turns
+            if not due:
+                return await self._settle_statuses(holds, covered)
+            targets = {turn.id: turn for turns in due.values() for turn in turns}
+            self._stopping.update(targets)
+        try:
+            outcomes = await self._stop_turns(list(targets.values()))
+        finally:
+            self._stopping.difference_update(targets)
+        async with self._lock(project_id):
+            subagents = await self.store.find_entities(
                 ChatSubagent,
                 {"status": ChatSubagentStatus.RUNNING.value},
-                engagement_id=hold.engagement_id,
+                engagement_id=project_id,
             )
+            recorded: list[ProjectHold] = []
+            for hold in holds:
+                if hold.id in due:
+                    hold = await self._record_stops(
+                        hold, due[hold.id], outcomes, subagents, chains
+                    )
+                recorded.append(hold)
+            covered = await self._covered_by_hold(project_id, recorded, chains)
+            return await self._settle_statuses(recorded, covered)
+
+    async def _pause_for_holds(
+        self, project_id: str, chains: dict[str, list[str]]
+    ) -> list[ProjectHold]:
+        # A goal started or resumed in the moment before a hold existed is
+        # caught here and paused under that hold as well.
+        holds = await active_holds(self.store, project_id)
+        if not holds:
+            return []
+        running = await self._running_goals(project_id)
+        taken: set[str] = set()
+        return [
+            await self._pause_running_goals(
+                hold, running=running, chains=chains, taken=taken
+            )
+            for hold in holds
+        ]
+
+    async def _covered_by_hold(
+        self,
+        project_id: str,
+        holds: list[ProjectHold],
+        chains: dict[str, list[str]],
+    ) -> dict[str, list[ChatTurn]]:
+        active = await self._active_turns(project_id) if holds else []
+        covered: dict[str, list[ChatTurn]] = {}
+        for hold in holds:
+            covered[hold.id] = [
+                turn
+                for turn in active
+                if await self._covered(hold, turn.session_id, chains)
+            ]
+        return covered
+
+    async def _settle_statuses(
+        self, holds: list[ProjectHold], covered: dict[str, list[ChatTurn]]
+    ) -> ProjectHold | None:
+        project_hold: ProjectHold | None = None
+        for hold in holds:
+            status = "holding" if covered[hold.id] else "held"
+            if status != hold.status:
+                hold = await revise_latest(
+                    self.store, ProjectHold, hold.id, _status_change(status)
+                )
+            if not hold.session_id:
+                project_hold = hold
+        return project_hold
+
+    async def _stop_turns(self, turns: list[ChatTurn]) -> dict[str, str]:
+        """Stop each turn, a few at a time; return each turn's outcome.
+
+        A stop waits for its turn's in-flight step and subagents to unwind,
+        so stops run together instead of one after another.
+        """
+
+        limit = asyncio.Semaphore(STOP_CONCURRENCY)
+
+        async def stop_one(turn: ChatTurn) -> tuple[str, str]:
+            async with limit:
+                try:
+                    if turn.backend == ChatBackend.HARNESS and turn.harness_turn_id:
+                        await self.stop_harness_turn(turn.harness_turn_id, STOP_REASON)
+                    else:
+                        await self.stop_provider_turn(turn.id)
+                    return turn.id, "stopped"
+                except Exception as exc:
+                    record_caught_exception(
+                        "chat",
+                        "chat.project_hold.stop_failed",
+                        "A project hold could not stop a running turn; the next tick retries.",
+                        exc,
+                        stage="project-hold",
+                    )
+                    return turn.id, f"stop failed: {type(exc).__name__}"
+
+        return dict(await asyncio.gather(*(stop_one(turn) for turn in turns)))
+
+    async def _record_stops(
+        self,
+        hold: ProjectHold,
+        turns: list[ChatTurn],
+        outcomes: dict[str, str],
+        subagents: list[ChatSubagent],
+        chains: dict[str, list[str]],
+    ) -> ProjectHold:
+        stopped = [
+            ProjectHoldTurn(
+                turn_id=turn.id, session_id=turn.session_id, outcome=outcomes[turn.id]
+            )
+            for turn in turns
+        ]
+        covered_subagents = [
+            record.id
+            for record in subagents
             if await self._covered(hold, record.parent_session_id, chains)
         ]
 
@@ -418,9 +505,9 @@ class ProjectHoldService:
                         if (item.turn_id, item.outcome) not in seen
                     ),
                 ][-5000:],
-                "stopped_subagents": sorted({*latest.stopped_subagents, *subagents})[
-                    :5000
-                ],
+                "stopped_subagents": sorted(
+                    {*latest.stopped_subagents, *covered_subagents}
+                )[:5000],
             }
 
         return await revise_latest(self.store, ProjectHold, hold.id, plan)
@@ -579,22 +666,62 @@ class ProjectHoldService:
             self.wake_queues()
 
     async def tick_all(self) -> None:
-        """Advance every active hold; called from Core's periodic chat pass."""
+        """Start a pass for every project with an active hold.
+
+        Called from Core's periodic chat pass. Each project's pass runs in the
+        background: stopping turns can take minutes, and the schedules and
+        recovery that share the periodic loop must not wait for it. A project
+        whose previous pass is still running is not started again.
+        """
 
         holds = await self.store.find_entities(
             ProjectHold, {"status": ["holding", "held"]}
         )
         for project_id in sorted({hold.engagement_id for hold in holds}):
-            try:
-                await self.tick(project_id)
-            except Exception as exc:
-                record_caught_exception(
-                    "chat",
-                    "chat.project_hold.tick_failed",
-                    "A project hold pass failed; the next pass retries.",
-                    exc,
-                    stage="project-hold",
-                )
+            previous = self._passes.get(project_id)
+            if previous is not None and not previous.done():
+                continue
+            self._passes[project_id] = create_diagnostic_task(
+                self._tick_recorded(project_id),
+                feature="chat",
+                event_code="chat.project_hold.pass",
+                failure_message="A project hold pass stopped unexpectedly.",
+                name=f"nebula-project-hold-{project_id}",
+            )
+
+    async def wait_for_passes(self) -> None:
+        """Wait for the background passes ``tick_all`` started."""
+
+        running = [task for task in self._passes.values() if not task.done()]
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+
+    async def _tick_recorded(self, project_id: str) -> None:
+        try:
+            await self.tick(project_id)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.project_hold.tick_failed",
+                "A project hold pass failed; the next pass retries.",
+                exc,
+                stage="project-hold",
+            )
+
+
+def _status_change(
+    status: str,
+) -> Callable[[ProjectHold], dict[str, Any] | None]:
+    def plan(latest: ProjectHold) -> dict[str, Any] | None:
+        if latest.status in {"released", status}:
+            return None
+        return {"status": status, "held_at": utc_now() if status == "held" else None}
+
+    return plan
+
+
+def _grace_until(hold: ProjectHold) -> datetime:
+    return hold.grace_until or hold.created_at + timedelta(seconds=hold.grace_seconds)
 
 
 def _goal_depth(goal: ChatGoal, goals: list[ChatGoal]) -> int:

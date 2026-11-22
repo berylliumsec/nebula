@@ -1,22 +1,22 @@
 {
-  "change_digest": "2ebae7296fb533d8aaf5a3bb1310fd079d856cc8ab014c817228a7eed5b95471",
-  "reviewed_by": "Claude Code, fixing the main-red PostgreSQL recovery-control tests",
-  "reason": "Three PostgreSQL cases in test_recovery_controls.py failed on main back to at least #1264: every held-recovery control (goal pause, turn stop) ended as a 503 'failed in the project worker before it saved anything'. The recovery fixture in test_recovery_reconciliation.py built its synthetic worker bootstrap with pool_settings=None, so the recovery-control runner's own PostgreSQL Database fell back to PoolSettings.from_environment() and raised 'NEBULA_V3_DB_ADMIN_RESERVE is required'. A real supervisor always hands its workers its pool settings (runtime_service -> RuntimeProcessHost -> WorkerBootstrap), so no product change is needed; the fixture now passes the batch fixture's SETTINGS as the bootstrap dict. A subagent validated the cause independently and ruled out the execution SQL guard. CI now provisions PostgreSQL when either recovery test file is selected, so these variants cannot go stale unseen again. Selected: both recovery test files in full (SQLite and PostgreSQL).",
-  "exclusions": "No product code, UI, native or Playwright change. Locally 53 passed (SQLite and PostgreSQL) with no NEBULA_V3_DB_* variables set.",
+  "change_digest": "18d71ab8303620f1f3f68566cc02054232f4a8a0a181f565c6882b2e63c33029",
+  "reviewed_by": "Claude Code, fixing 41-minute chat-hold placement seen on live Core 2026-11-22",
+  "reason": "Placing 70 chat holds kept the project's work-lane command running 41 minutes and every GET of the hold timed out. Root cause (validated by an independent subagent from the live timestamps): place_chats and every read (view, chat_view) ran tick(), which stopped each covered turn one after another under the project's asyncio lock, and each stop waits for the turn's in-flight step and subagents to unwind; each hold also re-read all running goals, active turns and chat lineage. Fix: placement, release and reads tick with stop=False (statuses and goal pauses only); the periodic tick_all starts each project's pass as a background task (never twice) so the chat schedule loop does not wait; a pass reads goals/turns once, shares lineage across holds, and stops due turns concurrently (8 at a time) outside the lock, recording outcomes per hold. Selected: the chat-hold and project-hold suites, including two new regressions that fail on origin/main (placement stopped a turn; the pass timed out on the lock).",
+  "exclusions": "No UI change. tests/test_simulation_host_restart.py::test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop and ::test_host_switch_frees_an_orphan_left_by_a_stop_timeout fail identically on origin/main 045b09d (deployer script, does not import project_holds). Not LAN- or live-verified.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 53,
+    "python": 23,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_recovery_reconciliation.py"
+    "tests/v3/test_chat_holds.py",
+    "tests/v3/test_project_holds.py"
   ],
   "frontend": [],
   "native": [],
