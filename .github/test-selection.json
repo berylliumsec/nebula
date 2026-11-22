@@ -1,7 +1,7 @@
 {
-  "change_digest": "35ea5cc136fcab2c831b3dd6f6d9eadc5be8f991b7043d8533bee8f4d11acfe7",
+  "change_digest": "2de882d6a975ecc04427085df5d7ba37762d709ecc40d0d87739ec1392f9b43d",
   "reviewed_by": "Claude Code, implementing the operator's request to hold individual chats when research priorities shift",
-  "reason": "A project hold froze a whole project, including new work. A ProjectHold can now name one chat (session_id) and covers that chat plus its subagent and goal-child chats, never forks or later chats. Holds placed together share a batch_id. Every hold gate that knows the chat (provider and harness turn creation, resume, callbacks, restart resume, parked restore, schedules, follow-up queue, subagent parent wake, goal start/resume, Mission approval resume and delegated synthesis) now passes it. Goal pause marks children before parents so release restores both; a goal released while another hold still covers it moves to that hold. New routes POST engagements/{id}/holds, holds/release and GET chat-sessions/{id}/hold. Interactive Butler gets nebula.work.holds, hold_chats, release_chats, hold_project, release_project with no confirmation; background Butler is refused. Selected: test_chat_holds.py (new: scoping, coverage, child goals, all_active, partial release, mark hand-off, turn stops, authenticated routes, Butler tools, background refusal), test_project_holds.py (existing project-hold contract), test_control_assistant_work.py (work tool registry) and the scheduled-Butler catalog test that enumerates every work action.",
+  "reason": "A project hold froze a whole project, including new work. A ProjectHold can now name one chat (session_id) and covers that chat plus its subagent and goal-child chats, never forks or later chats. Holds placed together share a batch_id. Every hold gate that knows the chat (provider and harness turn creation, resume, callbacks, restart resume, parked restore, schedules, follow-up queue, subagent parent wake, goal start/resume, Mission approval resume and delegated synthesis) now passes it. Goal pause marks children before parents so release restores both; a goal released while another hold still covers it moves to that hold. New routes POST engagements/{id}/holds, holds/release and GET chat-sessions/{id}/hold. Interactive Butler gets nebula.work.holds, hold_chats, release_chats, hold_project, release_project with no confirmation; background Butler is refused. Selected: test_chat_holds.py (new: scoping, coverage, child goals, all_active, partial release, mark hand-off, turn stops, authenticated routes, Butler tools, background refusal), test_project_holds.py (existing project-hold contract), test_control_assistant_work.py (work tool registry) and the scheduled-Butler catalog test that enumerates every work action. The Butler board now marks each card whose chat is on a chat hold with that hold (id, batch, reason), so the UI can group held chats by batch; test_butler_goal_chat_proposals.py covers the board.",
   "exclusions": "No UI change in this PR (the board, chat menu and Release and send come with the UI PR), so no frontend or Playwright tests. test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and two test_settings_assistant_tools.py tests fail identically on origin/main and are not selected. The product knowledge index does not read docs/design/project-holds.md.",
   "python_versions": [
     "3.12"
@@ -9,7 +9,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 59,
+    "python": 66,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -18,7 +18,8 @@
     "tests/v3/test_chat_holds.py",
     "tests/v3/test_project_holds.py",
     "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_reach_every_project_assistant_work_action"
+    "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_reach_every_project_assistant_work_action",
+    "tests/v3/test_butler_goal_chat_proposals.py"
   ],
   "frontend": [],
   "native": [],

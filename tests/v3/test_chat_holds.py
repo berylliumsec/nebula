@@ -383,3 +383,62 @@ async def test_background_butler_never_holds_or_releases_work(tmp_path):
                 change=True,
             )
     assert not await is_held(_store, project.id, chat.id)
+
+
+async def test_butler_board_marks_held_chats_with_their_batch(tmp_path):
+    from tests.v3.async_test_support import AsyncTestClient as TestClient
+    from tests.v3.test_control_assistant_work import _app
+    from nebula.v3.chat_goals import ChatGoalService, GoalCreate
+    from nebula.v3.domain import Engagement, ProviderProfile
+
+    store, app, _ = _app(tmp_path)
+    project = await store.create(Engagement(name="Research"))
+    profile = await store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    goals = ChatGoalService(store)
+    chats = []
+    for title in ("Old direction", "New direction"):
+        chat = await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        draft = await goals.create(
+            chat.id, GoalCreate(objective=title, completion_criteria=["Done"])
+        )
+        await store.update(
+            ChatGoal,
+            draft.id,
+            {
+                "status": ChatGoalStatus.RUNNING,
+                "started_at": utc_now(),
+                "active_since": utc_now(),
+            },
+            expected_revision=draft.revision,
+        )
+        chats.append(chat)
+    client = TestClient(app)
+    auth = {"Authorization": "Bearer test-token"}
+    placed = await client.post(
+        f"/api/v1/engagements/{project.id}/holds",
+        headers=auth,
+        json={"session_ids": [chats[0].id]},
+    )
+    batch = placed.json()["batch_id"]
+
+    board = await client.get("/api/v1/butler/board", headers=auth)
+
+    assert board.status_code == 200, board.text
+    items = {item["title"]: item for item in board.json()["items"]}
+    assert items["Old direction"]["hold"]["batch_id"] == batch
+    assert items["Old direction"]["hold"]["reason"] == "Priorities changed"
+    assert items["New direction"]["hold"] is None

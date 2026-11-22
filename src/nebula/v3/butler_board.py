@@ -47,12 +47,14 @@ from .domain import (
     EngagementStatus,
     HarnessInteraction,
     HarnessInteractionStatus,
+    ProjectHold,
 )
 from .linked_project_chats import (
     UNFINISHED_TURN_STATUSES,
     session_state,
     visible_pending,
 )
+from .project_hold_gate import ACTIVE_HOLD_STATUSES
 from .storage import NebulaStore, NotFoundError, not_temporary_chat_session
 
 BoardSection = Literal["active", "idle", "completed"]
@@ -468,10 +470,13 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 key=lambda item: (str(item["name"]).casefold(), str(item["id"])),
             ),
             "section": section,
-            "items": [
-                await _board_item(store, name, *entry, approvals, questions)
-                for name, entry in shown
-            ],
+            "items": await _with_holds(
+                store,
+                [
+                    await _board_item(store, name, *entry, approvals, questions)
+                    for name, entry in shown
+                ],
+            ),
             "next_offset": next_offset,
             "truncated": truncated,
         }
@@ -563,6 +568,37 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
 
     router.include_router(chat_brief_router(store))
     return router
+
+
+async def _with_holds(
+    store: NebulaStore, items: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Mark each card whose chat (or parent chat) is on a chat hold.
+
+    The board groups those cards by hold batch, so the operator sees what
+    they set aside and can release it.
+    """
+
+    if not items:
+        return items
+    holds = {
+        hold.session_id: {
+            "id": hold.id,
+            "batch_id": hold.batch_id,
+            "status": hold.status,
+            "reason": hold.reason,
+            "created_at": hold.created_at,
+        }
+        for hold in await store.find_entities(
+            ProjectHold, {"status": list(ACTIVE_HOLD_STATUSES)}
+        )
+        if hold.session_id
+    }
+    for item in items:
+        item["hold"] = holds.get(item["session_id"]) or holds.get(
+            item.get("parent_session_id") or ""
+        )
+    return items
 
 
 async def _pending_approvals(
