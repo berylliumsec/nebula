@@ -130,8 +130,10 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "fixture-lifecycle": [{"area": "fixture-lifecycle", "project": "assistant-real-desktop", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade owned cleanup", "runtime": "real-core", "shard": "1/1"}],
+    "runtime-settings": [{"area": "runtime-settings", "project": "assistant-real-chromium-320", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-chromium-390", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-chromium-430", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-compact", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-desktop", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-webkit-320", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-webkit-390", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}, {"area": "runtime-settings", "project": "assistant-real-webkit-430", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"}],
     "browser-harness": [{"area": "browser-harness", "project": "assistant-real-desktop", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-compact", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-chromium-320", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-chromium-390", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-chromium-430", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-webkit-320", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-webkit-390", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}, {"area": "browser-harness", "project": "assistant-real-webkit-430", "test_match": "tests/real-core.spec.ts", "runtime": "real-core", "shard": "1/1", "grep": "browser harness"}],
-    "authentication-recovery": [{"area": "authentication-recovery", "project": "assistant-real-desktop", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-compact", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-320", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-320", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-390", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-390", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-430", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-430", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}],
+    "authentication-recovery": [{"area": "authentication-recovery", "project": "assistant-real-desktop", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-compact", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-320", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-320", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-390", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-390", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-chromium-430", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}, {"area": "authentication-recovery", "project": "assistant-real-webkit-430", "test_match": "tests/authentication-real-core.spec.ts", "grep": "assistant upgrade authentication recovery rejects", "runtime": "real-core", "shard": "1/1"}],
     "project-view-lease": [
       {"area":"project-view-lease","project":"model-desktop","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"an open project view brings up a chatless project's worker and lets it retire after leaving$"},
       {"area":"project-view-lease","project":"model-compact","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1","grep":"an open project view brings up a chatless project's worker and lets it retire after leaving$"},
@@ -234,11 +236,17 @@
     ],
     "mobile-core-regressions": [
       {"area":"mobile-core-regressions","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-chromium-320","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
       {"area":"mobile-core-regressions","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-chromium-390","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
       {"area":"mobile-core-regressions","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-chromium-430","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
       {"area":"mobile-core-regressions","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-webkit-320","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
       {"area":"mobile-core-regressions","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
-      {"area":"mobile-core-regressions","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"}
+      {"area":"mobile-core-regressions","project":"assistant-real-webkit-390","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"},
+      {"area":"mobile-core-regressions","project":"assistant-real-webkit-430","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Codex\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ keeps\\ tools\\ available\\ before\\ and\\ after\\ a\\ saved\\ unrestricted\\ Grok\\ plan\\ on\\ production\\ LAN\\ Core|assistant\\ planning\\ advisory\\ lets\\ a\\ harness\\ work\\ without\\ submitting\\ a\\ plan\\ and\\ survives\\ refresh\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ Voice\\ keeps\\ two\\ spoken\\ turns\\ in\\ one\\ saved\\ conversation\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ shows\\ live\\ work\\ and\\ restores\\ it\\ after\\ reload\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ focused\\ work\\ surfaces\\ retain\\ real\\ Core\\ project\\ context|assistant\\ upgrade\\ linked\\ reply\\ opens\\ a\\ durable\\ file\\ and\\ scoped\\ website\\ in\\ the\\ right\\ pane\\ from\\ production\\ LAN\\ Core|assistant\\ upgrade\\ multiple\\ side\\ chats\\ and\\ linked\\ code\\ survive\\ production\\ LAN\\ reload|assistant\\ upgrade\\ native\\ commands\\ retain\\ thinking\\ and\\ replies\\ across\\ Core\\ restart|assistant\\ upgrade\\ popup\\ isolates\\ a\\ harness\\ session\\ on\\ real\\ Core|assistant\\ upgrade\\ real\\ Core\\ follows\\ goal\\ turns\\ Core\\ starts\\ while\\ the\\ viewer\\ waits|assistant\\ upgrade\\ real\\ Core\\ groups\\ Butler\\ initiated\\ chats\\ after\\ reload|assistant\\ upgrade\\ real\\ Core\\ nests\\ durable\\ subagent\\ conversations|assistant\\ upgrade\\ side\\ chat\\ inherits\\ Core\\ history\\ and\\ replies\\ independently\\ after\\ reload|iPhone\\ assistant\\ shell\\ production\\ LAN\\ pairs,\\ resolves\\ a\\ pending\\ agent\\ approval,\\ and\\ reconnects|project\\ execution\\ mode\\ settings\\ assistant\\ opens\\ every\\ catalog\\ setting\\ from\\ a\\ prompt\\ on\\ production\\ LAN\\ Core|project\\ execution\\ mode\\ uses\\ production\\ Code,\\ real\\ Git\\ changes,\\ and\\ reviewed\\ unrestricted\\ commands|stabilization\\ real\\ Core\\ harness\\ settings\\ separate\\ saving\\ from\\ health\\ recovery|stabilization\\ real\\ Core\\ preserves\\ note\\ drafts\\ and\\ reuses\\ saved\\ notes\\ in\\ reports","runtime":"real-core","shard":"1/1"}
     ],
     "test-suite-core-regressions": [
       {"area":"test-suite-core-regressions","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant\\ upgrade\\ Butler\\ briefs\\ named\\ agent\\ evidence\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Butler\\ watches\\ a\\ goal\\ and\\ surfaces\\ an\\ agent\\-reported\\ machine\\ incident\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ Daybreak\\ selection\\ persists\\ across\\ Codex\\ chat\\ refresh|assistant\\ upgrade\\ Nebula\\-wide\\ Butler\\ checks\\ idle\\ projects\\ from\\ a\\ user\\ file\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ account\\ homes\\ persist\\ and\\ switch\\ without\\ losing\\ chat|assistant\\ upgrade\\ conversation\\ bulk\\ delete\\ clears\\ rows\\ already\\ absent\\ from\\ real\\ Core|assistant\\ upgrade\\ default\\-on\\ peer\\ agents\\ exchange\\ a\\ durable\\ next\\-turn\\ reply\\ on\\ production\\ LAN\\ Core|assistant\\ upgrade\\ harness\\ goal\\ works\\ on\\ production\\ LAN\\ Core\\ across\\ new\\ and\\ existing\\ chats|assistant\\ upgrade\\ interactive\\ guides\\ reach\\ every\\ assistant\\ control\\ on\\ real\\ Core|assistant\\ upgrade\\ provider\\ completes\\ a\\ goal\\ from\\ its\\ own\\ tool\\ call\\ on\\ production\\ LAN\\ Core|production\\ chat\\ companions\\ open\\ a\\ workspace\\ file\\ in\\ a\\ disposable\\ Core|project\\ execution\\ mode\\ Nebula\\ help\\ answers\\ a\\ Docker\\ host\\-file\\ question\\ and\\ opens\\ the\\ setting\\ on\\ production\\ LAN\\ Core|real\\ Core\\ persists\\ a\\ project\\ folder\\ chosen\\ through\\ the\\ host\\ browser|stabilization\\ real\\ Core\\ keeps\\ the\\ Subagents\\ choice\\ across\\ refresh","runtime":"real-core","shard":"1/1"},
@@ -266,7 +274,7 @@
       {"area":"test-suite-regressions","project":"narrow","test_match":"tests/interface.spec.ts","grep":"Assistant\\ session\\ details\\ use\\ reloadable\\ drawer\\ navigation|Light\\ keeps\\ the\\ shared\\ status\\ and\\ search\\ cluster\\ in\\ the\\ conventional\\ shell|VPN\\ settings\\ keep\\ upload\\ and\\ project\\ routing\\ calm\\ at\\ every\\ width|assistant\\ popup\\ Butler\\ live\\ status\\ follows\\ saved\\ work\\ without\\ losing\\ the\\ composer|assistant\\ popup\\ Butler\\ long\\ history\\ keeps\\ the\\ composer\\ and\\ jump\\ to\\ latest\\ usable|assistant\\ popup\\ Butler\\ separates\\ Chat,\\ Work,\\ and\\ More\\ without\\ losing\\ the\\ draft|assistant\\ upgrade\\ idle\\ conversation\\ pauses\\ its\\ polls\\ in\\ a\\ hidden\\ tab\\ and\\ keeps\\ its\\ transcript\\ rows\\ still|assistant\\ upgrade\\ keeps\\ a\\ short\\ operator\\ message's\\ actions\\ on\\ top\\ and\\ clickable|assistant\\ upgrade\\ nests\\ subagents\\ beneath\\ a\\ collapsed\\ main\\ conversation|assistant\\ upgrade\\ provider\\ lifecycle\\ hooks\\ are\\ selected\\ and\\ visible\\ after\\ the\\ turn|assistant\\ upgrade\\ side\\ chat\\ toolbar\\ inherits\\ saved\\ history\\ and\\ restores\\ an\\ adjustable\\ parallel\\ conversation|chat\\ companions\\ reveal\\ Code,\\ Browser,\\ and\\ Notes\\ from\\ the\\ conversation|conversation\\ More\\ actions\\ remain\\ usable\\ on\\ mobile\\ Workbench\\ navigation|conversation\\ switching\\ commits\\ URL\\ identity\\ and\\ keeps\\ prefetched\\ work\\ details\\ collapsed|conversation\\ switching\\ keeps\\ side\\ panels\\ adjustable\\ and\\ mobile\\ drawers\\ intact|editing\\ a\\ sent\\ message\\ replaces\\ its\\ turns\\ inside\\ the\\ same\\ conversation|notebook\\ Workbench\\ tab\\ and\\ chat\\ companion\\ keep\\ the\\ same\\ Python\\ file|phone\\ shell\\ keeps\\ the\\ terminal\\ in\\ its\\ own\\ tab\\ and\\ the\\ chat\\ edge\\ to\\ edge|settings\\ shows\\ the\\ live\\ Kali\\ preparation\\ stage\\ instead\\ of\\ a\\ passive\\ runtime\\ check|stabilization\\ Butler\\ applies\\ a\\ model\\-selected\\ device\\-theme\\ tool\\ receipt|stabilization\\ Butler\\ follows\\ a\\ model\\-selected\\ Projects\\ navigation\\ receipt|theme\\ picker\\ Quiet\\ Lens\\ reveals\\ real\\ navigation\\ and\\ keeps\\ multiline\\ chat\\ visible","runtime":"mock","shard":"1/1"}
     ],
     "universal-agents": [{"area":"universal-agents","project":"model-desktop","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-compact","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-chromium-320","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-webkit-320","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-chromium-390","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-webkit-390","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-chromium-430","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"},{"area":"universal-agents","project":"model-webkit-430","test_match":"tests/universal-agents.spec.ts","runtime":"real-core","shard":"1/1"}],
-    "first-user": [{"area": "first-user", "project": "assistant-real-desktop", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-compact", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-320", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-320", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-390", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-390", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-430", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-430", "test_match": "tests/real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}],
+    "first-user": [{"area": "first-user", "project": "assistant-real-desktop", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-compact", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-320", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-320", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-390", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-390", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-chromium-430", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}, {"area": "first-user", "project": "assistant-real-webkit-430", "test_match": "tests/first-user-real-core.spec.ts", "grep": "assistant upgrade first-time user configures a provider uploads a document and analyses it", "runtime": "real-core", "shard": "1/1"}],
     "host-cpu-budget": [
       {"area":"host-cpu-budget","project":"model-desktop","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
       {"area":"host-cpu-budget","project":"model-compact","test_match":"tests/host-cpu-budget.spec.ts","runtime":"real-core","shard":"1/1"},
@@ -930,6 +938,14 @@
       },
       {
         "area": "release-contract-ui",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
+        "grep": "production assistant work survives a project switch through real Core|assistant upgrade real Core follows goal turns Core starts while the viewer waits|stabilization real Core provider settings separate saving from health recovery",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-contract-ui",
         "project": "assistant-real-chromium-390",
         "test_match": "tests/real-core.spec.ts",
         "grep": "production assistant work survives a project switch through real Core|assistant upgrade real Core follows goal turns Core starts while the viewer waits|stabilization real Core provider settings separate saving from health recovery",
@@ -938,8 +954,24 @@
       },
       {
         "area": "release-contract-ui",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
+        "grep": "production assistant work survives a project switch through real Core|assistant upgrade real Core follows goal turns Core starts while the viewer waits|stabilization real Core provider settings separate saving from health recovery",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-contract-ui",
         "project": "assistant-real-webkit-390",
         "test_match": "tests/real-core.spec.ts",
+        "grep": "production assistant work survives a project switch through real Core|assistant upgrade real Core follows goal turns Core starts while the viewer waits|stabilization real Core provider settings separate saving from health recovery",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-contract-ui",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
         "grep": "production assistant work survives a project switch through real Core|assistant upgrade real Core follows goal turns Core starts while the viewer waits|stabilization real Core provider settings separate saving from health recovery",
         "runtime": "real-core",
         "shard": "1/1"
@@ -2529,111 +2561,135 @@
       {"area":"assistant-queue-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core keeps queued controls reachable and durable","runtime":"real-core","shard":"1/1"}
     ],
     "branch-review": [
-  {
-    "area": "branch-review",
-    "project": "desktop",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "compact",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-chromium-small",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-chromium-ledger-390",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-chromium-wide",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-webkit-small",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-webkit",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "mobile-webkit-wide",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "browser-chromium-landscape",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "browser Assistant ",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "browser-webkit-landscape",
-    "test_match": "tests/interface.spec.ts",
-    "grep": "browser Assistant ",
-    "runtime": "mock",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "assistant-real-desktop",
-    "test_match": "tests/real-core.spec.ts",
-    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
-    "runtime": "real-core",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "assistant-real-chromium-390",
-    "test_match": "tests/real-core.spec.ts",
-    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
-    "runtime": "real-core",
-    "shard": "1/1"
-  },
-  {
-    "area": "branch-review",
-    "project": "assistant-real-webkit-390",
-    "test_match": "tests/real-core.spec.ts",
-    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
-    "runtime": "real-core",
-    "shard": "1/1"
-  }
-],
+      {
+        "area": "branch-review",
+        "project": "desktop",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "compact",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-chromium-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-chromium-ledger-390",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-chromium-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-webkit-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-webkit",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "mobile-webkit-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "browser-chromium-landscape",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "browser Assistant ",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "browser-webkit-landscape",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "browser Assistant ",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "branch-review",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/runtime-settings-real-core.spec.ts",
+        "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
     "assistant-viewer": [
       {"area":"assistant-viewer","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
       {"area":"assistant-viewer","project":"compact","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
@@ -2669,7 +2725,8 @@
       {"area":"stabilization","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"}
     ],
     "stabilization-core": [
-      {"area":"stabilization-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives","runtime":"real-core","shard":"1/1"}
+      {"area":"stabilization-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives","runtime":"real-core","shard":"1/1"},
+      {"area":"stabilization-core","project":"assistant-real-desktop","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives","runtime":"real-core","shard":"1/1"}
     ],
     "chat-edit-in-place": [
       {"area":"chat-edit-in-place","project":"desktop","test_match":"tests/interface.spec.ts","grep":"editing a sent message replaces its turns inside the same conversation","runtime":"mock","shard":"1/1"},
@@ -2683,6 +2740,9 @@
       {"area":"assistant","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/authentication-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/first-user-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/runtime-settings-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
@@ -2783,7 +2843,8 @@
       {"area":"release-core-lifecycle","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade focused work surfaces retain real Core project context|assistant upgrade mobile Code keeps its controls readable|assistant upgrade edits a sent message in place|assistant upgrade large side chat opens|stabilization real Core keeps the Subagents choice|assistant upgrade real Core shows the live queue position|assistant upgrade real Core keeps a subagent wait attached","runtime":"real-core","shard":"1/1"}
     ],
     "release-core-gate-repairs": [
-      {"area":"release-core-gate-repairs","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"persists network scope changed through universal settings search|focused work surfaces retain real Core project context|project execution mode uses production Code|project creation switches canonical project|foundation production LAN reads durable conversation|project removal archives, retries, restores|preserves note drafts and reuses saved notes|Library makes uploads visible|creation survives failure and remains discoverable|finding drafts stay bound|settings separate saving from health recovery","runtime":"real-core","shard":"1/1"}
+      {"area":"release-core-gate-repairs","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"persists network scope changed through universal settings search|focused work surfaces retain real Core project context|project execution mode uses production Code|project creation switches canonical project|foundation production LAN reads durable conversation|project removal archives, retries, restores|preserves note drafts and reuses saved notes|Library makes uploads visible|creation survives failure and remains discoverable|finding drafts stay bound|settings separate saving from health recovery","runtime":"real-core","shard":"1/1"},
+      {"area":"release-core-gate-repairs","project":"real-core","test_match":"tests/runtime-settings-real-core.spec.ts","grep":"persists network scope changed through universal settings search|focused work surfaces retain real Core project context|project execution mode uses production Code|project creation switches canonical project|foundation production LAN reads durable conversation|project removal archives, retries, restores|preserves note drafts and reuses saved notes|Library makes uploads visible|creation survives failure and remains discoverable|finding drafts stay bound|settings separate saving from health recovery","runtime":"real-core","shard":"1/1"}
     ],
     "release-assistant-gate-repairs": [
       {"area":"release-assistant-gate-repairs","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"retains editable goal skills through source loss|creates a goal before the first turn and pauses it on stop|terminal guide highlights existing controls on production LAN|goal guide opens its controls on production LAN","runtime":"real-core","shard":"1/1"}
@@ -2823,6 +2884,9 @@
     ],
     "core-api": [
       {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"core-api","project":"real-core","test_match":"tests/authentication-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"core-api","project":"real-core","test_match":"tests/first-user-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"core-api","project":"real-core","test_match":"tests/runtime-settings-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
       {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
       {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
       {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
@@ -2912,6 +2976,9 @@
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},
       {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/4"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/authentication-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/first-user-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/runtime-settings-real-core.spec.ts","runtime":"real-core","shard":"1/1"},
       {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"2/4"},
       {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"3/4"},
       {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"4/4"}
@@ -2971,6 +3038,37 @@
     ]
   },
   "full_include": [
+    {"area": "full", "project": "assistant-real-desktop", "test_match": "tests/ios-shell-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-390", "test_match": "tests/ios-shell-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-390", "test_match": "tests/ios-shell-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-320", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-320", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-320", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-390", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-390", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-390", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-430", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-430", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-chromium-430", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-compact", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-compact", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-compact", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-desktop", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-desktop", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-desktop", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-320", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-320", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-320", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-390", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-390", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-390", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-430", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-430", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "assistant-real-webkit-430", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "real-core", "test_match": "tests/authentication-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "real-core", "test_match": "tests/first-user-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+    {"area": "full", "project": "real-core", "test_match": "tests/runtime-settings-real-core.spec.ts", "runtime": "real-core", "shard": "1/1"},
+
     {"area":"full","project":"model-desktop","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1"},
     {"area":"full","project":"model-compact","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1"},
     {"area":"full","project":"model-chromium-320","test_match":"tests/runtime-continuity.spec.ts","runtime":"real-core","shard":"1/1"},

@@ -1,25 +1,33 @@
 {
-  "change_digest": "18d71ab8303620f1f3f68566cc02054232f4a8a0a181f565c6882b2e63c33029",
-  "reviewed_by": "Claude Code, fixing 41-minute chat-hold placement seen on live Core 2026-11-22",
-  "reason": "Placing 70 chat holds kept the project's work-lane command running 41 minutes and every GET of the hold timed out. Root cause (validated by an independent subagent from the live timestamps): place_chats and every read (view, chat_view) ran tick(), which stopped each covered turn one after another under the project's asyncio lock, and each stop waits for the turn's in-flight step and subagents to unwind; each hold also re-read all running goals, active turns and chat lineage. Fix: placement, release and reads tick with stop=False (statuses and goal pauses only); the periodic tick_all starts each project's pass as a background task (never twice) so the chat schedule loop does not wait; a pass reads goals/turns once, shares lineage across holds, and stops due turns concurrently (8 at a time) outside the lock, recording outcomes per hold. Selected: the chat-hold and project-hold suites, including two new regressions that fail on origin/main (placement stopped a turn; the pass timed out on the lock).",
-  "exclusions": "No UI change. tests/test_simulation_host_restart.py::test_host_switch_bounds_a_supervisor_that_never_finishes_its_stop and ::test_host_switch_frees_an_orphan_left_by_a_stop_timeout fail identically on origin/main 045b09d (deployer script, does not import project_holds). Not LAN- or live-verified.",
+  "change_digest": "a2267aef75496183d22d1b98b7c48473ba8127dfbde131ccc04654913a20c864",
+  "reviewed_by": "Codex: E2E fixture and CI refactor, inventory comparison and focused selection",
+  "reason": "Extract existing authentication, first-user, and runtime settings journeys without removing cases. Verify 40 moved cases across eight profiles plus five existing lifecycle checks, resource ownership unit tests, and CI catalog/argument tests. Build production UI. Digest covers the committed refactor and empty root package-lock.json; unrelated uncommitted ui/.env.example edits are excluded. First-user empty knowledge assertion now uses the project-owned route before upload; the inherited global route returned 404. The first-user provider declares its synthetic context window through the UI instead of depending on unknown-model fallback capacity; runtime-settings retains unknown-limit coverage. Follow-up CI trace review: runtime-settings explicitly owns/selects a project and waits for workspace readiness before postreload settings interaction. Reverify its 16 cases across eight profiles; retain prior reviewed selections for the full refactor diff.",
+  "exclusions": "No production feature or native-shell change. Unrelated journeys are retained but not executed. No full-suite approval. Catalog inventory comparison preserves existing project/title registrations. Operator local environment files are outside this task. The committed root package-lock.json has an empty packages map, introduces no dependencies, and needs no additional runtime tests.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
-  "python_node": false,
+  "python_node": true,
   "expected_tests": {
-    "python": 23,
-    "frontend": 0,
+    "python": 45,
+    "frontend": 5,
     "native": 0,
-    "playwright": 0
+    "playwright": 45
   },
   "python": [
-    "tests/v3/test_chat_holds.py",
-    "tests/v3/test_project_holds.py"
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/test/fixtureResources.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "area:authentication-recovery",
+    "area:first-user",
+    "area:runtime-settings",
+    "area:fixture-lifecycle"
+  ],
+  "checks": [
+    "desktop-ui-build"
+  ]
 }

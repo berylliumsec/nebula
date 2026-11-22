@@ -161,9 +161,8 @@ jobs:
           TEST_GREP: ${{ matrix.grep }}
           TEST_SHARD: ${{ matrix.shard }}
         run: |
-          args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
-          if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
-          if test "$TEST_MATCH" = tests/real-core.spec.ts && test "$TEST_SHARD" != 1/1; then args+=(--fully-parallel); fi
+          selected_args="$(node scripts/playwright_entry_args.mjs)"
+          mapfile -t args <<< "$selected_args"
           npm --prefix ui run test:e2e -- "${args[@]}" --list | tee "$RUNNER_TEMP/selected-tests.txt"
           grep -Eq '^Total: [1-9][0-9]* tests? in ' "$RUNNER_TEMP/selected-tests.txt"
           if test "$TEST_MATCH" = tests/assistant-browser-viewer.spec.ts ||
@@ -205,7 +204,7 @@ jobs:
           env -u DOCKER_HOST -u DOCKER_CONTEXT -u DOCKER_TLS_VERIFY -u DOCKER_CERT_PATH "$continuity_runtime" --host unix:///var/run/docker.sock pull "$continuity_image"
           printf 'NEBULA_TEST_MEMORY_RUNTIME=%s\nNEBULA_TEST_MEMORY_SOCKET=unix:///var/run/docker.sock\nNEBULA_TEST_MEMORY_IMAGE=%s\n' "$continuity_runtime" "$continuity_image" >> "$GITHUB_ENV"
           printf 'NEBULA_ACCEPTANCE_PYTHON=%s\n' "$(poetry env info --executable)" >> "$GITHUB_ENV"
-      - name: Run selected entry serially
+      - name: Run selected entry with bounded workers
         shell: bash
         env:
           PROJECT: ${{ matrix.project }}
@@ -242,14 +241,8 @@ jobs:
             export NEBULA_MODEL_TEST_HOST="$(node -e 'const interfaces = Object.values(require("node:os").networkInterfaces()).flat(); const address = interfaces.find(value => value && value.family === "IPv4" && !value.internal)?.address; if (!address) process.exit(1); process.stdout.write(address);')"
             export NEBULA_REQUIRE_LAN_TESTS=1
           fi
-          args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
-          if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
-          # This selected Core file is monolithic. Without fully-parallel
-          # collection Playwright assigns all its tests to shard 1, leaving
-          # later shards empty even though each runner still uses one worker.
-          if test "$TEST_MATCH" = tests/real-core.spec.ts && test "$TEST_SHARD" != 1/1; then
-            args+=(--fully-parallel)
-          fi
+          selected_args="$(node scripts/playwright_entry_args.mjs)"
+          mapfile -t args <<< "$selected_args"
           if test "$MANAGED_BROWSER" = true; then
             if test "$SECURITY_PROXY" = true; then
               export NEBULA_TEST_SECURITY_PROXY_EXECUTABLE="$RUNNER_TEMP/nebula-security-proxy/bin/mitmdump"
