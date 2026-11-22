@@ -888,7 +888,7 @@ class ChatGoalService:
                     "A project hold paused this goal; it resumes when that hold "
                     "is released"
                 )
-            hold = await active_hold(self.store, goal.engagement_id)
+            hold = await active_hold(self.store, goal.engagement_id, goal.session_id)
             if hold is not None:
                 raise ProjectHoldConflict(held_detail(hold))
         now = utc_now()
