@@ -1,37 +1,25 @@
 {
-  "change_digest": "8e29fd6c4dc9c54b953bbb5c7a2f75e4667d92923d246016100d833a84f4adf7",
-  "reviewed_by": "Claude Code, building the approved chat holds and high-priority mockup (Figma page 217:2)",
-  "reason": "UI for chat holds (#1289) and high priority (#1290). Butler board: Active and Idle cards are selectable for Hold N (no confirmation), Hold all active beside the search, a Held section per project with the hold's reason, age, Release all and a per-card Release button, an Undo bar after holding, blue chevrons and high-first order for high-priority cards, and a priority toggle in a card's actions. Chats: High priority (menuitemcheckbox) and Hold chat / Release chat in the conversation menu, bulk high/normal priority, list markers, a 'This chat is on hold' notice with Release, and Release and send replacing Send. Project switcher: a per-project priority toggle. ProjectHoldWatch places and releases chat holds and reads chat_holds. Settings-assistant guidance, Butler mode destination aliases, the product knowledge passages and the Butler workflow registry (chat.high_priority, project.priority) are updated. Selected: the board, board-grouping, hold client, bulk action, hold notice, destination, SideNav and sidebar unit tests; the product-knowledge digest and guidance tests; and the new area:chat-holds-priority journey on all 8 mock profiles.",
-  "exclusions": "Rebased onto main after #1289, #1290 and #1293 merged. src/pages/ButlerModePage.send.test.tsx is not selected: 'shows the message and clears the composer before Core reserves the thread' fails intermittently under the same parallel run on origin/main. tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (2 unreviewed useProjectViewLease signatures). Real-Core coverage was a LAN journey on a disposable Core (API 16 checks; browser desktop Chromium 1440, Chromium 390 and WebKit 390, 12 checks each), not a committed real-core spec.",
+  "change_digest": "2ebae7296fb533d8aaf5a3bb1310fd079d856cc8ab014c817228a7eed5b95471",
+  "reviewed_by": "Claude Code, fixing the main-red PostgreSQL recovery-control tests",
+  "reason": "Three PostgreSQL cases in test_recovery_controls.py failed on main back to at least #1264: every held-recovery control (goal pause, turn stop) ended as a 503 'failed in the project worker before it saved anything'. The recovery fixture in test_recovery_reconciliation.py built its synthetic worker bootstrap with pool_settings=None, so the recovery-control runner's own PostgreSQL Database fell back to PoolSettings.from_environment() and raised 'NEBULA_V3_DB_ADMIN_RESERVE is required'. A real supervisor always hands its workers its pool settings (runtime_service -> RuntimeProcessHost -> WorkerBootstrap), so no product change is needed; the fixture now passes the batch fixture's SETTINGS as the bootstrap dict. A subagent validated the cause independently and ruled out the execution SQL guard. CI now provisions PostgreSQL when either recovery test file is selected, so these variants cannot go stale unseen again. Selected: both recovery test files in full (SQLite and PostgreSQL).",
+  "exclusions": "No product code, UI, native or Playwright change. Locally 53 passed (SQLite and PostgreSQL) with no NEBULA_V3_DB_* variables set.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
-    "frontend": 90,
+    "python": 53,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_resuming_idle_goals_from_butler_board",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_holding_chats_when_priorities_shift",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_high_priority_chats_and_projects"
+    "tests/v3/test_recovery_controls.py",
+    "tests/v3/test_recovery_reconciliation.py"
   ],
-  "frontend": [
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/api/projectHold.test.ts",
-    "ui/src/pages/chatBulkActions.test.ts",
-    "ui/src/components/ProjectHoldNotice.test.tsx",
-    "ui/src/assistantDestinations.test.ts",
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/pages/conversationSidebar.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:chat-holds-priority"
-  ]
+  "playwright": [],
+  "checks": []
 }
