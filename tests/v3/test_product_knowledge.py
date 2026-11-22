@@ -1259,6 +1259,29 @@ def test_product_help_explains_resuming_idle_goals_from_butler_board(monkeypatch
     assert "**Resume N**" in text and "Proposed" in text
 
 
+def test_product_help_explains_holding_chats_when_priorities_shift(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "My priorities changed: how do I hold the current research chats and start new goals?"
+    )
+    assert any(
+        item["heading"] == "Holding chats when priorities shift" for item in matches
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Hold all active**" in text and "**Release and send**" in text
+    assert "nebula.work.hold_chats" in text
+
+
+def test_product_help_explains_high_priority_chats_and_projects(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I mark a chat or project high priority so its work goes first?"
+    )
+    assert any(item["heading"] == "High-priority chats and projects" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**High priority**" in text and "nebula.work.set_priority" in text
+
+
 def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("How do I archive or delete a Butler thread?")

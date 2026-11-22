@@ -1220,8 +1220,11 @@ When an operator asks why work stopped, or why Send or Resume is unavailable,
 explain the hold and that it ends on its own when the update finishes. The
 banner's **Release** control (an icon button at phone width) confirms first and
 should be suggested only when the update that placed the hold is no longer
-running. A hold has no Settings destination and Butler has no action that
-places or releases it; the deployer and the hold API do.
+running. This project-wide hold has no Settings destination; the deployer and
+the hold API place it. Butler can place or release one only when the operator
+asks (`nebula.work.hold_project`, `nebula.work.release_project`). To set
+current research aside while the project keeps working, hold chats instead
+(see "Holding chats when priorities shift").
 
 ## Butler mode
 
@@ -1375,6 +1378,48 @@ or an interrupted response awaiting recovery still refuses it. A status line
 counts progress ("Resuming 12 of 47…") and then reports the result ("Resumed
 45 of 47. 2 stayed idle; their cards say why."). Each refused card shows
 "Not resumed:" with Core's reason and stays ticked so it can be retried.
+
+### Holding chats when priorities shift
+
+When the operator's priorities change, they hold the chats doing the current
+research and start new goals in the same project. A chat hold pauses that
+chat's goal, its subagents, queued follow-ups and schedules; running steps get
+a short grace period and then stop. Other chats, and new chats and goals, keep
+running. Nothing is lost: releasing a hold resumes exactly the goals it paused,
+each from its saved progress.
+
+On the Butler board, tick Active or Idle cards and press **Hold N** in the
+selection bar, or press **Hold all active** beside the search to hold every
+chat with work running now. Hold acts at once with no confirmation; a bar
+then says "Held N chats" with **Undo**. Held chats move to a **Held** section
+under Active, showing the hold's reason and age, with **Release all** for the
+section and a ▷ **Release** button on each card. In a chat, the conversation
+menu has **Hold chat** and **Release chat**; the list shows a pause mark and a
+muted title on a held chat. Opening a held chat shows "This chat is on hold"
+with **Release**, and Send becomes **Release and send**, which releases only
+that chat (and its subagents) and then sends the draft; other chats in the
+same batch stay held.
+
+Butler holds and releases chats when asked, without a confirmation step:
+`nebula.work.hold_chats` (chosen chats, or `all_active`),
+`nebula.work.release_chats` (by batch or chat) and `nebula.work.holds` to read
+them. Background Butler checks never hold or release work.
+
+### High-priority chats and projects
+
+Mark a chat **High priority** in its conversation menu (or for several chats
+from the list's bulk actions), or mark a whole project with the chevron
+button on its row in the project switcher. High-priority work is taken first
+wherever work waits for shared capacity: provider and tool slots, the host
+pressure line, the Host command queue and project workers. Subagents and goal
+children inherit their chat's priority; forks start at normal priority.
+Nothing already running is interrupted and no capacity is set aside, so
+normal work runs at full speed when nothing high-priority is waiting. Blue
+chevrons mark high-priority chats in the list and on Butler board cards, which
+list them first; a card's expanded actions toggle **High priority**. Butler
+sets priority when asked (`nebula.work.set_priority`) and reviews
+high-priority chats first; the operator does not need to tell Butler which
+chats matter.
 
 ## Closing the desktop and shutting down Core
 
