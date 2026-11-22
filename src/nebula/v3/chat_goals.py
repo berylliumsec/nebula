@@ -67,6 +67,16 @@ from .storage import (
 )
 from .skill_catalog import SkillSelection, SkillSnapshot
 
+# A turn in one of these states produces nothing more and keeps no claim.
+_ENDED_TURN_STATUSES = frozenset(
+    {
+        ChatTurnStatus.COMPLETE,
+        ChatTurnStatus.FAILED,
+        ChatTurnStatus.CANCELLED,
+        ChatTurnStatus.INTERRUPTED,
+    }
+)
+
 
 class GoalCreate(BaseModel):
     objective: str = Field(min_length=1, max_length=20_000)
@@ -854,6 +864,18 @@ class ChatGoalService:
             )
         return GoalHandoffCreated(session=target, goal=goal, source_goal=updated)
 
+    async def _claim_held_by_live_turn(self, goal: ChatGoal) -> bool:
+        """Whether a turn that has not ended holds this goal's claim."""
+
+        if goal.execution_claim_id is None:
+            return False
+        holders = await self.store.find_entities(
+            ChatTurn,
+            {"execution_claim_id": goal.execution_claim_id},
+            session_id=goal.session_id,
+        )
+        return any(turn.status not in _ENDED_TURN_STATUSES for turn in holders)
+
     async def write(
         self,
         session_id: str,
@@ -924,10 +946,23 @@ class ChatGoalService:
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
                 "blocked_reason": body.reason,
-                "execution_owner_id": None,
-                "execution_claim_id": None,
-                "execution_claimed_at": None,
             }
+            # Pause stops the goal continuing; it does not stop the turn in
+            # flight (Stop does). While a live turn holds the goal's claim,
+            # the claim stays with it: the turn checks it before every step
+            # and releases it when it ends, and a goal still paused then
+            # starts no next step. Clearing it failed that turn as stale
+            # output, and left a quick resume paused by the failure. A claim
+            # no live turn holds (a turn settling and pausing its own goal)
+            # is released as before.
+            if not await self._claim_held_by_live_turn(goal):
+                changes.update(
+                    {
+                        "execution_owner_id": None,
+                        "execution_claim_id": None,
+                        "execution_claimed_at": None,
+                    }
+                )
             if hold_id is not None:
                 changes["metadata"] = {**goal.metadata, HOLD_MARKER: hold_id}
             if retain_execution_claim:
@@ -937,7 +972,7 @@ class ChatGoalService:
                     "execution_claim_id",
                     "execution_claimed_at",
                 ):
-                    del changes[field]
+                    changes.pop(field, None)
                 if goal.execution_claim_id is not None:
                     changes["blocked_reason"] = body.reason or (
                         "Paused while project recovery is held. Its interrupted "
