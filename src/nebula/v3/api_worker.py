@@ -23,6 +23,12 @@ from sqlalchemy import select
 from starlette.responses import JSONResponse, StreamingResponse
 
 from .authentication import CoreAuthentication
+from .butler_home import (
+    butler_home_enabled,
+    ensure_butler_home,
+    is_home_reservation,
+    target_release_hosts_butler_home,
+)
 from .database import RuntimeCommandRow
 from .authentication_api import AuthenticationApi
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
@@ -809,6 +815,20 @@ def create_api_worker(
             return await response_view(
                 actor, receipt.command_id, receipt=receipt, slots=control_slots
             )
+        if is_home_reservation(intent.method, intent.path, intent.body()):
+            # Routing refuses a project with no row, and only the host or API
+            # creates projects: make Butler's home before it is routed.
+            if not butler_home_enabled():
+                raise HTTPException(
+                    409, "Butler's own worker is not turned on in this Core."
+                )
+            if not await target_release_hosts_butler_home(store):
+                raise HTTPException(
+                    409,
+                    "Butler's own worker needs a newer Core release; "
+                    "use Butler inside the project for now.",
+                )
+            await ensure_butler_home(store)
         project_id = await project_for(intent)
         chat_acceptance = False
         chat_resume = False

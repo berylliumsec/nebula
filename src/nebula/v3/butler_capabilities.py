@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from jsonschema import Draft202012Validator, ValidationError
 
+from .stored_entities import decode_stored
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -31,6 +32,8 @@ from .domain import (
     message_is_replaced,
     utc_now,
 )
+from .execution_scope import observer_reads
+from .runtime_butler_actions import ButlerAction, butler_work_changes
 from .settings_assistant_tools import provider_plugins
 from .tools import AnalysisTool, CapabilityInputError, IdempotencyBehavior, ToolSpec
 
@@ -114,6 +117,7 @@ _BACKGROUND_CHANGES = frozenset(
     {
         "nebula.work.create_goal",
         "nebula.work.create_goal_conversation",
+        "nebula.work.propose_goal_chat",
         "nebula.work.handoff_goal",
         "nebula.work.create_goal_child",
         "nebula.work.stop_subagent",
@@ -307,7 +311,13 @@ class ButlerCapabilities:
     @classmethod
     async def create(cls, *args, **kwargs) -> "ButlerCapabilities":
         instance = cls.__new__(cls)
-        await instance._initialize(*args, **kwargs)
+        if kwargs.get("observer"):
+            # Butler's home worker reads the focus project's committed rows;
+            # setup reads that project's name, policy and settings.
+            with observer_reads():
+                await instance._initialize(*args, **kwargs)
+        else:
+            await instance._initialize(*args, **kwargs)
         return instance
 
     async def _initialize(
@@ -328,10 +338,19 @@ class ButlerCapabilities:
         instructions_root: Path | None = None,
         background_runtime_local: bool = False,
         client_surface: str = "browser",
+        observer: bool = False,
+        butler_actions: Any = None,
     ) -> None:
         if client_surface not in CLIENT_SURFACES:
             raise ValueError("unknown Butler client surface")
+        if observer and background_case_id is not None:
+            raise ValueError("background Butler cases still run in their project")
         self._client_surface = client_surface
+        # Set on Butler's home worker: project_id is the session's focus
+        # project, which this worker reads but does not own. Its work changes
+        # go to that project's worker as butler.action/v1 commands.
+        self._observer = observer
+        self._butler_actions = butler_actions if observer else None
         # Existing handlers retain project ownership, revision and permission
         # checks. The gateway only controls discovery and schema validation.
         self._store = store
@@ -354,6 +373,11 @@ class ButlerCapabilities:
                 all_work=True,
             )
         }
+        proposal = self._actions.get("nebula.work.propose_goal_chat")
+        if work is not None and isinstance(proposal, AnalysisTool):
+            self._actions[proposal.spec.name] = AnalysisTool(
+                proposal.spec, self._propose_goal_chat
+            )
         if background_case_id is None:
             from .butler_administration import ButlerAdministration
             from .butler_chat_export import ButlerChatExport
@@ -553,6 +577,19 @@ class ButlerCapabilities:
                     }
                 )
 
+    async def _propose_goal_chat(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Propose a goal chat that names this Butler conversation as its source."""
+
+        assert self._work is not None
+        caller_session_id: str | None = None
+        if self._operator_turn_id:
+            turn = await self._store.get(ChatTurn, self._operator_turn_id)
+            if turn.engagement_id == self._project_id:
+                caller_session_id = turn.session_id
+        return await self._work.propose_goal_chat(
+            self._project_id, arguments, caller_session_id=caller_session_id
+        )
+
     async def _background_case(self) -> ButlerRecoveryCase:
         if self._background_case_id is None:
             raise RuntimeError("not a background Butler action")
@@ -642,7 +679,7 @@ class ButlerCapabilities:
             populate_existing=True,
         )
         return (
-            ButlerRecoveryCase.model_validate(row.payload) if row is not None else None
+            decode_stored(ButlerRecoveryCase, row.payload) if row is not None else None
         )
 
     async def _begin_background_step(
@@ -714,7 +751,6 @@ class ButlerCapabilities:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
     ) -> None:
-
         assert self._background_case_id is not None
         async with self._store.transaction(immediate=True) as transaction:
             case = await self._locked_background_case(transaction)
@@ -1156,6 +1192,18 @@ class ButlerCapabilities:
                 f"use nebula.capabilities.{route} for {name}",
                 reason=f"use_{route}",
             )
+        if (
+            self._observer
+            and change
+            and (self._butler_actions is None or name not in butler_work_changes())
+        ):
+            # Only Butler's work changes travel to another project's worker;
+            # settings, storage and other families still run in-project.
+            raise CapabilityInputError(
+                f"Butler can't make this change to {self._project_name} from "
+                "here yet. Make it from that project's Butler.",
+                reason="home_change_unavailable",
+            )
         payload = arguments.get("arguments")
         if not isinstance(payload, dict):
             raise CapabilityInputError(
@@ -1176,6 +1224,16 @@ class ButlerCapabilities:
                 raise ValueError("this operation is unavailable to background Butler")
             if change:
                 (await self._check_background_change_reason(case, name, payload))
+            from .control_assistant_work import HOLD_OPERATIONS
+
+            if (
+                change
+                and name == "nebula.global.work_change"
+                and payload.get("operation") in HOLD_OPERATIONS
+            ):
+                # Holds follow the operator's priorities; background Butler
+                # never freezes or releases work on its own.
+                raise ValueError("only the operator's Butler can hold or release work")
             if change and name in {
                 "nebula.work.set_chat_settings",
                 "nebula.work.message_chat",
@@ -1241,6 +1299,11 @@ class ButlerCapabilities:
                     payload,
                     idempotency_key=f"recovery:{self._background_case_id}:{step_id}",
                 )
+            elif self._observer and change:
+                result = await self._send_change(name, payload)
+            elif self._observer:
+                with observer_reads():
+                    result = await plugin._handler(payload)
             else:
                 result = await plugin._handler(payload)
             refuse_browser_handoff(name, result, self._client_surface)
@@ -1263,6 +1326,36 @@ class ButlerCapabilities:
             "butler_operation": name,
             "butler_project_id": self._project_id,
         }
+
+    async def _send_change(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Have the focus project's own worker make one Butler work change."""
+
+        if self._butler_actions is None:
+            raise CapabilityInputError(
+                "Butler's own worker cannot send changes",
+                reason="home_change_unavailable",
+            )
+        outcome = await self._butler_actions.run(
+            self._project_id,
+            ButlerAction(
+                action=name, arguments=payload, home_turn_id=self._operator_turn_id
+            ),
+        )
+        if outcome["state"] == "failed":
+            detail = outcome["result"].get("detail") or "the change was refused"
+            raise ValueError(f"{self._project_name} refused the change: {detail}")
+        if outcome["state"] == "accepted":
+            return {
+                "state": "accepted",
+                "command_id": outcome["command_id"],
+                "detail": (
+                    f"Queued behind {self._project_name}'s current work; it runs "
+                    "there within ten minutes or not at all. Read the project "
+                    "again before reporting it done."
+                ),
+            }
+        applied = outcome["result"].get("applied")
+        return applied if isinstance(applied, dict) else {"result": applied}
 
     def plugins(self) -> list[AnalysisTool]:
         descriptions = (

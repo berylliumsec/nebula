@@ -580,6 +580,16 @@ happened, an after-hook failure is retained and diagnosed without rewriting the
 primary command result. Chat, mission, harness and API owners use the same durable
 hook record with explicit owner identity.
 
+Hook routing target (2026-11-20): a blocking `tool.before` manifest may list
+`route_to`, up to eight tool names such as `["workspace.search"]`. A denial from
+that hook tells the model to call those tools instead of rewording the command,
+and carries them as `use_instead`; the names come from the frozen manifest
+snapshot, never from hook output. Without `route_to` the denial text is
+unchanged. In provider chat routing, a hook denial is a call that ran, so it
+resets the deviation count; the third denial by the same hook in one turn
+therefore stops routing on its own, through the same deviation-limit path,
+even with other calls running in between. Other hooks count separately.
+
 G9 operator-workflow checkpoint (2026-09-18): provider Assistant settings discover
 project `.agents/hooks`, allow explicit per-turn selection, and send exact hook IDs
 only on provider requests. Durable outcomes reload with the conversation. Restart

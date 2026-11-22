@@ -5,6 +5,7 @@ This is a project-bound control plane over Core's chat and mission services.
 
 from __future__ import annotations
 
+from .work_priority import marked_high
 from .async_utils import resolve_workspace
 
 import asyncio
@@ -52,6 +53,7 @@ from .domain import (
     ApprovalStatus,
     AssistantDefaults,
     BrowserIdentity,
+    ButlerAuthorityPolicy,
     BrowserSession,
     BrowserSessionStatus,
     ChatBackend,
@@ -89,7 +91,14 @@ from .native_hooks import discover_native_hooks
 from .settings_assistant_tools import model_choices
 from .database import EntityRow
 from .storage import NebulaStore, NotFoundError, readable_entities
-from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService, WorkSettingPatch
+from .work import (
+    WorkCheckIn,
+    WorkCreate,
+    WorkPatch,
+    WorkService,
+    WorkSettingPatch,
+    WorkStagesPatch,
+)
 
 
 EMPTY_SCHEMA: dict[str, Any] = {
@@ -417,6 +426,15 @@ ANSWER_QUESTION_SCHEMA: dict[str, Any] = {
     },
     "required": ["action_id", "expected_revision", "action"],
 }
+SET_PRIORITY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "priority": {"type": "string", "enum": ["high", "normal"]},
+    },
+    "required": ["priority"],
+}
 UPDATE_CHAT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -432,6 +450,46 @@ UPDATE_CHAT_SCHEMA: dict[str, Any] = {
         },
     },
     "required": ["session_id", "expected_revision"],
+}
+HOLD_CHATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 200,
+        },
+        "all_active": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+RELEASE_CHATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "batch_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "session_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 200,
+        },
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+HOLD_PROJECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+RELEASE_PROJECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
 }
 CHAT_MESSAGES_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -507,6 +565,11 @@ WORK_ITEM_TARGET_SCHEMA: dict[str, Any] = {
     },
     "required": ["item_id"],
 }
+WORK_STAGE_KEY_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+    "description": "A stage key from nebula.work.work_stages.",
+}
 WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -519,6 +582,7 @@ WORK_ITEM_CREATE_SCHEMA: dict[str, Any] = {
         },
         "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
         "assignee_session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "stage": WORK_STAGE_KEY_SCHEMA,
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
     "required": ["title", "request_id"],
@@ -533,6 +597,11 @@ WORK_ITEM_UPDATE_SCHEMA: dict[str, Any] = {
         "description": {"type": "string", "maxLength": 20000},
         "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
         "assignee_session_id": {"type": ["string", "null"], "maxLength": 200},
+        "stage": {
+            "type": ["string", "null"],
+            "pattern": WORK_STAGE_KEY_SCHEMA["pattern"],
+            "description": "A stage key from nebula.work.work_stages; null clears it.",
+        },
     },
     "required": ["item_id", "expected_revision"],
 }
@@ -550,6 +619,7 @@ WORK_ITEM_CHECK_IN_SCHEMA: dict[str, Any] = {
             "description": "Only when the work cannot continue; any blocker saves the item as blocked whatever status is given.",
         },
         "status": WORK_ITEM_CREATE_SCHEMA["properties"]["status"],
+        "stage": WORK_STAGE_KEY_SCHEMA,
         "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
     },
     "required": ["item_id", "expected_revision", "summary", "request_id"],
@@ -562,6 +632,29 @@ WORK_SETTING_SCHEMA: dict[str, Any] = {
         "expected_revision": {"type": "integer", "minimum": 1},
     },
     "required": ["enabled", "expected_revision"],
+}
+WORK_STAGES_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "stages": {
+            "type": "array",
+            "maxItems": 12,
+            "description": "The project's full ordered stage list; it replaces the saved list.",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "key": WORK_STAGE_KEY_SCHEMA,
+                    "label": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "flag_when_empty": {"type": "boolean"},
+                },
+                "required": ["key", "label"],
+            },
+        },
+        "expected_revision": {"type": "integer", "minimum": 1},
+    },
+    "required": ["stages", "expected_revision"],
 }
 WORK_UPDATES_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -655,6 +748,21 @@ START_GOAL_CONVERSATION_SCHEMA: dict[str, Any] = {
         "subagent_reasoning_effort": {"type": "string"},
     },
     "required": ["objective", "completion_criteria"],
+}
+PROPOSE_GOAL_CHAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **START_GOAL_CONVERSATION_SCHEMA["properties"],
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "reports_to_session_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "A listed main chat this goal chat reports to. Omit to report to this Butler conversation.",
+        },
+    },
+    "required": ["title", "objective", "completion_criteria"],
 }
 UPDATE_GOAL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1353,7 +1461,11 @@ class ControlAssistantWork:
             limit=50,
         )
         return {
-            "project": {"id": project.id, "name": project.name},
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "priority": "high" if marked_high(project.metadata) else "normal",
+            },
             "chats": [
                 {
                     "id": item.id,
@@ -1367,10 +1479,15 @@ class ControlAssistantWork:
                     "archived": isinstance(item.metadata.get("archived_at"), str),
                     "pinned": item.metadata.get("pinned") is True,
                     "flag_color": item.metadata.get("flag_color"),
+                    "priority": "high" if marked_high(item.metadata) else "normal",
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
                 }
-                for item in chats[:30]
+                # High-priority chats first: Butler reviews and unblocks them
+                # before the rest.
+                for item in sorted(
+                    chats[:30], key=lambda chat: not marked_high(chat.metadata)
+                )
             ],
             "subagents": [
                 (await self._subagent_summary(item)) for item in subagents[:30]
@@ -1416,6 +1533,7 @@ class ControlAssistantWork:
                 "revision": item.revision,
                 "archived": isinstance(item.metadata.get("archived_at"), str),
                 "pinned": item.metadata.get("pinned") is True,
+                "priority": "high" if marked_high(item.metadata) else "normal",
                 "flag_color": item.metadata.get("flag_color"),
                 "url": _chat_url(project_id, item.id),
             }
@@ -1485,6 +1603,45 @@ class ControlAssistantWork:
         return {
             **observed,
             "saved": observed["enabled"] == request.enabled
+            and observed["revision"] == saved["revision"],
+        }
+
+    async def work_stages(self, project_id: str) -> dict[str, Any]:
+        project = await self._project(project_id)
+        effective, source = await self.work_service.effective_stages(project)
+        return {
+            "project_id": project_id,
+            # The project's own stages; set_work_stages replaces only these.
+            "stages": [stage.model_dump(mode="json") for stage in project.work_stages],
+            # What its board uses: its own, else its nearest parent's.
+            "effective_stages": [stage.model_dump(mode="json") for stage in effective],
+            "inherited_from": (
+                {"project_id": source.id, "name": source.name} if source else None
+            ),
+            "revision": project.revision,
+            "url": f"/projects/{quote(project_id, safe='')}/work?stages=edit",
+        }
+
+    async def set_work_stages(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        _validate_work_item_arguments(arguments, WORK_STAGES_SCHEMA)
+        current = await self._project(project_id)
+        if current.revision != arguments["expected_revision"]:
+            raise ValueError(
+                "project Work stages changed; read its current revision before updating"
+            )
+        request = WorkStagesPatch.model_validate(arguments)
+        saved = await self._request(
+            "PATCH",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/work/stages",
+            request.model_dump(mode="json", exclude_unset=True),
+        )
+        observed = await self.work_stages(project_id)
+        return {
+            **observed,
+            "saved": observed["stages"]
+            == [stage.model_dump(mode="json") for stage in request.stages]
             and observed["revision"] == saved["revision"],
         }
 
@@ -1668,6 +1825,7 @@ class ControlAssistantWork:
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
             "pinned": session.metadata.get("pinned") is True,
+            "priority": "high" if marked_high(session.metadata) else "normal",
             "flag_color": session.metadata.get("flag_color"),
             "task_plans": [
                 item.model_dump(mode="json")
@@ -1908,6 +2066,17 @@ class ControlAssistantWork:
     async def create_goal_conversation(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        body = await self._goal_conversation_body(
+            project_id, arguments, butler_initiated=True
+        )
+        result = await self._request(
+            "POST", "/api/v1/chat/goal-conversations", body.model_dump(mode="json")
+        )
+        return await self.goal_detail(project_id, result["session"]["id"])
+
+    async def _goal_conversation_body(
+        self, project_id: str, arguments: dict[str, Any], **extra: Any
+    ) -> GoalConversationCreate:
         (await self._project(project_id))
         backend, profile_id, model = await self._runtime(arguments)
         fields = {
@@ -1926,7 +2095,7 @@ class ControlAssistantWork:
             harness_profile_id=profile_id if backend == "harness" else None,
             model=model,
             tools_enabled=enabled,
-            butler_initiated=True,
+            **extra,
             **{
                 key: value
                 for key, value in arguments.items()
@@ -1949,10 +2118,174 @@ class ControlAssistantWork:
             },
             **goal.model_dump(),
         )
-        result = await self._request(
+        return body
+
+    async def _butler_may_start_goals(self, project_id: str) -> bool:
+        """Whether the project's standing Butler grant covers starting goal chats.
+
+        Delegate and Act authority let Butler start the goal chat it proposes;
+        Watch and Steer leave the draft for the operator to start.
+        """
+
+        policy = await self.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", project_id
+        )
+        return policy is not None and policy.authority in {"delegate", "act"}
+
+    async def propose_goal_chat(
+        self,
+        project_id: str,
+        arguments: dict[str, Any],
+        *,
+        caller_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Save a Butler-proposed goal chat as a draft, or start it if delegated.
+
+        The draft is an ordinary goal conversation, so it survives reloads and
+        shows on every device. The operator starts, edits or deletes it with
+        the existing goal and chat routes. Under Delegate or Act authority,
+        Butler starts it immediately and reports that it started.
+        """
+
+        title = _text(arguments.get("title"), "title", 300)
+        reports_to: ChatSession | None = None
+        if arguments.get("reports_to_session_id") is not None:
+            reports_to = await self._chat(
+                project_id, arguments.get("reports_to_session_id")
+            )
+        butler_session: ChatSession | None = None
+        if caller_session_id:
+            caller = await self.store.get(ChatSession, caller_session_id)
+            if (
+                caller.engagement_id == project_id
+                and caller.metadata.get("control_assistant") is True
+            ):
+                butler_session = caller
+        delegated = await self._butler_may_start_goals(project_id)
+        body = await self._goal_conversation_body(
+            project_id,
+            {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"title", "reports_to_session_id"}
+            },
+            butler_initiated=delegated,
+            title=title,
+            proposed_by_butler=True,
+            butler_session_id=butler_session.id if butler_session else None,
+            reports_to_session_id=reports_to.id if reports_to else None,
+        )
+        created = await self._request(
             "POST", "/api/v1/chat/goal-conversations", body.model_dump(mode="json")
         )
-        return await self.goal_detail(project_id, result["session"]["id"])
+        session_id = str(created["session"]["id"])
+        start_error: str | None = None
+        if delegated:
+            try:
+                await self._request(
+                    "POST",
+                    f"/api/v1/chat/sessions/{quote(session_id, safe='')}/goal/actions",
+                    GoalWrite(
+                        expected_revision=int(created["goal"]["revision"]),
+                        action="start",
+                    ).model_dump(mode="json"),
+                )
+            except ValueError as exc:
+                # diagnostic-expected: Core refused the delegated start (a
+                # project hold, say); the saved draft stays for the operator
+                # and the receipt reports the refusal.
+                start_error = str(exc)[:500]
+                draft = await self.store.get(ChatSession, session_id)
+                await self.store.update(
+                    ChatSession,
+                    draft.id,
+                    {
+                        "metadata": {
+                            key: value
+                            for key, value in draft.metadata.items()
+                            if key != "butler_initiated"
+                        }
+                    },
+                    expected_revision=draft.revision,
+                )
+        started = delegated and start_error is None
+        session = await self.store.get(ChatSession, session_id)
+        goal = await self.goals.get(session_id)
+        mcp_names = {
+            item.id: item.name
+            for item in await self.store.find_entities(McpServerProfile, {}, limit=None)
+            if item.id in body.mcp_server_ids
+        }
+        client_action = {
+            "kind": "goal_chat_started" if started else "goal_chat_proposal",
+            "sessionId": session.id,
+            "projectId": project_id,
+            "title": session.title,
+            "objective": goal.objective,
+            "completionCriteria": list(goal.completion_criteria),
+            "plan": list(goal.plan),
+            "runtime": {
+                "backend": body.backend.value,
+                "profileId": body.provider_id or body.harness_profile_id,
+                "model": body.model,
+                "reasoningEffort": (
+                    body.harness_reasoning_effort
+                    if body.backend == ChatBackend.HARNESS
+                    else body.reasoning_effort
+                ),
+            },
+            "limits": {
+                "timeBudgetSeconds": goal.time_budget_seconds,
+                "tokenBudget": goal.token_budget,
+                "stepBudget": goal.step_budget,
+                "allowSubagents": body.allow_subagents,
+                "maxActiveSubagents": body.max_active_subagents,
+            },
+            "toolsEnabled": body.tools_enabled,
+            "tools": [
+                {"id": item_id, "name": mcp_names.get(item_id, item_id)}
+                for item_id in body.mcp_server_ids
+            ],
+            "reportsTo": (
+                {
+                    "sessionId": reports_to.id,
+                    "title": reports_to.title,
+                    "kind": "chat",
+                }
+                if reports_to
+                else {
+                    "sessionId": butler_session.id,
+                    "title": butler_session.title,
+                    "kind": "butler",
+                }
+                if butler_session
+                else None
+            ),
+            "goalStatus": goal.status.value,
+            "goalRevision": goal.revision,
+            "sessionRevision": session.revision,
+            "url": _chat_url(project_id, session.id),
+        }
+        if started:
+            return {
+                "state": "started",
+                "operator_confirmation_required": False,
+                "client_action": client_action,
+                "result": (
+                    "Started under this project's standing Butler authority; "
+                    "tell the operator it started and where to follow it."
+                ),
+            }
+        return {
+            "state": "proposed",
+            "operator_confirmation_required": True,
+            "client_action": client_action,
+            "result": (
+                "Saved as a draft goal chat. Nothing runs until the operator "
+                "presses Start; they can also edit or cancel it."
+            ),
+            **({"start_error": start_error} if start_error else {}),
+        }
 
     async def update_goal(
         self, project_id: str, arguments: dict[str, Any]
@@ -2886,6 +3219,38 @@ class ControlAssistantWork:
             "url": _chat_url(project_id, saved.id),
         }
 
+    async def set_priority(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        priority = arguments.get("priority")
+        if priority not in ("high", "normal"):
+            raise ValueError("priority must be high or normal")
+        if arguments.get("session_id"):
+            session = await self._chat(project_id, arguments["session_id"])
+            await self._request(
+                "PATCH",
+                f"/api/v1/chat-sessions/{quote(session.id, safe='')}",
+                {"priority": priority},
+            )
+            saved = await self._chat(project_id, session.id)
+            return {
+                "session_id": saved.id,
+                "priority": "high" if marked_high(saved.metadata) else "normal",
+                "url": _chat_url(project_id, saved.id),
+                "result": "saved; waiting work from this chat and its subagents is now taken first",
+            }
+        await self._request(
+            "PUT",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/priority",
+            {"priority": priority},
+        )
+        project = await self.store.get(Engagement, project_id)
+        return {
+            "project_id": project_id,
+            "priority": "high" if marked_high(project.metadata) else "normal",
+            "result": "saved; waiting work from every chat in this project is now taken first",
+        }
+
     async def rewind_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -3588,6 +3953,91 @@ class ControlAssistantWork:
             "status": observed.status.value if observed else "idle",
         }
 
+    def _holds_path(self, project_id: str) -> str:
+        return f"/api/v1/engagements/{quote(project_id, safe='')}"
+
+    async def holds(self, project_id: str) -> dict[str, Any]:
+        view = await self._request("GET", f"{self._holds_path(project_id)}/hold", {})
+        return _hold_summary(project_id, view)
+
+    async def hold_chats(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session_ids = arguments.get("session_ids") or []
+        all_active = arguments.get("all_active") is True
+        if not all_active and not session_ids:
+            raise ValueError("pass session_ids, or all_active=true for every busy chat")
+        for session_id in session_ids:
+            await self._chat(project_id, session_id)
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/holds",
+            {
+                "session_ids": session_ids,
+                "all_active": all_active,
+                "reason": _text(
+                    arguments.get("reason") or "Priorities changed", "reason", 500
+                ),
+            },
+        )
+        return {
+            "batch_id": view.get("batch_id"),
+            "held_chats": [hold["session_id"] for hold in view.get("holds", [])],
+            **_hold_summary(project_id, view),
+            "result": "held; running steps get a short grace period, then stop. New chats and goals in this project still start.",
+        }
+
+    async def release_chats(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not arguments.get("batch_id") and not arguments.get("session_ids"):
+            raise ValueError("pass the batch_id or session_ids to release")
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/holds/release",
+            {
+                key: arguments[key]
+                for key in ("batch_id", "session_ids", "reason")
+                if arguments.get(key)
+            },
+        )
+        released = view.get("released", [])
+        return {
+            "released_chats": [hold["session_id"] for hold in released],
+            "restored_goals": [
+                item for hold in released for item in hold.get("restored_goals", [])
+            ],
+            **_hold_summary(project_id, view),
+        }
+
+    async def hold_project(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/hold",
+            {
+                "reason": _text(
+                    arguments.get("reason") or "Held through Butler", "reason", 500
+                )
+            },
+        )
+        return _hold_summary(project_id, view)
+
+    async def release_project(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        current = await self._request("GET", f"{self._holds_path(project_id)}/hold", {})
+        hold = current.get("hold") or {}
+        if not current.get("held") or not hold.get("id"):
+            return {**_hold_summary(project_id, current), "released": False}
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/hold/{quote(hold['id'], safe='')}/release",
+            {"reason": arguments.get("reason") or "Released through Butler"},
+        )
+        return {**_hold_summary(project_id, view), "released": True}
+
     async def _request(
         self,
         method: str,
@@ -3785,6 +4235,18 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.work_stages",
+        "Read this project's ordered Work stages (key, label, flag when empty) and the current project revision. A subproject without its own stages uses its nearest parent's: effective_stages and inherited_from report them. Items use a stage key; the Work board can group by stage.",
+        EMPTY_SCHEMA,
+        True,
+    ),
+    (
+        "nebula.work.set_work_stages",
+        "Replace this project's ordered Work stages after explicit operator instruction. Read them first, pass the full list and the current project revision. Items keep their stage keys; an item whose key is no longer listed shows under Other stage.",
+        WORK_STAGES_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.work_updates",
         "Page saved check-ins for one selected-project Work item, including older updates. Use next_offset until the desired update is found, then read its exact text.",
         WORK_UPDATES_SCHEMA,
@@ -3860,6 +4322,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         "nebula.work.create_goal_conversation",
         "Create a new main assistant chat with a draft goal in the selected project. Choose a listed runtime. Use harness_reasoning_effort for a harness, or reasoning_effort for a provider. Call goal_action to start the saved draft; creation alone does not start work.",
         START_GOAL_CONVERSATION_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.propose_goal_chat",
+        "Propose a new goal chat when the operator asks for work to be spun up: title, listed runtime and model (harness_reasoning_effort for a harness, reasoning_effort for a provider), objective, completion_criteria, MCP tools, and limits (time_budget_seconds, token_budget, step_budget, subagents). Core saves it as a durable draft the operator starts, edits or cancels; state=proposed means nothing runs yet, so tell the operator to press Start. Under this project's Delegate or Act authority Core starts it at once and returns state=started; report that it started. Prefer this over create_goal_conversation for operator requests.",
+        PROPOSE_GOAL_CHAT_SCHEMA,
         False,
     ),
     (
@@ -4013,6 +4481,36 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.holds",
+        "Read this project's holds: whether the whole project is held, and which chats are on hold, by batch.",
+        {"type": "object", "additionalProperties": False, "properties": {}},
+        True,
+    ),
+    (
+        "nebula.work.hold_chats",
+        "Put listed chats on hold at once, or all_active=true for every chat with a running goal or response. A hold pauses each chat's goal, its subagents, queued follow-ups and schedules; running steps get a short grace period, then stop. New chats and goals in the project still start, so use this when priorities shift. Act when the operator asks; no confirmation is needed. Returns a batch_id for releasing them together.",
+        HOLD_CHATS_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.release_chats",
+        "Release held chats by batch_id or session_ids. Core resumes exactly the goals the hold paused; stopped steps are not replayed, each goal continues from its saved progress.",
+        RELEASE_CHATS_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.hold_project",
+        "Hold the whole project: nothing starts in it, including new chats, until released. For a priority shift inside a project, use hold_chats instead.",
+        HOLD_PROJECT_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.release_project",
+        "Release the project-wide hold and resume exactly the goals it paused.",
+        RELEASE_PROJECT_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.stop_chat",
         "Stop the selected assistant chat's active turn only. Queued follow-ups are separate.",
         CHAT_TARGET_SCHEMA,
@@ -4079,6 +4577,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.set_priority",
+        "Mark one chat (session_id) or, without session_id, the whole project as high or normal priority. High-priority work, including its subagents, is taken first wherever it waits for provider, tool, Host command or worker capacity; nothing running is interrupted. Act when the operator asks; no confirmation is needed. Review and unblock high-priority chats before others.",
+        SET_PRIORITY_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.rewind_chat",
         "Retract one exact saved user message and every later message in the same main chat after explicit operator instruction. Read nebula.work.chat_messages and pass its current revision. Core refuses active responses and stale revisions. Sending edited text is a separate nebula.work.message_chat action; verify each result separately. Interactive Butler only.",
         REWIND_CHAT_SCHEMA,
@@ -4135,8 +4639,47 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
 )
 
 
+# Hold controls follow the operator's priorities: interactive Butler uses them
+# at once, background Butler never does.
+HOLD_OPERATIONS = frozenset(
+    {
+        "nebula.work.hold_chats",
+        "nebula.work.release_chats",
+        "nebula.work.hold_project",
+        "nebula.work.release_project",
+    }
+)
+
+
+def _hold_summary(project_id: str, view: dict[str, Any]) -> dict[str, Any]:
+    hold = view.get("hold") or {}
+    return {
+        "project_id": project_id,
+        "project_held": bool(view.get("held")),
+        "project_hold": (
+            {key: hold.get(key) for key in ("id", "status", "reason", "grace_until")}
+            if view.get("held")
+            else None
+        ),
+        "chat_holds": [
+            {
+                key: item.get(key)
+                for key in ("id", "session_id", "batch_id", "status", "reason")
+            }
+            for item in view.get("chat_holds", [])
+        ],
+        "active_turns": view.get("active_turns"),
+        "running_goals": view.get("running_goals"),
+    }
+
+
 async def dispatch_work_tool(
-    work: ControlAssistantWork, project_id: str, name: str, arguments: dict[str, Any]
+    work: ControlAssistantWork,
+    project_id: str,
+    name: str,
+    arguments: dict[str, Any],
+    *,
+    caller_session_id: str | None = None,
 ) -> dict[str, Any]:
     if name == "nebula.work.catalog":
         return await work.catalog(project_id, arguments.get("operation"))
@@ -4147,7 +4690,9 @@ async def dispatch_work_tool(
         payload = arguments.get("arguments")
         if not isinstance(payload, dict):
             raise ValueError("provide arguments for the managed operation")
-        return await dispatch_work_tool(work, project_id, operation, payload)
+        return await dispatch_work_tool(
+            work, project_id, operation, payload, caller_session_id=caller_session_id
+        )
     if name == "nebula.work.overview":
         return await work.overview(project_id)
     if name == "nebula.work.host_load":
@@ -4168,6 +4713,10 @@ async def dispatch_work_tool(
         return await work.work_item(project_id, arguments)
     if name == "nebula.work.work_setting":
         return await work.work_setting(project_id)
+    if name == "nebula.work.work_stages":
+        return await work.work_stages(project_id)
+    if name == "nebula.work.set_work_stages":
+        return await work.set_work_stages(project_id, arguments)
     if name == "nebula.work.set_work_setting":
         return await work.set_work_setting(project_id, arguments)
     if name == "nebula.work.work_updates":
@@ -4194,6 +4743,10 @@ async def dispatch_work_tool(
         return await work.create_goal(project_id, arguments)
     if name == "nebula.work.create_goal_conversation":
         return await work.create_goal_conversation(project_id, arguments)
+    if name == "nebula.work.propose_goal_chat":
+        return await work.propose_goal_chat(
+            project_id, arguments, caller_session_id=caller_session_id
+        )
     if name == "nebula.work.update_goal":
         return await work.update_goal(project_id, arguments)
     if name == "nebula.work.goal_action":
@@ -4242,6 +4795,16 @@ async def dispatch_work_tool(
         return await work.message_chat(project_id, arguments)
     if name == "nebula.work.await_chat_result":
         return await work.await_chat_result(project_id, arguments)
+    if name == "nebula.work.holds":
+        return await work.holds(project_id)
+    if name == "nebula.work.hold_chats":
+        return await work.hold_chats(project_id, arguments)
+    if name == "nebula.work.release_chats":
+        return await work.release_chats(project_id, arguments)
+    if name == "nebula.work.hold_project":
+        return await work.hold_project(project_id, arguments)
+    if name == "nebula.work.release_project":
+        return await work.release_project(project_id, arguments)
     if name == "nebula.work.stop_chat":
         return await work.stop_chat(project_id, arguments.get("session_id"))
     if name == "nebula.work.start_mission":
@@ -4264,6 +4827,8 @@ async def dispatch_work_tool(
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":
         return await work.update_chat(project_id, arguments)
+    if name == "nebula.work.set_priority":
+        return await work.set_priority(project_id, arguments)
     if name == "nebula.work.rewind_chat":
         return await work.rewind_chat(project_id, arguments)
     if name == "nebula.work.fork_chat":

@@ -179,6 +179,14 @@ body {
 .workspace-state-banner.project-runtime-notice { justify-content: flex-start; gap: 10px; }
 .project-runtime-notice > svg { flex: 0 0 auto; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .project-runtime-notice > .spin { animation: none; } }
+.project-hold-notice > span { flex: 1 1 auto; min-width: 0; }
+.project-hold-notice.held > svg { color: var(--orange); }
+.project-hold-notice .button.project-hold-release { flex: 0 0 auto; align-self: center; height: auto; min-height: 32px; gap: 6px; white-space: nowrap; border: 1px solid var(--border); }
+.project-hold-error { color: var(--red); }
+@media (max-width: 640px) {
+  .project-hold-release-label { display: none; }
+  .project-hold-notice .button.project-hold-release { padding-inline: 7px; min-width: 44px; justify-content: center; }
+}
 .update-banner-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .update-banner-actions .button { white-space: nowrap; }
 
@@ -670,7 +678,11 @@ kbd { font-size: 11px; }
 .session-list-item > .session-select > span { display: flex; min-width: 0; max-width: 100%; overflow: hidden; flex-direction: column; }
 .session-list-item > .session-select strong { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-list-item > .session-select .conversation-title-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-pin-marker, .conversation-flag-marker { flex: none; }
+.conversation-pin-marker, .conversation-flag-marker, .conversation-priority-marker, .conversation-hold-marker { flex: none; }
+/* High priority: blue chevrons; a held chat: pause mark and muted title. */
+.conversation-priority-marker { color: var(--blue); }
+.conversation-hold-marker { color: var(--muted); }
+.session-list-item.held .conversation-title-text { color: var(--muted); }
 .conversation-pin-marker { color: var(--muted-strong); }
 .conversation-flag-marker[data-color="red"], .session-flag-picker button[data-color="red"] { color: #db4e57; }
 .conversation-flag-marker[data-color="orange"], .session-flag-picker button[data-color="orange"] { color: #d87832; }
@@ -701,6 +713,7 @@ kbd { font-size: 11px; }
 .session-flag-picker button:disabled { opacity: .4; cursor: default; }
 .session-actions-menu > button:hover, .session-actions-menu > button:focus-visible { color: var(--text); background: var(--surface-hover); outline: 0; }
 .session-actions-menu > button.danger { color: var(--red); }
+.session-actions-menu > button[role="menuitemcheckbox"] .menu-check { margin-left: auto; color: var(--blue); }
 .session-actions-menu > button.danger:hover, .session-actions-menu > button.danger:focus-visible { background: var(--red-muted); }
 @media (max-width: 760px), (hover: none), (pointer: coarse) {
   .session-new-chat { min-height: 48px; }
@@ -1601,6 +1614,13 @@ kbd { font-size: 11px; }
 .chat-context-meter > small { color: var(--muted); font-size: 11px; }
 .chat-context-meter.status-failed > span { background: var(--red-muted); color: var(--red); }
 .chat-action-status { display: flex; min-height: 28px; align-items: center; justify-content: center; gap: 5px; margin: 4px 12px 0; color: var(--green); font-size: 11px; }
+.chat-hook-outcomes { margin: 4px 12px 0; color: var(--muted); font-size: 11px; }
+.chat-hook-outcomes > summary { min-height: 28px; display: flex; align-items: center; cursor: pointer; }
+.chat-hook-outcomes [role="list"] { display: grid; gap: 4px; padding: 2px 0 4px 12px; border-left: 1px solid var(--border-soft); }
+.chat-hook-outcomes [role="listitem"] { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.chat-hook-outcomes [role="listitem"] strong { color: var(--text); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.chat-hook-outcomes [role="listitem"] [role="alert"] { flex-basis: 100%; color: var(--red); }
+.chat-hook-outcomes [role="listitem"] small + small { flex-basis: 100%; }
 .callback-waiting-status { display: grid; min-width: 0; gap: 10px; margin: 6px 12px 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); color: var(--text); background: var(--surface); }
 .callback-waiting-status > header { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .callback-waiting-status > header strong { font-size: 12px; font-weight: var(--weight-semibold); }
@@ -3111,3 +3131,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .host-cpu-actions .button { min-height: 44px; min-width: 44px; }
 .host-cpu-form .host-cpu-enable { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; }
 .host-cpu-form .host-cpu-enable input { width: 44px; height: 44px; flex: 0 0 44px; margin: 0; }
+/* A file or folder a chat changed (Butler mode's Code & files). */
+.code-editor-files .code-editor-agent-mark { flex: none; width: 7px; height: 7px; margin-left: auto; border-radius: 50%; background: var(--muted); }
+.code-editor-files .code-editor-agent-mark[data-state="waiting"] { background: var(--orange); }
+.code-editor-files .code-editor-agent-mark[data-state="working"] { background: var(--blue); }
+.code-editor-files .code-editor-agent-mark[data-state="failed"] { background: var(--red); }

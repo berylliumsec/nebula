@@ -26,12 +26,21 @@ from .database import (
     RuntimeWorkBatchProjectRow,
 )
 from .database_pool import PoolSettings
-from .deployment_protocol import IDLE_RETIREMENT_FEATURE, ReleaseManifest
+from .deployment_protocol import (
+    BUTLER_ACTION_COMMAND,
+    BUTLER_HOME_FEATURE,
+    IDLE_RETIREMENT_FEATURE,
+    ReleaseManifest,
+)
 from .deployments import DeploymentCoordinator
 from .diagnostics import record_caught_exception, record_diagnostic
 from .release_store import ReleaseStore
 from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, LeaseRenewal
 from .runtime_coordination import STORAGE_REPORT_COMMAND as STORAGE_REPORT_FEATURE
+from .stored_entities import (
+    ENTITY_FIELD_ADDITION_FEATURE,
+    TOLERANT_ENTITY_READ_FEATURE,
+)
 from .runtime_context_requirements import (
     HOST_SEARCH_FEATURE,
     PROVIDER_TOOLS_FEATURE,
@@ -66,6 +75,10 @@ class WorkerContext:
 WorkerFactory = Callable[[WorkerContext], AbstractAsyncContextManager[Any]]
 # A timer firing this late means the event loop was blocked, not SQL.
 LOOP_STALL_SECONDS = 2.0
+# Open requests and streams, such as a chat event stream on a replaced API,
+# get this long after shutdown is requested; then uvicorn cancels them so the
+# process exits within the supervisor's retirement wait.
+WORKER_GRACEFUL_SHUTDOWN_SECONDS = 5
 
 
 async def keep_lease(
@@ -330,6 +343,10 @@ async def run_worker(
             HOST_SEARCH_FEATURE,
             WORK_BATCH_FEATURE,
             STORAGE_REPORT_FEATURE,
+            BUTLER_HOME_FEATURE,
+            BUTLER_ACTION_COMMAND,
+            TOLERANT_ENTITY_READ_FEATURE,
+            ENTITY_FIELD_ADDITION_FEATURE,
         }:
             raise RuntimeIpcError(
                 "The retained worker cannot provide its declared release features"
@@ -497,7 +514,7 @@ async def run_worker(
                     lifespan="off",
                     access_log=False,
                     log_level="error",
-                    timeout_graceful_shutdown=5,
+                    timeout_graceful_shutdown=WORKER_GRACEFUL_SHUTDOWN_SECONDS,
                 )
             )
             if heartbeat.done():

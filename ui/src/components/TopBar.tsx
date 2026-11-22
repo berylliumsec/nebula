@@ -43,6 +43,18 @@ interface TopBarProps {
   onLeaveLens?: () => void;
 }
 
+// Hover reveals the Quiet Lens top menu only where the open bar leaves its
+// handle reachable. Elsewhere a pointer opens it by click, and focus reveals it
+// only for keyboard focus: revealing on a pointer's focus would cover the handle
+// before the click lands. This matches the side handle.
+const QUIET_LENS_HOVER_QUERY = "(min-width: 761px) and (hover: hover) and (pointer: fine)";
+
+// Phone-width layouts hide the handle once the menu opens. The browser then
+// drops focus from it; that is not the operator leaving the menu.
+function handleHidSelf(target: EventTarget): boolean {
+  return target instanceof HTMLElement && target.classList.contains("quiet-lens-top-handle") && getComputedStyle(target).display === "none";
+}
+
 export function TopBar({
   activityOpen,
   approvalsCount,
@@ -115,8 +127,8 @@ export function TopBar({
   };
 
   return (
-    <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (event.currentTarget.contains(document.activeElement)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onLeaveLens?.(); }} onBlur={(event) => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
-      {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={() => { if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) onRevealLens?.(); }} onFocus={onRevealLens} onClick={onToggleLens}>
+    <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared" data-lens-open={lensOpen ? "true" : "false"} onMouseLeave={(event) => { if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return; if (event.currentTarget.contains(document.activeElement)) return; if (window.matchMedia(QUIET_LENS_HOVER_QUERY).matches) onLeaveLens?.(); }} onBlur={(event) => { if (handleHidSelf(event.target)) return; if (window.matchMedia("(hover: hover) and (pointer: fine)").matches && !event.currentTarget.contains(event.relatedTarget)) onLeaveLens?.(); }}>
+      {onToggleLens && <button className="quiet-lens-handle quiet-lens-top-handle" type="button" aria-label="Open top menu" aria-expanded={lensOpen} title="Open top menu" onMouseEnter={() => { if (window.matchMedia(QUIET_LENS_HOVER_QUERY).matches) onRevealLens?.(); }} onFocus={(event) => { if (event.currentTarget.matches(":focus-visible")) onRevealLens?.(); }} onClick={onToggleLens}>
         <QuietLensHorizontalContour />
       </button>}
       <div className="top-bar-leading">

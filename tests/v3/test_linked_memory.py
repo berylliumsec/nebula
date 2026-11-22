@@ -249,7 +249,9 @@ def _curator(store, provider, tmp_path, **overrides) -> LinkedMemoryCurator:
         config=config,
     )
     curator._loop = asyncio.get_running_loop()
-    curator._last_live = 0.0
+    # No operator turn yet. Not 0.0: monotonic time starts near zero on a
+    # freshly booted CI runner, which would look like a recent turn.
+    curator._last_live = float("-inf")
     return curator
 
 
@@ -408,7 +410,13 @@ async def test_quiet_period_and_handoff_stop_curation(tmp_path):
     await _finish(store, goal)
     provider = CurationProvider()
     curator = _curator(store, provider, tmp_path, quiet_seconds=60)
+    # An operator's turn restarts the quiet period while it writes.
+    operator_turn = SimpleNamespace(
+        done=False, admission=SimpleNamespace(lane="direct"), events=[]
+    )
+    curator.chat = SimpleNamespace(_active_provider_turns={"turn": operator_turn})
     curator.mark_live()
+    operator_turn.done = True
     from nebula.v3.linked_memory_curator import _ProjectState
 
     state = _ProjectState()
@@ -929,3 +937,407 @@ def test_near_duplicate_cards_from_one_chunk_are_dropped():
     assert [item["key"] for item in kept["cards"]] == ["n1", "n3"]
     assert kept["links"] == [{"from": "n3", "to": "old"}]
     assert kept["rejected"][0]["reason"] == "near_duplicate"
+
+
+async def test_only_an_operators_turn_holds_curation_back(tmp_path):
+    """Goal and subagent turns can run for days; they must not stall curation."""
+
+    from nebula.v3.chat import _ActiveProviderTurn
+    from nebula.v3.linked_memory_curator import _ProjectState, _turn_lane
+
+    # Chat records each active turn's lane when it creates the turn.
+    assert _turn_lane(_ActiveProviderTurn(capacity_lane="background")) == "background"
+    assert _turn_lane(_ActiveProviderTurn()) == "direct"
+
+    store = await _project(tmp_path)
+    curator = _curator(store, CurationProvider(), tmp_path, quiet_seconds=60)
+    state = _ProjectState()
+    goal_turn = SimpleNamespace(
+        done=False, admission=SimpleNamespace(lane="background"), events=[]
+    )
+    # A queued turn has no admission yet, and with a stream journal its
+    # events are not kept in memory: the turn itself names its lane.
+    queued_goal_turn = SimpleNamespace(
+        done=False, admission=None, events=[], capacity_lane="background"
+    )
+    curator.chat = SimpleNamespace(
+        _active_provider_turns={"goal": goal_turn, "queued": queued_goal_turn}
+    )
+    curator.mark_live()
+    assert await curator._gate(state, starting=True) is None
+
+    operator_turn = SimpleNamespace(
+        done=False, admission=None, events=[("queued", {"capacity_lane": "direct"})]
+    )
+    curator.chat._active_provider_turns["operator"] = operator_turn
+    assert await curator._gate(state, starting=True) == "live_turn"
+    operator_turn.done = True
+    assert await curator._gate(state, starting=True) == "quiet_period"
+    # A finished turn stays listed for a minute; background writes meanwhile
+    # do not keep restarting the quiet period off it.
+    curator._last_live = float("-inf")
+    curator.mark_live()
+    assert await curator._gate(state, starting=True) is None
+
+
+async def test_a_goal_completed_while_a_run_waits_gets_its_run(tmp_path):
+    store = await _project(tmp_path)
+    await _enable(store)
+    first = await _goal_chat(store)
+    await _finish(store, first)
+    provider = CurationProvider()
+    operator_turn = SimpleNamespace(done=False)  # an unknown lane counts as direct
+    curator = _curator(store, provider, tmp_path)
+    curator.chat = SimpleNamespace(_active_provider_turns={"turn": operator_turn})
+    memory = LinkedMemoryStore(store)
+
+    curator._wake("project")
+    task = curator._projects["project"].task
+    for _ in range(200):
+        run = await memory.run(first.id)
+        if run is not None and run.state == "paused":
+            break
+        await asyncio.sleep(0.01)
+    assert run is not None and run.reason == "live_turn"
+
+    second = await _goal_chat(store, "second")
+    await _finish(store, second)
+    curator._wake("project")  # what the goal's oversight event does
+    for _ in range(200):
+        if await memory.run(second.id) is not None:
+            break
+        await asyncio.sleep(0.01)
+    assert await memory.run(second.id) is not None
+    assert (await memory.run(first.id)).state == "paused"
+
+    operator_turn.done = True
+    curator._wake("project")
+    await asyncio.wait_for(task, timeout=5)
+    assert (await memory.run(first.id)).state == "done"
+    assert (await memory.run(second.id)).state == "done"
+
+
+async def test_only_the_operators_own_words_carry_operator_authority(tmp_path):
+    from nebula.v3.domain import GOAL_START_INSTRUCTION, ChatTurn
+
+    store = await _project(tmp_path)
+    for session_id, metadata in (("main", {}), ("child", {"subagent_id": "sub"})):
+        await store.create(
+            ChatSession(
+                id=session_id,
+                engagement_id="project",
+                title=session_id,
+                provider_profile_id="local",
+                model="local-model",
+                metadata=metadata,
+            )
+        )
+
+    async def turn(**fields):
+        return await store.create(
+            ChatTurn(
+                engagement_id="project",
+                session_id="main",
+                provider_profile_id="local",
+                model="local-model",
+                **fields,
+            )
+        )
+
+    start = await turn(goal_id="goal", capacity_lane="background")
+    resume = await turn(goal_id="goal", capacity_lane="background")
+    operator = await turn(capacity_lane="direct")
+    recovery = await turn(
+        capacity_lane="background",
+        request_snapshot={"butler_recovery_case_id": "case"},
+    )
+    resume_text = "Keep the exact 26A5388g build identity when the R2 lane resumes."
+    for sequence, (text, source) in enumerate(
+        [
+            (GOAL_START_INSTRUCTION, start),
+            (resume_text, resume),
+            (OPERATOR_TEXT, operator),
+            ('{"case_id": "butler-recovery:1", "summary": "Check is due."}', recovery),
+        ],
+        start=1,
+    ):
+        await store.create(
+            ChatMessage(
+                engagement_id="project",
+                session_id="main",
+                sequence=sequence,
+                role=ChatRole.USER,
+                content=text,
+                metadata={"chat_turn_id": source.id},
+            )
+        )
+    # Core's note for a turn that failed is Core's text, not the agent's.
+    from nebula.v3.chat_turn_outcomes import TURN_OUTCOME_KIND
+
+    await store.create(
+        ChatMessage(
+            engagement_id="project",
+            session_id="main",
+            sequence=5,
+            role=ChatRole.ASSISTANT,
+            content="Response failed: chat goal ownership changed; stale worker "
+            "output was discarded.",
+            metadata={"kind": TURN_OUTCOME_KIND},
+        )
+    )
+    await store.create(
+        ChatMessage(
+            engagement_id="project",
+            session_id="child",
+            sequence=1,
+            role=ChatRole.USER,
+            content="Deliver one durable artifact for the R2 lane.",
+        )
+    )
+    curator = _curator(store, CurationProvider(), tmp_path)
+
+    entries = await curator._session_entries(await store.get(ChatSession, "main"))
+    assert [entry["role"] for entry in entries] == [
+        "core",
+        "instruction",
+        "operator",
+        "instruction",
+        "core",
+    ]
+    child = await curator._session_entries(await store.get(ChatSession, "child"))
+    assert [entry["role"] for entry in child] == ["instruction"]
+
+    chunk = {"goal": {"objective": "Validate R2"}, "entries": entries}
+    prompt = build_prompt(chunk, [], budget_chars=8_000)
+    assert GOAL_START_INSTRUCTION not in prompt["content"]
+    assert f"instruction: {resume_text}" in prompt["content"]
+    result = verify_proposals(
+        [
+            {
+                "kind": "constraint",
+                "title": "Begin without waiting",
+                "summary": "Work starts without waiting for the operator.",
+                "evidence": {"quote": "without waiting for another operator message"},
+            },
+            {
+                "kind": "constraint",
+                "title": "Keep the 26A5388g build identity",
+                "summary": "The R2 lane keeps build 26A5388g.",
+                "evidence": {"quote": "Keep the exact 26A5388g build identity"},
+            },
+            {
+                "kind": "constraint",
+                "title": "Staging only",
+                "summary": "Production is out of scope.",
+                "evidence": {"quote": "production is out of scope"},
+            },
+        ],
+        chunk,
+        prompt,
+        [],
+    )
+    assert [item["reason"] for item in result["rejected"]] == ["quote_not_found"]
+    assert {card["title"]: card["authority"] for card in result["cards"]} == {
+        "Keep the 26A5388g build identity": "agent_inference",
+        "Staging only": "operator_statement",
+    }
+
+
+def test_policy_denials_are_not_evidence_and_evasions_are_quarantined():
+    from nebula.v3.linked_memory_curator import _step_denied
+
+    assert _step_denied({"status": "denied"})
+    assert _step_denied({"provider_result": {"category": "permission_denied"}})
+    assert not _step_denied({"status": "failed", "provider_result": "exit 1"})
+
+    entries = [
+        {
+            "role": "tool",
+            "tool_name": "run_command",
+            "denied": True,
+            "text": "A required project hook blocked the command before it ran.",
+            "ref": {},
+        },
+        {
+            "role": "agent",
+            "text": "The hook blocked run_command, so I listed the files "
+            "through the lab SSH host instead.",
+            "ref": {},
+        },
+        {
+            "role": "agent",
+            "text": "The parser allocates 0x24000 bytes and copies "
+            "camera-controlled bytes past the end of the buffer.",
+            "ref": {},
+        },
+    ]
+    chunk = {"goal": {"objective": "Map the parser"}, "entries": entries}
+    prompt = build_prompt(chunk, [], budget_chars=8_000)
+    assert "[e1] tool run_command DENIED by project policy:" in prompt["content"]
+    assert "never propose a card about the denial" in prompt["instructions"]
+    result = verify_proposals(
+        [
+            {
+                "kind": "lesson",
+                "title": "Hooks block run_command",
+                "summary": "Hook-blocked commands never ran.",
+                "evidence": {
+                    "ref": "e1",
+                    "quote": "A required project hook blocked the command",
+                },
+            },
+            {
+                "kind": "lesson",
+                "title": "Route hook-blocked commands through SSH",
+                "summary": "When the hook blocks run_command, use the lab SSH host instead.",
+                "evidence": {
+                    "ref": "e2",
+                    "quote": "listed the files through the lab SSH host instead",
+                },
+            },
+            {
+                "kind": "fact",
+                "title": "Parser overflow",
+                "summary": "The parser copies camera-controlled bytes past a 0x24000 allocation.",
+                "evidence": {
+                    "ref": "e3",
+                    "quote": "copies camera-controlled bytes past the end",
+                },
+            },
+        ],
+        chunk,
+        prompt,
+        [],
+    )
+    assert [item["reason"] for item in result["rejected"]] == ["policy_denial"]
+    quarantined = {card["title"]: card["quarantined"] for card in result["cards"]}
+    assert quarantined == {
+        "Route hook-blocked commands through SSH": True,
+        "Parser overflow": False,
+    }
+
+
+def test_entry_matching_ignores_nebula_words_inflections_and_the_project_id():
+    from nebula.v3.linked_memory_rules import (
+        common_entry_words,
+        entry_words,
+        select_entry_cards,
+    )
+
+    project = "d786d32e-ac18-4c83-b25a-798effaee66e"
+    cards = [
+        {
+            "id": "r2",
+            "title": "R2 recovery goal completed and original goal resumable",
+            "summary": "The recovery for goal 1af359e5-78ef-4a52-b80a-b24ea613915c "
+            f"in project {project} completed; the paused R2 goal can resume.",
+            "applies_when": "Resuming the R2 validation goal",
+        },
+        {
+            "id": "ptp",
+            "title": "Build identities for the compared PTPCamerad targets",
+            "summary": "26A5388g is the discovery build; 26B5091g is macOS 27.2. "
+            "The binaries completed comparison unchanged.",
+            "applies_when": None,
+        },
+    ]
+    entries = [
+        {
+            **card,
+            "words": entry_words(
+                " ".join(
+                    part
+                    for part in (card["title"], card["summary"], card["applies_when"])
+                    if part
+                )
+            ),
+        }
+        for card in cards
+    ]
+    common = common_entry_words(entries, project)
+
+    def pick(text):
+        return [card for card, _ in select_entry_cards(text, entries, common=common)[0]]
+
+    # One word in two forms is still one word.
+    assert entry_words("goals goal") == entry_words("goal")
+    # Nebula's own words, one shared inflected word, and the project's ID are
+    # not a match.
+    assert pick("how many validation goals do we have running?") == []
+    assert pick("which binaries completed?") == []
+    assert (
+        pick(f'{{"project_id": "{project}", "summary": "Butler check is due."}}') == []
+    )
+    # An ID names the card's subject on its own; short codes like R2 count.
+    assert pick("check on 1af359e5") == ["r2"]
+    assert pick("is R2 ready to resume after the recovery?") == ["r2"]
+    assert pick("which macOS build was the ptpcamerad bug discovered on?") == ["ptp"]
+
+
+async def test_saved_cards_that_current_rules_reject_are_quarantined(tmp_path):
+    from nebula.v3.domain import GOAL_START_INSTRUCTION
+
+    store = await _project(tmp_path)
+    await _enable(store)
+    goal = await _goal_chat(store)
+    await _finish(store, goal)
+    memory = LinkedMemoryStore(store)
+    run = await memory.create_run("project", goal.id, ["session"])
+
+    def card(key, title, summary, excerpt, authority="agent_inference"):
+        return {
+            "key": key,
+            "kind": "lesson",
+            "title": title,
+            "summary": summary,
+            "applies_when": None,
+            "authority": authority,
+            "quarantined": False,
+            "source": {"kind": "chat_message", "ref": {}, "excerpt": excerpt},
+        }
+
+    await memory.commit_chunk(
+        run,
+        cards=[
+            card(
+                "n1",
+                "Preserve the build identity",
+                "Recovery work keeps the exact build identity.",
+                GOAL_START_INSTRUCTION[40:150],
+                authority="operator_statement",
+            ),
+            card(
+                "n2",
+                "Route hook-blocked commands through SSH",
+                "When a project hook blocks run_command, use the SSH tool instead.",
+                "A required project hook blocked the command before it ran.",
+            ),
+            card(
+                "n3",
+                "Login rate limit",
+                "Login rate-limits after five failed attempts per minute.",
+                "rate-limits after five failed attempts per minute",
+            ),
+        ],
+        links=[],
+        position={"session": 1, "after": 0},
+        usage={},
+        model="local-model",
+    )
+    curator = _curator(store, CurationProvider(), tmp_path)
+
+    await curator._recheck_cards("project")
+
+    states = {
+        stored["title"]: stored["state"]
+        for stored in await memory.cards("project", limit=10)
+    }
+    assert states == {
+        "Preserve the build identity": "quarantined",
+        "Route hook-blocked commands through SSH": "quarantined",
+        "Login rate limit": "active",
+    }
+    await curator._refresh_cards("project")
+    assert [entry["title"] for entry in curator._cards["project"]["entries"]] == [
+        "Login rate limit"
+    ]

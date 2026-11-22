@@ -43,6 +43,7 @@ from .deployment_protocol import (
     MAX_EXECUTION_VERSIONS,
     ProcessDeploymentStatus,
     ProjectDeploymentStatus,
+    ProjectRecoveryStatus,
     ReleaseManifest,
     ResourceSnapshot,
     SHARED_MEMORY_BOOTSTRAP_KEY,
@@ -64,8 +65,21 @@ from .runtime_coordination import (
     requeue_interrupted_storage_report,
 )
 from .process_identity import same_process
+from .stored_entities import (
+    ENTITY_FIELD_ADDITION_FEATURE,
+    TOLERANT_ENTITY_READ_FEATURE,
+)
 
 _RESIDENT = ("reserved", "starting", "aborting", "ready", "draining", "unreachable")
+# A replaced API keeps serving the requests and streams it already holds for
+# this long. It exceeds the API's 35 s idempotent-acceptance wait, so accepted
+# work commits before the supervisor retires the process; clients reconnect
+# their streams to the promoted API. Its process then has the worker's 5 s
+# graceful shutdown and the 30 s retirement wait to exit.
+API_DRAIN_GRACE_MS = 60_000
+# Past this, a replaced API that is still resident means automatic retirement
+# failed; aggregate health reports it instead of hiding it.
+API_DRAIN_BOUND_MS = 180_000
 EXECUTION_FAILED_RECEIPT = "project.execution_failed"
 _UNFINISHED = ("queued", "running", "uncertain")
 _PENDING_STORAGE_ALERT = "A recorded storage alert has not opened its incident chat yet"
@@ -123,6 +137,9 @@ class DeploymentCoordinator:
     ):
         self.database, self.coordination = database, RuntimeCoordination(database)
         self.runtime_admission = runtime_admission
+        # The in-Core project roller attaches itself so deployment status can
+        # report its last pass; None where no roller runs.
+        self.roller = None
 
     async def _host(self, session):
         await self.coordination._insert_absent(
@@ -146,6 +163,25 @@ class DeploymentCoordinator:
         row = await session.get(DeploymentHostRow, "host", populate_existing=True)
         assert row is not None
         return row
+
+    async def _read_host(self, session) -> DeploymentHostRow:
+        """The host row without locking it; before any write, its defaults.
+
+        ``_host`` creates the row with these values on the first write, so a
+        revision read here matches what that write will compare against.
+        """
+        row = await session.get(DeploymentHostRow, "host")
+        if row is not None:
+            return row
+        return DeploymentHostRow(
+            key="host",
+            revision=1,
+            api_runtime_id=None,
+            target_version=None,
+            rollback_version=None,
+            detail="No runtime has been promoted.",
+            shutdown_requested=False,
+        )
 
     async def _receipt(self, session, action, result):
         session.add(
@@ -214,6 +250,7 @@ class DeploymentCoordinator:
                 raise OperationRejected(
                     "candidate protocol/schema is incompatible with a resident runtime"
                 )
+        await self._require_tolerant_readers(session, manifest, versions)
         if role == "execution":
             required = set(manifest.required_api_features)
             required.update(
@@ -312,6 +349,63 @@ class DeploymentCoordinator:
                     + ", ".join(sorted(missing))
                 )
         return True
+
+    async def _require_tolerant_readers(self, session, manifest, resident) -> None:
+        """Keep every release that may read stored entities able to read them.
+
+        A release declaring ``ENTITY_FIELD_ADDITION_FEATURE`` saves entity
+        fields that earlier releases do not define. It may start only when
+        every resident version and the current execution target decode
+        unknown keys tolerantly (``TOLERANT_ENTITY_READ_FEATURE``); the target
+        becomes the rollback version once the candidate is targeted.
+
+        Conversely, once such a release has run or been targeted its fields
+        may be in any row, so a release without tolerant readers can no longer
+        start, become the target, or be rolled back to.
+        """
+
+        tolerant = TOLERANT_ENTITY_READ_FEATURE in manifest.features
+        host = await session.get(DeploymentHostRow, "host")
+        if ENTITY_FIELD_ADDITION_FEATURE in manifest.features:
+            readers = set(resident)
+            if host is not None and host.target_version:
+                readers.add(host.target_version)
+            readers.discard(manifest.version)
+            intolerant = []
+            for version in sorted(readers):
+                row = await session.get(RuntimeReleaseRow, version)
+                if row is None or TOLERANT_ENTITY_READ_FEATURE not in (
+                    ReleaseManifest.model_validate(row.manifest).features
+                ):
+                    intolerant.append(version)
+            if intolerant:
+                raise OperationRejected(
+                    "Candidate stores entity fields that version(s) "
+                    + ", ".join(intolerant)
+                    + " cannot read. Roll out a release with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " and retire those versions first, so running workers "
+                    "and code rollback keep working"
+                )
+        if tolerant:
+            return
+        started = set(
+            await session.scalars(select(RuntimeProcessRow.version).distinct())
+        )
+        if host is not None and host.target_version:
+            started.add(host.target_version)
+        started.discard(manifest.version)
+        for version in sorted(started):
+            row = await session.get(RuntimeReleaseRow, version)
+            if row is not None and ENTITY_FIELD_ADDITION_FEATURE in (
+                ReleaseManifest.model_validate(row.manifest).features
+            ):
+                raise OperationRejected(
+                    f"Release {manifest.version} cannot read entity fields that "
+                    f"release {version} may have saved; only releases with "
+                    + TOLERANT_ENTITY_READ_FEATURE
+                    + " can run or be rolled back to from here"
+                )
 
     async def reserve_worker(
         self, version: str, *, role: str, endpoint: str, credential_reference: str
@@ -531,7 +625,9 @@ class DeploymentCoordinator:
             if host.api_runtime_id and host.api_runtime_id != runtime_id:
                 previous = await session.get(RuntimeProcessRow, host.api_runtime_id)
                 if previous is not None:
-                    previous.state = "draining"
+                    # The drain starts now; the supervisor retires the
+                    # previous API once API_DRAIN_GRACE_MS has passed.
+                    previous.state, previous.updated_at_ms = "draining", now
             host.api_runtime_id, host.revision = runtime_id, host.revision + 1
             host.detail = (
                 "API traffic is promoted. Execution owners continue independently."
@@ -1010,19 +1106,22 @@ class DeploymentCoordinator:
         return checkpoint_digest({"paused": [list(row) for row in rows]})
 
     async def prepare_shutdown(self, *, expected_revision: int) -> list[ProjectLease]:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await self._host(session)
             if host.revision != expected_revision:
                 # Starting or retiring workers move the revision while this
                 # request waits for the host; nothing has changed yet.
                 raise DeploymentChanged("deployment changed before shutdown")
             owners = list(
-                await session.scalars(
-                    select(ProjectOwnershipRow)
-                    .where(ProjectOwnershipRow.runtime_id.is_not(None))
-                    .order_by(ProjectOwnershipRow.project_id)
-                    .with_for_update()
-                )
+                (
+                    await self.coordination.lock_owners_under_host(
+                        session,
+                        select(ProjectOwnershipRow)
+                        .where(ProjectOwnershipRow.runtime_id.is_not(None))
+                        .order_by(ProjectOwnershipRow.project_id)
+                        .with_for_update(),
+                    )
+                ).scalars()
             )
             blockers = await self._shutdown_blockers(session)
             if blockers:
@@ -1064,21 +1163,20 @@ class DeploymentCoordinator:
             host.detail = "New work is held while idle project controllers quiesce."
             return leases
 
+        return await self.coordination.write_after_owners(attempt)
+
     async def quiesce_checkpoint(
         self, lease: ProjectLease, *, local_blockers: list[str]
     ) -> dict:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await session.get(
                 DeploymentHostRow,
                 "host",
                 with_for_update={"read": True},
                 populate_existing=True,
             )
-            owner = await session.get(
-                ProjectOwnershipRow,
-                lease.project_id,
-                with_for_update=True,
-                populate_existing=True,
+            owner = await self.coordination.lock_owner_under_host(
+                session, lease.project_id
             )
             project_retirement = bool(
                 owner is not None
@@ -1130,6 +1228,8 @@ class DeploymentCoordinator:
             }
             await self.coordination._check(session, lease, lock=False)
             return result
+
+        return await self.coordination.write_after_owners(attempt)
 
     @staticmethod
     async def _project_has_open_chat(session, project_id: str) -> bool:
@@ -1337,15 +1437,15 @@ class DeploymentCoordinator:
     async def release_quiesced_project(
         self, lease: ProjectLease, *, checkpoint: dict
     ) -> None:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             host = await session.get(
                 DeploymentHostRow,
                 "host",
                 with_for_update={"read": True},
                 populate_existing=True,
             )
-            owner = await session.get(
-                ProjectOwnershipRow, lease.project_id, with_for_update=True
+            owner = await self.coordination.lock_owner_under_host(
+                session, lease.project_id
             )
             if (
                 owner is not None
@@ -1413,6 +1513,8 @@ class DeploymentCoordinator:
                     ),
                 },
             )
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def abort_shutdown(
         self,
@@ -1577,11 +1679,9 @@ class DeploymentCoordinator:
         return True
 
     async def request_handoff(self, project_id: str, target_runtime_id: str) -> None:
-        async with self.coordination._write() as session:
+        async def attempt(session):
             await self._host(session)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             target = await session.get(RuntimeProcessRow, target_runtime_id)
             now = await self.coordination._clock_ms(session)
             if (
@@ -1663,6 +1763,52 @@ class DeploymentCoordinator:
                     "target_version": target.version,
                 },
             )
+
+        return await self.coordination.write_after_owners(attempt)
+
+    async def withdraw_handoff(
+        self, project_id: str, *, target_runtime_id: str, revision: int
+    ) -> bool:
+        """Cancel exactly this unfinished handoff before it can transfer.
+
+        Unlike a handoff to the current owner, this never starts a new one: it
+        cancels only while the row still names ``target_runtime_id`` at
+        ``revision``, is ``requested`` or ``finishing``, and the source still
+        owns the project. Locks are taken in ``transfer``'s order, so a
+        concurrent transfer either finds the row cancelled or makes this
+        return False with the project left to the transfer.
+        """
+
+        async def attempt(session):
+            await self._host(session)
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
+            row = await session.get(ProjectHandoffRow, project_id, with_for_update=True)
+            if (
+                owner is None
+                or row is None
+                or row.target_runtime_id != target_runtime_id
+                or row.revision != revision
+                or row.phase not in {HandoffPhase.REQUESTED, HandoffPhase.FINISHING}
+                or owner.runtime_id != row.source_runtime_id
+                or owner.fencing_token != row.source_fencing_token
+            ):
+                return False
+            row.phase, row.admission_held = HandoffPhase.VERIFIED, False
+            row.blockers, row.checkpoint = [], {"cancelled_before_transfer": True}
+            row.revision += 1
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            await self._receipt(
+                session,
+                "handoff.withdrawn",
+                {
+                    "project_id": project_id,
+                    "source_runtime_id": row.source_runtime_id,
+                    "target_runtime_id": target_runtime_id,
+                },
+            )
+            return True
+
+        return await self.coordination.write_after_owners(attempt)
 
     async def checkpoint(
         self, lease: ProjectLease, *, checkpoint: dict, blockers: list[str]
@@ -1784,11 +1930,10 @@ class DeploymentCoordinator:
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
         scanned, generation = await snapshot_project_checkpoint(self, project_id)
-        async with self.coordination._write() as session:
+
+        async def attempt(session):
             await self._host(session)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             handoff = await session.get(
                 ProjectHandoffRow, project_id, with_for_update=True
             )
@@ -1923,6 +2068,8 @@ class DeploymentCoordinator:
             )
             return lease
 
+        return await self.coordination.write_after_owners(attempt)
+
     async def verified(
         self, lease: ProjectLease, *, restored_checkpoint_digest: str
     ) -> None:
@@ -2023,7 +2170,11 @@ class DeploymentCoordinator:
             reasons.append(
                 f"Provider turn {running} needs explicit interrupted-effect reconciliation"
             )
-        target = await session.get(RuntimeProcessRow, target_runtime_id)
+        target = (
+            await session.get(RuntimeProcessRow, target_runtime_id)
+            if target_runtime_id is not None
+            else None
+        )
         if target is not None:
             release = await session.get(RuntimeReleaseRow, target.version)
             supported = (
@@ -2068,12 +2219,11 @@ class DeploymentCoordinator:
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
         scanned, generation = await snapshot_project_checkpoint(self, project_id)
-        async with self.coordination._write() as session:
+
+        async def attempt(session):
             await self._host(session)
             prior = await session.get(RuntimeRecoveryRow, operation_id)
-            owner = await session.get(
-                ProjectOwnershipRow, project_id, with_for_update=True
-            )
+            owner = await self.coordination.lock_owner_under_host(session, project_id)
             if prior is not None:
                 if (
                     prior.project_id != project_id
@@ -2242,6 +2392,8 @@ class DeploymentCoordinator:
             )
             return ProjectLease(project_id, target_runtime_id, owner.fencing_token)
 
+        return await self.coordination.write_after_owners(attempt)
+
     async def recovery_status(self, project_id: str) -> dict | None:
         async with self.database.session() as session:
             row = await session.scalar(
@@ -2338,6 +2490,21 @@ class DeploymentCoordinator:
         from .runtime_project_handoff import snapshot_project_checkpoint
         from .runtime_checkpoint_generation import assert_checkpoint_generation
 
+        # An already-verified recovery needs only its identity and digest. The
+        # project scan below serves only the prepared -> verified step. Running
+        # it first made each supervisor handoff pass re-read the whole project,
+        # and a busy project changes during that scan, so the pass never
+        # succeeded and the loop rescanned the project indefinitely.
+        async with self.coordination.fenced(lease) as session:
+            row = await session.get(RuntimeRecoveryRow, operation_id)
+            if (
+                row is not None
+                and row.phase == "verified"
+                and (row.project_id, row.target_runtime_id, row.target_fencing_token)
+                == (lease.project_id, lease.runtime_id, lease.fencing_token)
+                and checkpoint_digest(row.checkpoint) == restored_checkpoint_digest
+            ):
+                return
         scanned, generation = await snapshot_project_checkpoint(
             self, lease.project_id, lease=lease
         )
@@ -2643,6 +2810,35 @@ class DeploymentCoordinator:
                 {"runtime_id": identity.runtime_id, "version": identity.version},
             )
 
+    async def drained_apis(self, *, grace_ms: int = API_DRAIN_GRACE_MS) -> list[str]:
+        """Replaced APIs whose drain grace has passed, oldest first.
+
+        Only a promotion moves an API to draining outside shutdown, so these
+        own no project, command or resource; ``begin_retirement`` still
+        rechecks every hold before the process is asked to stop.
+        """
+        async with self.database.session() as session:
+            host = await session.get(DeploymentHostRow, "host")
+            if host is None or host.shutdown_requested:
+                return []
+            now = await self.coordination._clock_ms(session)
+            return list(
+                await session.scalars(
+                    select(RuntimeProcessRow.runtime_id)
+                    .where(
+                        RuntimeProcessRow.role == "api",
+                        RuntimeProcessRow.state == "draining",
+                        RuntimeProcessRow.updated_at_ms <= now - grace_ms,
+                        *(
+                            [RuntimeProcessRow.runtime_id != host.api_runtime_id]
+                            if host.api_runtime_id is not None
+                            else []
+                        ),
+                    )
+                    .order_by(RuntimeProcessRow.updated_at_ms)
+                )
+            )
+
     async def begin_retirement(self, runtime_id: str) -> WorkerIdentity:
         async with self.coordination._write() as session:
             host = await self._host(session)
@@ -2674,6 +2870,54 @@ class DeploymentCoordinator:
                 process_birth=row.process_birth,
                 endpoint=row.endpoint,
             )
+
+    async def mark_process_absent(self, identity: WorkerIdentity) -> bool:
+        """Stop reporting a provably exited execution worker as ready.
+
+        The host calls this when it observed this exact incarnation gone but
+        its retirement is still blocked (its project owner is not yet
+        recovered or released). The row stays resident, so its blockers keep
+        holding retirement, but it is ``unreachable``: never attached, never
+        reported ready. Only the state changes; nothing is replayed or
+        settled here. Returns whether the row changed.
+        """
+        if identity.role != "execution" or same_process(
+            identity.pid, identity.process_birth
+        ):
+            return False
+        async with self.coordination._write() as session:
+            host = await self._host(session)
+            row = await session.get(
+                RuntimeProcessRow,
+                identity.runtime_id,
+                with_for_update=True,
+                populate_existing=True,
+            )
+            if (
+                row is None
+                or row.role != "execution"
+                or row.state not in {"ready", "starting"}
+                or (row.pid, row.process_birth, row.endpoint, row.version)
+                != (
+                    identity.pid,
+                    identity.process_birth,
+                    identity.endpoint,
+                    identity.version,
+                )
+                or host.api_runtime_id == row.runtime_id
+            ):
+                return False
+            if same_process(identity.pid, identity.process_birth):
+                return False
+            row.state = "unreachable"
+            row.updated_at_ms = await self.coordination._clock_ms(session)
+            host.revision += 1
+            await self._receipt(
+                session,
+                "worker.process_absent",
+                identity.model_dump(mode="json"),
+            )
+            return True
 
     async def retired(self, identity: WorkerIdentity) -> None:
         """Called only after the host has verified this exact process is gone."""
@@ -2761,8 +3005,16 @@ class DeploymentCoordinator:
             )
 
     async def status(self) -> DeploymentStatus:
-        async with self.coordination._write() as session:
-            host = await self._host(session)
+        # A read: one consistent snapshot, no row lock. Coordination writes
+        # (a handoff transfer waiting on project ownership, for one) hold the
+        # host row for as long as they wait; locking it here queued every
+        # status read behind them, each holding a pool connection.
+        async with self.database.session() as session:
+            if self.database.engine.dialect.name == "postgresql":
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                )
+            host = await self._read_host(session)
             processes = {
                 row.runtime_id: row
                 for row in await session.scalars(select(RuntimeProcessRow))
@@ -2776,7 +3028,31 @@ class DeploymentCoordinator:
             owners = list(await session.scalars(select(ProjectOwnershipRow)))
             # A failed worker keeps its grant alive; say so instead of ready.
             failures = await self._owner_failures(session, owners)
+            # The recovery that granted each current owner, if one did. A
+            # target runtime receives at most one grant per fencing token.
+            owner_runtimes = {
+                owner.runtime_id for owner in owners if owner.runtime_id is not None
+            }
+            recoveries: dict[tuple[str, str | None, int], RuntimeRecoveryRow] = (
+                {
+                    (
+                        row.project_id,
+                        row.target_runtime_id,
+                        row.target_fencing_token,
+                    ): row
+                    for row in await session.scalars(
+                        select(RuntimeRecoveryRow).where(
+                            RuntimeRecoveryRow.target_runtime_id.in_(owner_runtimes)
+                        )
+                    )
+                }
+                if owner_runtimes
+                else {}
+            )
             for owner in owners:
+                recovery = recoveries.get(
+                    (owner.project_id, owner.runtime_id, owner.fencing_token)
+                )
                 process, handoff = (
                     processes.get(owner.runtime_id)
                     if owner.runtime_id is not None
@@ -2797,6 +3073,16 @@ class DeploymentCoordinator:
                             *([self._failure_blocker(failure)] if failure else []),
                         ],
                         admission_held=handoff.admission_held if handoff else False,
+                        recovery=ProjectRecoveryStatus(
+                            operation_id=recovery.operation_id,
+                            source_runtime_id=recovery.source_runtime_id,
+                            source_fencing_token=recovery.source_fencing_token,
+                            target_runtime_id=recovery.target_runtime_id,
+                            target_fencing_token=recovery.target_fencing_token,
+                            phase=recovery.phase,
+                        )
+                        if recovery is not None
+                        else None,
                     )
                 )
             resident = sorted(
@@ -2819,9 +3105,25 @@ class DeploymentCoordinator:
                     )
                 )
             )
+
+            def replaced_api(row: RuntimeProcessRow) -> bool:
+                return (
+                    row.role == "api"
+                    and row.state == "draining"
+                    and not host.shutdown_requested
+                    and row.runtime_id != host.api_runtime_id
+                )
+
+            # A replaced API is expected to wind down, so its lapsing lease
+            # is not a fault until its drain outlives the bound.
             degraded = bool(failures) or any(
                 row.state == "unreachable"
-                or (row.state in _RESIDENT and row.runtime_id not in live_runtimes)
+                or (replaced_api(row) and now - row.updated_at_ms >= API_DRAIN_BOUND_MS)
+                or (
+                    row.state in _RESIDENT
+                    and row.runtime_id not in live_runtimes
+                    and not replaced_api(row)
+                )
                 for row in processes.values()
             )
             return DeploymentStatus(
@@ -2837,6 +3139,7 @@ class DeploymentCoordinator:
                 projects=projects,
                 health="degraded" if degraded else "ready" if api else "starting",
                 detail=host.detail,
+                roll=self.roller.status() if self.roller is not None else None,
                 processes=[
                     ProcessDeploymentStatus(
                         runtime_id=row.runtime_id,

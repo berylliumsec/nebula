@@ -61,6 +61,49 @@ it("keeps a keyboard-owned top menu open when the pointer leaves it", () => {
   }
 });
 
+it.each([
+  [true, 1],
+  [false, 0],
+])("reveals the top menu on hover only in a wide fine-pointer layout (%s)", (wide, reveals) => {
+  const media = window.matchMedia;
+  const query = vi.fn((value: string) => ({matches: value.includes("min-width: 761px") ? wide : true}) as MediaQueryList);
+  window.matchMedia = query;
+  const reveal = vi.fn();
+  const toggle = vi.fn();
+  try {
+    render(<MemoryRouter><TopBar activityOpen={false} approvalsCount={0} onToggleActivity={vi.fn()} onToggleSidebar={vi.fn()} onOpenPalette={vi.fn()} setToolbarHost={vi.fn()} sidebarCollapsed onToggleLens={toggle} onRevealLens={reveal} /></MemoryRouter>);
+    const handle = screen.getByRole("button", {name: "Open top menu"});
+    fireEvent.mouseEnter(handle);
+    expect(reveal).toHaveBeenCalledTimes(reveals);
+    expect(query).toHaveBeenCalledWith("(min-width: 761px) and (hover: hover) and (pointer: fine)");
+    // A narrow window still opens the menu by click.
+    fireEvent.click(handle);
+    expect(toggle).toHaveBeenCalledOnce();
+  } finally {
+    window.matchMedia = media;
+  }
+});
+
+it("keeps the top menu open when a phone-width layout hides the focused handle", () => {
+  const media = window.matchMedia;
+  window.matchMedia = vi.fn().mockReturnValue({matches: true} as MediaQueryList);
+  const leave = vi.fn();
+  try {
+    render(<MemoryRouter><TopBar activityOpen={false} approvalsCount={0} onToggleActivity={vi.fn()} onToggleSidebar={vi.fn()} onOpenPalette={vi.fn()} setToolbarHost={vi.fn()} sidebarCollapsed lensOpen onToggleLens={vi.fn()} onLeaveLens={leave} /></MemoryRouter>);
+    const handle = screen.getByRole("button", {name: "Open top menu"});
+    handle.focus();
+    handle.style.display = "none";
+    handle.blur();
+    expect(leave).not.toHaveBeenCalled();
+    handle.style.display = "";
+    handle.focus();
+    handle.blur();
+    expect(leave).toHaveBeenCalledOnce();
+  } finally {
+    window.matchMedia = media;
+  }
+});
+
 describe("TopBar public IP", () => {
   beforeEach(() => {
     copy.mockReset();

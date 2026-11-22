@@ -9,7 +9,15 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 
 from .domain import NebulaModel, RunnerProfile
 from .memory_actor import memory_actor
-from .memory_budget import MemoryBudgetService, MemoryBudgetStatus, MemoryJob
+from .memory_budget import (
+    HostCommandItem,
+    HostCommandSettings,
+    HostCommandSettingsUpdate,
+    HostCommandView,
+    MemoryBudgetService,
+    MemoryBudgetStatus,
+    MemoryJob,
+)
 from .memory_policy import (
     ExecutionEnvironment,
     MemoryBudgetConflict,
@@ -53,7 +61,9 @@ class MemoryApi:
         apply_running: Callable[[str, MemoryRunningUpdate, str], Awaitable[MemoryJob]]
         | None = None,
         register_running_apply: bool = True,
+        host_runner: Any = None,
     ):
+        self.host_runner = host_runner
         self.store, self.service, self.runner_factory, self.apply_running = (
             store,
             service,
@@ -73,6 +83,7 @@ class MemoryApi:
         )
         async def read(response: Response):
             response.headers["Cache-Control"] = "private, no-store"
+            await self._refresh_host_runner()
             profiles = await self._profiles()
             result = await self.service.status(self._capabilities())
             return {**result.model_dump(mode="json"), "profiles": profiles}
@@ -85,6 +96,7 @@ class MemoryApi:
         )
         async def save(body: MemoryBudgetUpdate, request: Request, response: Response):
             response.headers["Cache-Control"] = "private, no-store"
+            await self._refresh_host_runner()
             profiles = await self._profiles()
             try:
                 result = await self.service.save(
@@ -154,6 +166,65 @@ class MemoryApi:
             self.capabilities[profile_id], self.runners[profile_id] = capability, runner
             return capability
 
+        @app.get(
+            prefix + "/host-commands",
+            response_model=HostCommandView,
+            tags=["system"],
+            dependencies=dependencies,
+        )
+        async def host_commands(
+            response: Response,
+            tool_call_id: str | None = Query(default=None, max_length=200),
+        ):
+            """Running and queued Host commands across every project."""
+            response.headers["Cache-Control"] = "private, no-store"
+            view = await self.service.host_command_view()
+            if tool_call_id is not None:
+                view = view.model_copy(
+                    update={
+                        "running": [
+                            item
+                            for item in view.running
+                            if item.tool_call_id == tool_call_id
+                        ],
+                        "queued": [
+                            item
+                            for item in view.queued
+                            if item.tool_call_id == tool_call_id
+                        ],
+                    }
+                )
+            return view
+
+        @app.put(
+            prefix + "/host-commands/settings",
+            response_model=HostCommandSettings,
+            tags=["system"],
+            dependencies=dependencies,
+        )
+        async def save_host_command_settings(
+            body: HostCommandSettingsUpdate, request: Request, response: Response
+        ):
+            response.headers["Cache-Control"] = "private, no-store"
+            try:
+                return await self.service.save_host_command_settings(
+                    body, actor_id=self._actor(request)
+                )
+            except MemoryBudgetConflict as error:
+                raise HTTPException(409, str(error)) from error
+
+        @app.post(
+            prefix + "/host-commands/{job_id}/cancel",
+            response_model=HostCommandItem,
+            tags=["system"],
+            dependencies=dependencies,
+        )
+        async def cancel_host_command(
+            job_id: str, request: Request, response: Response
+        ):
+            response.headers["Cache-Control"] = "private, no-store"
+            return await self.cancel_host_command(job_id, self._actor(request))
+
         async def apply(job_id: str, body: MemoryRunningUpdate, request: Request):
             return await self.apply_job_limits(job_id, body, self._actor(request))
 
@@ -166,6 +237,36 @@ class MemoryApi:
                 tags=["system"],
                 dependencies=dependencies,
             )
+
+    async def cancel_host_command(self, job_id: str, actor_id: str) -> HostCommandItem:
+        """Cancel a queued Host command, or stop a running one and its group.
+
+        A running command is stopped by removing its protected group, which
+        kills every process in it; its worker then reports it as cancelled.
+        """
+        try:
+            job = await self.service.request_host_command_cancel(
+                job_id, actor_id=actor_id
+            )
+        except MemoryBudgetConflict as error:
+            raise HTTPException(409, str(error)) from error
+        except MemoryBudgetError as error:
+            raise HTTPException(404, str(error)) from error
+        if job.state not in {"finished", "queued", "blocked"}:
+            if self.host_runner is None:
+                raise HTTPException(
+                    503, "The protected Host runner is unavailable; try again"
+                )
+            try:
+                await self.host_runner.remove(job_id)
+            except Exception as error:
+                # The worker's own cleanup can remove the group first once the
+                # killed command exits; only a group that still exists failed.
+                if await self.host_runner.observe(job_id) is not None:
+                    raise HTTPException(
+                        503, "The command could not be stopped yet; try again"
+                    ) from error
+        return HostCommandItem.from_job(await self.service.get_job(job_id))
 
     async def job_details(self, job_id: str) -> MemoryJob:
         try:
@@ -213,6 +314,13 @@ class MemoryApi:
             )
             for profile in profiles
         ]
+
+    async def _refresh_host_runner(self) -> None:
+        """Report the protected local runner as the Host (local) environment."""
+        if self.host_runner is None:
+            return
+        capability = await self.host_runner.capabilities()
+        self.capabilities[capability.profile_id or "host"] = capability
 
     def _capabilities(self) -> list[MemoryRunnerCapabilities]:
         items = list(self.capabilities.values())

@@ -44,6 +44,8 @@ export interface ActivityLedgerEntry {
   outputs: ActivityLedgerOutput[];
   payload: Record<string, unknown>;
   usageLabel?: string;
+  /** Keep this settled entry visible in the compact summary (e.g. a command cancelled before it started). */
+  pinned?: boolean;
   sourceItem?: HarnessActivityItem;
   sourceTool?: NativeActivitySource;
   sourceEvent?: RunEvent;
@@ -287,21 +289,27 @@ export function delegatedWaitSummary(summary: string): string {
     : summary;
 }
 
+/** Core's result text for a Host command the operator cancelled while it waited in line. */
+export const HOST_COMMAND_CANCELLED_WHILE_QUEUED = /cancelled by the operator while queued/i;
+
 export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedgerEntry[] {
   return items.map((item, index) => {
     const summary = item.capability === "wait_subagents" && item.summary
       ? delegatedWaitSummary(item.summary)
       : item.summary;
+    const cancelledWhileQueued = Boolean(summary && HOST_COMMAND_CANCELLED_WHILE_QUEUED.test(summary))
+      && !ACTIVE_STATUSES.has((item.status ?? "").toLowerCase()) && item.status !== "queued";
     return {
       id: `native:${item.toolCallId}`,
       source: "native" as const,
       // Research reads next to harness web search, which already files here.
       phase: item.capability === "web.search" ? "research" : item.capability === "wait_subagents" ? "delegation" : "execution",
-      status: normalizeActivityStatus(item.status),
-      statusLabel: sourceStatusLabel(item.status),
+      status: cancelledWhileQueued ? "cancelled" : normalizeActivityStatus(item.status),
+      statusLabel: cancelledWhileQueued ? "Cancelled before start" : sourceStatusLabel(item.status),
       label: nativeToolLabel(item),
       summary,
-      brief: firstSentence(summary),
+      brief: cancelledWhileQueued ? "Cancelled by the operator while queued; it never started." : firstSentence(summary),
+      ...(cancelledWhileQueued ? { pinned: true } : {}),
       sequence: index,
       kind: "tool",
       countsAsAction: true,

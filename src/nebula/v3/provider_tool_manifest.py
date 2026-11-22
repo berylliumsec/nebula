@@ -508,18 +508,18 @@ def initialize_tools_instruction_base(
     )
 
 
-def apply_tools_context(
-    request: ModelRequest,
-    manifest: ToolManifest,
-    *,
-    receipt: Mapping[str, Any] | None = None,
-) -> ModelRequest:
-    """Shared by prepare, routing, synthesis, resume and recovery."""
+def apply_tools_context(request: ModelRequest, manifest: ToolManifest) -> ModelRequest:
+    """Shared by prepare, routing, synthesis, resume and recovery.
+
+    The owned section holds the manifest alone. The turn's relevance hints are
+    ranked from the operator's latest words, so they ride on that message
+    (``with_tool_hints``): in the instructions they changed the request's
+    early bytes every turn and the provider's prompt cache missed for the
+    whole conversation behind them.
+    """
 
     owned = _with_owned_section(
-        request,
-        tools_instruction_base(request),
-        render_tools(manifest) + render_hints(receipt or {}, manifest),
+        request, tools_instruction_base(request), render_tools(manifest)
     )
     return owned.model_copy(
         update={
@@ -530,6 +530,34 @@ def apply_tools_context(
             },
         }
     )
+
+
+def with_tool_hints(
+    request: ModelRequest, receipt: Mapping[str, Any] | None, manifest: ToolManifest
+) -> ModelRequest:
+    """``request`` with the turn's tool relevance hints on the operator's message.
+
+    Applied once when the turn is prepared and saved with its request, so every
+    step and a resumed turn send the same bytes. A request without an operator
+    message is returned unchanged.
+    """
+
+    hints = render_hints(receipt or {}, manifest)
+    if not hints:
+        return request
+    messages = list(request.messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.role != "user":
+            continue
+        content: str | list[dict[str, Any]]
+        if isinstance(message.content, str):
+            content = message.content + hints
+        else:
+            content = [*message.content, {"type": "text", "text": hints.lstrip()}]
+        messages[index] = message.model_copy(update={"content": content})
+        return request.model_copy(update={"messages": messages})
+    return request
 
 
 def managed_load_result(

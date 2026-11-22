@@ -26,6 +26,7 @@ from .butler_memory import (
     UnsafeMemoryError,
 )
 from .database import ButlerMemoryCursorRow, ButlerMemoryItemRow
+from .deployment_protocol import BUTLER_HOME_PROJECT, RESERVED_PROJECT_IDS
 from .domain import NebulaModel
 from .execution_scope import current_execution_lease
 from .runtime_coordination import LeaseLost, RuntimeCoordination
@@ -67,9 +68,18 @@ class SharedButlerMemory(ButlerMemoryService):
         return
 
     @asynccontextmanager
-    async def _authority(self, project_id: str):
+    async def _authority(self, project_id: str, *, read: bool = False):
         lease = current_execution_lease()
-        if lease is None or lease.project_id != project_id:
+        # Butler's home worker may READ another project's memories (global
+        # ones plus that project's lessons) for the project a Butler session
+        # is about. Writes, edits, deletes and cursors keep exact ownership.
+        home_read = (
+            read
+            and lease is not None
+            and lease.project_id == BUTLER_HOME_PROJECT
+            and project_id not in RESERVED_PROJECT_IDS
+        )
+        if lease is None or (lease.project_id != project_id and not home_read):
             raise LeaseLost("Shared Butler memory requires exact project ownership")
         async with self.coordination.fenced(lease) as session:
             # Global preferences and lessons can deduplicate across two projects.
@@ -142,7 +152,7 @@ class SharedButlerMemory(ButlerMemoryService):
         return self._public(saved, source_project_id)
 
     async def _authorized_rows(self, engagement_id: str) -> list[MemoryRow]:
-        async with self._authority(engagement_id) as session:
+        async with self._authority(engagement_id, read=True) as session:
             return [
                 _data(row)
                 for row in await session.scalars(

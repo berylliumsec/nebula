@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .action_registry import ActionRegistry
 from .diagnostics import create_diagnostic_task
 from .database import EntityRow, SearchDocumentRow
+from .deployment_protocol import RESERVED_PROJECT_IDS
 from .domain import (
     ActionResolutionRequest,
     ResourceKind,
@@ -98,6 +99,9 @@ def project_search_document(
 
     status = _text(payload.get("status"), 100)
     if kind == "engagements":
+        if payload.get("id") in RESERVED_PROJECT_IDS:
+            # Core's own projects are not the operator's to find.
+            return None
         return SearchProjection(
             ResourceKind.PROJECT,
             _text(payload.get("name"), 500),

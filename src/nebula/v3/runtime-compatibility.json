@@ -1,12 +1,14 @@
 {
   "format": "nebula.runtime-compatibility/v1",
-  "migration_tree_sha256": "dfcaf1777d6ea32eba19fb1a0ae1a13bebe717afa6d8bc24a06980fdcc136ce9",
+  "migration_tree_sha256": "228e441e37d6bf1478ce4a561e24a031150236b2158d9c60b3daadfb4ef7d2cb",
+  "entity_fields_sha256": "1f794155c42ae6a55daca05880200dc06b6bceed92bc5fbe654dcdc8f0fa169c",
+  "entity_fields_tolerant_baseline_sha256": "6e3a99c5633c1c95ba21104250205d4dddc507be09a34e4dadd22645e1156922",
   "manifest": {
     "schema_family": 5,
     "schema_min": 5,
     "schema_max": 5,
     "additive_migrations": true,
-    "migration_head": "0053_runtime_command_writes",
+    "migration_head": "0055_deployment_receipt_action",
     "api_protocol_min": 1,
     "api_protocol_max": 1,
     "execution_protocol_min": 1,
@@ -23,7 +25,11 @@
       "harness.standing-instructions/v1",
       "host.web-search-query/v1",
       "project.work-batch/v1",
-      "storage.report/v1"
+      "storage.report/v1",
+      "butler.home/v1",
+      "butler.action/v1",
+      "storage.tolerant-entities/v1",
+      "storage.entity-field-additions/v1"
     ]
   }
 }

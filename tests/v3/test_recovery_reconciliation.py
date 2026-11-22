@@ -7,7 +7,7 @@ additionally archives candidate source and retains a real execution worker.
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
@@ -43,7 +43,7 @@ from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_runtime_coordination import location as location
 from tests.v3.test_runtime_processes import managed as managed, _TOKEN
-from tests.v3.test_runtime_work_batches import batch as batch
+from tests.v3.test_runtime_work_batches import SETTINGS, batch as batch
 
 pytestmark = pytest.mark.anyio
 FEATURES = ["project.handoff/v1", "project.participants/v1"]
@@ -125,7 +125,10 @@ async def recovery(batch):
             data_root=str(batch.host.data_root),
             operator_token=SecretStr("synthetic-recovery-token"),
             database=batch.location,
-            pool_settings=None,
+            # A supervisor always hands its workers its pool settings
+            # (RuntimeProcessHost); without them a PostgreSQL worker's own
+            # database would read budgets from the environment and fail.
+            pool_settings=asdict(SETTINGS),
         ),
         coordinator=coordinator,
         rpc=rpc_server,
@@ -742,9 +745,10 @@ async def test_target_failed_before_activation_relinquishes_for_fresh_recovery(
     value.execution.application_factory = failing
     await value.execution.attach(asdict(lease))
     await until(lambda: value.execution.state == "failed")
-    # The failed target already asked its process to exit; while it still
-    # answers, the host also has it give the grant back at once.
-    assert exits == ["target"]
+    # The failed target asks its process to exit once its failure is saved
+    # (the state turns failed first); while it still answers, the host also
+    # has it give the grant back at once.
+    await until(lambda: exits == ["target"])
     root = value.new_supervisor()
     await root.advance_project_handoffs()
     assert value.execution.state == "fenced" and exits == ["target", "target"]
@@ -816,3 +820,35 @@ async def test_failed_target_that_did_not_clean_up_exits_without_relinquishing(
     async with value.database.session() as session:
         owner = await session.get(ProjectOwnershipRow, "one")
         assert owner.lease_expires_at_ms > 0
+
+
+async def test_overdue_source_stop_is_scoped_to_a_source_behind_the_target(recovery):
+    from nebula.v3.database import DeploymentHostRow
+    from nebula.v3.runtime_coordination import OperationRejected
+
+    value = recovery
+    root = stepped_supervisor(value.coordinator, value.rpc)
+    stopped = []
+
+    async def stop_overdue_source(runtime_id):
+        stopped.append(runtime_id)
+        return 1
+
+    root.host.stop_overdue_source = stop_overdue_source
+    # The source already runs the deployment target: nothing to move.
+    async with value.database.session() as session:
+        (await session.get(DeploymentHostRow, "host")).target_version = "restore"
+    with pytest.raises(OperationRejected, match="behind the deployment target"):
+        await root.evict_execution(expected_owner=value.old)
+    # A stale grant is refused before anything is signalled.
+    async with value.database.session() as session:
+        (await session.get(DeploymentHostRow, "host")).target_version = "newer"
+    stale = replace(value.old, fencing_token=value.old.fencing_token + 5)
+    with pytest.raises(OperationRejected, match="ownership changed"):
+        await root.evict_execution(expected_owner=stale)
+    assert stopped == []
+
+    result = await root.evict_execution(expected_owner=value.old)
+    assert stopped == ["source"]
+    assert result["affected_project_ids"] == ["one"]
+    assert result["effects_replayed"] is False

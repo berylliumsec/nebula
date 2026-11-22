@@ -107,6 +107,13 @@ export interface Page<T> {
   nextCursor?: string;
 }
 
+/** One project-defined Work stage: items link to it by key. */
+export interface WorkStage {
+  key: string;
+  label: string;
+  flagWhenEmpty: boolean;
+}
+
 export interface EngagementSummary {
   id: Identifier;
   name: string;
@@ -115,12 +122,18 @@ export interface EngagementSummary {
   status: "draft" | "active" | "paused" | "complete" | "archived";
   tags: string[];
   workEnabled: boolean;
+  /** The project's ordered Work stages; empty when the project defines none. */
+  workStages?: WorkStage[];
+  /** Core's project revision, for revision-checked project settings. */
+  revision?: number;
   parentEngagementId?: string;
   workspacePath?: string;
   createdAt: string;
   updatedAt: string;
   scopeAssetCount: number;
   assistantDefaults?: AssistantDefaults;
+  /** Operator-set: every chat in this project is high priority. */
+  priority?: "high";
 }
 
 export interface StorageSource {
@@ -1908,6 +1921,8 @@ export interface ChatGoal {
   handoffSourceSessionId?: Identifier;
   handoffTargetSessionId?: Identifier;
   handoffReason?: string;
+  /** A Core project hold paused this goal; only the hold's release resumes it. */
+  heldByProject?: boolean;
   /** Set when a running goal is not executing because no ready worker serves its project. */
   executionWaiting?: { reason: "starting" | "held" | "closing"; detail: string };
   revision: number;
@@ -2302,6 +2317,8 @@ export interface ChatSessionSummary {
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
   isControlAssistant?: boolean;
+  /** A Butler mode thread: a Butler conversation beside the project's current one. */
+  isButlerThread?: boolean;
   /** Core records chats created by Butler separately from ordinary conversations. */
   isButlerInitiated?: boolean;
   pendingRuntimeSwitch?: PendingRuntimeSwitch;
@@ -2329,6 +2346,8 @@ export interface ChatSessionSummary {
   archivedAt?: string;
   pinned?: boolean;
   flagColor?: "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+  /** Operator-set: this chat's waiting work is taken first (subagents inherit it). */
+  priority?: "high";
   createdAt: string;
   updatedAt: string;
   revision: number;

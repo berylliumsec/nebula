@@ -19,10 +19,11 @@ function fakeCore(initial: ChatSessionSummary[]) {
       saved.set(id, updated);
       return updated;
     }),
-    setChatSessionPriority: vi.fn(async (id: string, changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null }, revision: number) => {
+    setChatSessionPriority: vi.fn(async (id: string, changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null; priority?: "high" | "normal" }, revision: number) => {
       const current = saved.get(id)!;
       expect(revision).toBe(current.revision);
-      const updated = session(id, { ...current, ...changes, flagColor: changes.flagColor === null ? undefined : changes.flagColor ?? current.flagColor, revision: revision + 1 });
+      const { priority, ...rest } = changes;
+      const updated = session(id, { ...current, ...rest, flagColor: changes.flagColor === null ? undefined : changes.flagColor ?? current.flagColor, priority: priority === undefined ? current.priority : priority === "high" ? "high" : undefined, revision: revision + 1 });
       saved.set(id, updated);
       return updated;
     }),
@@ -68,5 +69,18 @@ describe("bulk chat actions", () => {
     expect(calls.setChatSessionArchived).toHaveBeenCalledWith("one", false, 3);
     expect(calls.setChatSessionPriority).toHaveBeenCalledWith("one", { pinned: true }, 4);
     expect(calls.setChatSessionPriority).toHaveBeenCalledWith("one", { flagColor: "blue" }, 5);
+  });
+
+  it("marks chats high priority and back, verified by Core readback", async () => {
+    const { api, calls, saved } = fakeCore([session("one"), session("two")]);
+    expect((await applyChatBulkAction(api, "project", ["one", "two"], "priority:high")).succeededIds).toEqual(["one", "two"]);
+    expect(saved.get("one")?.priority).toBe("high");
+    expect(calls.setChatSessionPriority).toHaveBeenCalledWith("one", { priority: "high" }, 3);
+    // Already high: no write; then back to normal.
+    calls.setChatSessionPriority.mockClear();
+    expect((await applyChatBulkAction(api, "project", ["one"], "priority:high")).succeededIds).toEqual(["one"]);
+    expect(calls.setChatSessionPriority).not.toHaveBeenCalled();
+    expect((await applyChatBulkAction(api, "project", ["one"], "priority:normal")).failures).toEqual([]);
+    expect(saved.get("one")?.priority).toBeUndefined();
   });
 });

@@ -7,8 +7,11 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
+import socket
 import stat
-from typing import TYPE_CHECKING
+import time
+from uuid import uuid4
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import uvicorn
@@ -35,13 +38,22 @@ from .runtime_ipc import (
 )
 from .runtime_memory_recovery import HostMemoryRecovery
 from .runtime_memory_control import HostMemoryControl
-from .runtime_browser_bridge import BRIDGE_OPERATION, HostBrowserBridge
+from .runtime_browser_bridge import (
+    BRIDGE_OPERATION,
+    BRIDGE_STATE_NAME,
+    HostBrowserBridge,
+)
 from .runtime_host_settings import HostSettings
 from .runtime_host_credentials import SESSION_CREDENTIAL, register_session_credentials
 from .runtime_host_pressure import HOST_PRESSURE, register_host_pressure
 from .runtime_integration_credentials import (
     INTEGRATION_CREDENTIAL,
     register_integration_credentials,
+)
+from .runtime_butler_actions import (
+    BUTLER_ACTION_RESULT,
+    BUTLER_SUBMIT_ACTION,
+    register_butler_actions,
 )
 from .runtime_host_search import register_host_search
 from .authentication import secret_matches
@@ -54,6 +66,15 @@ if TYPE_CHECKING:
     from .runtime_work_batches import RuntimeWorkBatches
 
 HOST_SOCKET_NAME = "host-services.sock"
+# A call that reaches a generation still opening its services waits this long
+# for them before it is answered as undispatched; it stays inside the
+# caller's 30 s deadline, so a call queued during a swap is simply answered.
+READY_WAIT_SECONDS = 20
+# A call older than this when the gateway would dispatch it is answered as
+# undispatched instead: its caller's 30 s deadline has (nearly) passed, so it
+# may have given up, and a call it abandoned must never run later. The age
+# comes from the call's authenticated whole-second timestamp.
+QUEUED_CALL_LIMIT_SECONDS = 25
 PEER_HEADER = b"x-nebula-ipc-worker"
 
 
@@ -65,20 +86,104 @@ def create_host_knowledge_index(data_root: Path):
     return ChromaKnowledgeIndex(Path(path) if path else data_root / "knowledge-index")
 
 
+def inherited_host_services(descriptor: int) -> socket.socket:
+    """Adopt the host-services listening socket held by a longer-lived owner.
+
+    A holder that never restarts (a systemd socket unit) binds the private
+    Unix socket once. Each supervisor generation serves it, and worker calls
+    made while one generation replaces another wait in the kernel accept
+    queue instead of finding no socket. The descriptor must be a listening
+    Unix stream socket bound to an absolute path; the socket file must be
+    owner-only and owned by this user, in a directory no other user can
+    write. The descriptor is never modified or closed on rejection.
+    """
+    try:
+        is_socket = stat.S_ISSOCK(os.fstat(descriptor).st_mode)
+    except OSError as error:
+        raise ValueError(
+            "The inherited host-services descriptor is not open"
+        ) from error
+    if not is_socket:
+        raise ValueError("The inherited host-services descriptor is not a socket")
+    listener = socket.socket(fileno=descriptor)
+    try:
+        if (
+            listener.family != socket.AF_UNIX
+            or listener.type != socket.SOCK_STREAM
+            or not listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+        ):
+            raise ValueError(
+                "The inherited host-services socket is not a listening Unix socket"
+            )
+        path = listener.getsockname()
+        if not isinstance(path, str) or not path.startswith("/"):
+            raise ValueError(
+                "The inherited host-services socket must be bound to an absolute path"
+            )
+        try:
+            details = os.lstat(path)
+            parent = os.lstat(os.path.dirname(path))
+        except OSError as error:
+            raise ValueError(
+                "The inherited host-services socket path is missing"
+            ) from error
+        if (
+            not stat.S_ISSOCK(details.st_mode)
+            or details.st_uid != os.getuid()
+            or details.st_mode & 0o077
+        ):
+            raise ValueError(
+                "The inherited host-services socket must be an owner-only socket "
+                "owned by Core's user (SocketMode=0600)"
+            )
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid not in (os.getuid(), 0)
+            or parent.st_mode & 0o022
+        ):
+            raise ValueError(
+                "The inherited host-services socket must be in a directory only "
+                "Core's user or root can write"
+            )
+    except BaseException:
+        listener.detach()
+        raise
+    listener.set_inheritable(False)
+    return listener
+
+
 class HostServiceClient(RuntimeRpcClient):
     """A worker's host observations wait out a supervisor replacement.
 
-    Replacing the supervisor removes its host-services socket until the next
-    generation listens again. Starting project work reads host observations
-    (admission pressure, the browser bridge, credentials, capabilities); those
-    calls wait for the host rather than fail the work. Only read-only calls
-    are resent, and only after failures proving the host never dispatched
-    them: a connection that was never established, and the gateway's explicit
-    undispatched 503. Every other operation, a lost response after delivery
-    and every operation error reach the caller unchanged.
+    When a holder keeps the host-services socket (see
+    `inherited_host_services`), a call made during a supervisor replacement
+    is accepted by the kernel and answered by the next generation; nothing
+    here runs. Without a holder, replacing the supervisor removes its socket
+    until the next generation listens again, so starting project work, which
+    reads host observations (admission pressure, the browser bridge,
+    credentials, capabilities), waits for the host here rather than fail the
+    work. Only read-only or idempotent calls are resent, within one bounded
+    window, after failures that show the host being replaced: a connection
+    that was never established, the gateway's explicit undispatched 503, a
+    connection the stopping gateway closed before it read the request, and a
+    call that waited out its deadline in a holder's queue because no
+    generation started. Every other operation and every operation error
+    reach the caller unchanged.
     """
 
     reconnect_seconds = 120.0
+    # A timed-out attempt may still be running on the host, so only calls
+    # that are harmless to run twice at once are resent after a timeout. The
+    # Butler action calls are idempotent only one after another.
+    timeout_resendable = frozenset(
+        {
+            "host.services/v1",
+            HOST_PRESSURE,
+            BRIDGE_OPERATION,
+            SESSION_CREDENTIAL,
+            INTEGRATION_CREDENTIAL,
+        }
+    )
     resendable = frozenset(
         {
             "host.services/v1",
@@ -86,6 +191,9 @@ class HostServiceClient(RuntimeRpcClient):
             BRIDGE_OPERATION,
             SESSION_CREDENTIAL,
             INTEGRATION_CREDENTIAL,
+            # A resend finds the same command by its idempotency key.
+            BUTLER_SUBMIT_ACTION,
+            BUTLER_ACTION_RESULT,
         }
     )
 
@@ -102,9 +210,26 @@ class HostServiceClient(RuntimeRpcClient):
                 return await super().call(
                     operation, payload, request_id=request_id, timeout=timeout
                 )
-            except (httpx.ConnectError, httpx.ConnectTimeout, RuntimeIpcUndispatched):
+            except (
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                # A stopping gateway closes an accepted connection whose
+                # request it never started; the call was not dispatched.
+                httpx.RemoteProtocolError,
+                RuntimeIpcUndispatched,
+            ):
                 # diagnostic-expected: the host is being replaced; the bounded wait re-raises once its window ends.
                 if loop.time() + delay > deadline:
+                    raise
+            except httpx.ReadTimeout:
+                # Queued in a holder's socket while no generation started.
+                # The gateway never dispatches a call that old, but a slow
+                # host may still be running it, so only calls harmless to run
+                # twice at once are sent again.
+                if (
+                    operation not in self.timeout_resendable
+                    or loop.time() + delay > deadline
+                ):
                     raise
             await asyncio.sleep(delay)
             delay = min(delay * 2, 2.0)
@@ -128,6 +253,31 @@ def host_service_client(bootstrap, secret: bytes) -> RuntimeRpcClient:
     return client
 
 
+def _call_time(scope) -> float | None:
+    """The call's whole-second send time, or None if it carries none.
+
+    The header is authenticated by the call's MAC once dispatched; here it
+    only lets an old call be refused early, never admits one.
+    """
+    for name, value in scope.get("headers", []):
+        if name.lower() == b"x-nebula-ipc-time":
+            try:
+                return float(int(value.decode("ascii")))
+            except (UnicodeDecodeError, ValueError):
+                # diagnostic-expected: the RPC server rejects a malformed timestamp.
+                return None
+    return None
+
+
+def _links_to_socket(path: Path) -> bool:
+    """A link a holder-backed generation published: to a socket, or dangling."""
+    try:
+        return stat.S_ISSOCK(path.stat().st_mode)
+    except FileNotFoundError:
+        # diagnostic-expected: the holder is gone; the stale link is replaced.
+        return True
+
+
 class _HostServer(uvicorn.Server):
     @contextmanager
     def capture_signals(self):
@@ -145,6 +295,7 @@ class HostSharedServices:
         capacity_limits=None,
         memory_budgets=None,
         cleanup_runner_factory=None,
+        listener: socket.socket | None = None,
     ):
         if knowledge_index is not None and knowledge_index_factory is not None:
             raise ValueError("Supply a knowledge index or its deferred factory")
@@ -168,18 +319,25 @@ class HostSharedServices:
         )
         self.capacity_limits = capacity_limits
         self.endpoint: str | None = None
-        self.server = None
-        self.task = None
+        self.server: _HostServer | None = None
+        self.task: asyncio.Task[Any] | None = None
         self.closed = False
+        # A holder-owned socket outlives this generation (see
+        # inherited_host_services); otherwise this instance binds its own.
+        self.listener = listener
+        # Requests wait (bounded) until every service is open.
+        self.ready = False
+        self._ready = asyncio.Event()
+        self._accepting = True
         self._close_task = None
         self._start_lock = asyncio.Lock()
-        self._peers = {}
+        self._peers: dict[str, Any] = {}
         self._peer_lock = asyncio.Lock()
         self._slots = asyncio.Semaphore(8)
         self._requests: set[asyncio.Task] = set()
-        self._socket_identity = None
+        self._socket_identity: tuple[int, int] | None = None
         self.product_guidance = {"state": "unavailable"}
-        self.memory_control = None
+        self.memory_control: HostMemoryControl | None = None
         self.browser_bridge = HostBrowserBridge(self.coordination)
         self.host_settings = HostSettings(host)
         self.work_batches: RuntimeWorkBatches | None = None
@@ -277,6 +435,7 @@ class HostSharedServices:
                             "host_pressure": True,
                             "integration_credentials": True,
                             "web_search": True,
+                            "butler_actions": True,
                             "host_settings": self.host_settings.assistant_bridge.routes(),
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),
@@ -306,6 +465,9 @@ class HostSharedServices:
                         self.host_settings.credentials,
                     )
                     self.host_settings.assistant_bridge.register(rpc, runtime_id)
+                    # Butler's home worker sends its changes to other projects
+                    # here; the RPCs refuse any other worker's grant.
+                    register_butler_actions(rpc, runtime_id, self.coordination)
                     register_host_search(
                         rpc,
                         runtime_id,
@@ -327,7 +489,36 @@ class HostSharedServices:
                 scope, receive, send
             )
             return
-        if self.closed or self.host.closed or self.host.lock.descriptor is None:
+        sent = _call_time(scope)
+        if not self._ready.is_set():
+            remaining = READY_WAIT_SECONDS
+            if sent is not None:
+                remaining = min(
+                    remaining, QUEUED_CALL_LIMIT_SECONDS - (time.time() - sent)
+                )
+            try:
+                async with asyncio.timeout(max(0.0, remaining)):
+                    await self._ready.wait()
+            except TimeoutError:
+                # diagnostic-expected: answered below as undispatched; the caller resends.
+                pass
+        if sent is not None and time.time() - sent > QUEUED_CALL_LIMIT_SECONDS:
+            # Waited in a holder's queue across a swap, or for readiness: its
+            # caller may have given up, so it is refused before anything runs.
+            await JSONResponse(
+                {"detail": "This call waited too long for host services"},
+                status_code=503,
+                headers={UNDISPATCHED_HEADER: "1"},
+            )(scope, receive, send)
+            return
+        if (
+            # A holder-backed gateway keeps serving what it already accepted
+            # until it stops listening; see _stop_owned.
+            (self.closed and (self.listener is None or not self._accepting))
+            or not self.ready
+            or self.host.closed
+            or self.host.lock.descriptor is None
+        ):
             # Only a host being replaced is marked: its caller resends the
             # call to the next generation, which never saw it.
             await JSONResponse(
@@ -420,6 +611,8 @@ class HostSharedServices:
                 await self._start_owned()
             except BaseException:
                 self.closed = True
+                # Calls waiting for readiness are answered at once.
+                self._ready.set()
                 await finish_cleanup(self._stop_owned())
                 raise
 
@@ -428,7 +621,10 @@ class HostSharedServices:
         path = self.host.socket_root / HOST_SOCKET_NAME
         if path.exists() or path.is_symlink():
             details = path.lstat()
-            if not stat.S_ISSOCK(details.st_mode) or details.st_uid != os.getuid():
+            if details.st_uid != os.getuid() or not (
+                stat.S_ISSOCK(details.st_mode)
+                or (stat.S_ISLNK(details.st_mode) and _links_to_socket(path))
+            ):
                 raise RuntimeIpcError(
                     "Shared-service endpoint is not an owned Unix socket"
                 )
@@ -444,6 +640,14 @@ class HostSharedServices:
                     "cpu": max(1, min(4096, (os.cpu_count() or 1) - 1)),
                 }
             )
+        if self.closed or self.host.closed:
+            raise RuntimeError("Shared-service startup was detached")
+        self.browser_bridge.restore(self.host.root / BRIDGE_STATE_NAME)
+        # Listen before the slow startup work (the knowledge index); calls
+        # queued in a holder's socket during the swap are read now and wait
+        # for readiness here, within their deadline, rather than in the
+        # accept queue.
+        await self._listen(path)
         await self._initialize_knowledge()
         if self.knowledge is not None:
             sync = getattr(self.knowledge.index, "sync_product_knowledge", None)
@@ -472,33 +676,71 @@ class HostSharedServices:
             self.host_settings.effect.delivery, host=self.host
         )
         await self.work_batches.start()
+        self.ready = True
+        self._ready.set()
+
+    async def _listen(self, path: Path):
+        options: dict[str, Any] = {}
+        if self.listener is None:
+            if path.is_symlink():
+                # A holder-backed generation published this link; this one
+                # binds its own socket in its place.
+                path.unlink()
+            options["uds"] = str(path)
+        else:
+            self._publish_link(path, self.listener.getsockname())
         self.endpoint = "unix://" + str(path)
-        self.server = _HostServer(
+        server = self.server = _HostServer(
             uvicorn.Config(
                 self.app,
                 interface="asgi3",
-                uds=str(path),
                 lifespan="off",
                 access_log=False,
                 log_level="error",
                 timeout_graceful_shutdown=None,
+                **options,
             )
         )
-        self.task = create_diagnostic_task(
-            self.server.serve(),
+        task = self.task = create_diagnostic_task(
+            server.serve(
+                sockets=[self.listener] if self.listener is not None else None
+            ),
             feature="runtime",
             event_code="runtime.host_services",
             failure_message="The private shared host listener could not continue.",
             name="nebula-host-services",
         )
         async with asyncio.timeout(10):
-            while not self.server.started:
-                if self.task.done():
-                    await self.task
+            while not server.started:
+                if task.done():
+                    await task
                     raise RuntimeIpcError("Shared host listener did not start")
                 await asyncio.sleep(0.01)
-        details = path.stat()
-        self._socket_identity = (details.st_dev, details.st_ino)
+        if self.listener is None:
+            details = path.stat()
+            self._socket_identity = (details.st_dev, details.st_ino)
+
+    @staticmethod
+    def _publish_link(path: Path, target: str):
+        """Point workers' fixed endpoint at the holder's socket.
+
+        Workers derive the host endpoint from their own socket directory, so
+        retained workers of every release keep finding it. The link outlives
+        this generation, and connecting through it reaches the holder's
+        accept queue while no generation serves.
+        """
+        try:
+            if path.is_symlink() and os.readlink(path) == target:
+                return
+        except OSError as error:
+            raise RuntimeIpcError("Shared-service endpoint is unreadable") from error
+        staged = path.with_name(f".{HOST_SOCKET_NAME}.{uuid4().hex}")
+        os.symlink(target, staged)
+        try:
+            os.replace(staged, path)
+        except BaseException:
+            staged.unlink(missing_ok=True)
+            raise
 
     async def _initialize_knowledge(self):
         if self._knowledge_index_factory is None:
@@ -527,21 +769,43 @@ class HostSharedServices:
 
         await finish_cleanup(initialize())
 
-    async def _stop_owned(self):
-        if self.work_batches is not None:
-            await self.work_batches.close()
-        await self.host_settings.close()
-        await self.recovery.close()
+    async def _stop_listening(self):
+        if not self._accepting:
+            return
         if self.server is not None:
             self.server.should_exit = True
         try:
             if self.task is not None:
                 await self.task
         finally:
+            self._accepting = False
             # Accepted host work ends before another owner can bind its socket
             # or load this host's model/index files.
             if self._requests:
                 await asyncio.gather(*tuple(self._requests), return_exceptions=True)
+
+    async def _stop_owned(self):
+        failure = None
+        if self.listener is not None:
+            # With a holder, stop accepting before any service closes: later
+            # calls wait in the holder's queue for the next generation instead
+            # of being answered "reconnecting", and calls already accepted
+            # finish against open services (the browser bridge included).
+            try:
+                await self._stop_listening()
+            except BaseException as error:
+                # diagnostic-expected: re-raised below once every service is closed.
+                failure = error
+            self.browser_bridge.close()
+        if self.work_batches is not None:
+            await self.work_batches.close()
+        await self.host_settings.close()
+        await self.recovery.close()
+        try:
+            if failure is not None:
+                raise failure
+            await self._stop_listening()
+        finally:
             if self.endpoint and self._socket_identity:
                 path = Path(self.endpoint[7:])
                 if path.exists():
@@ -564,7 +828,12 @@ class HostSharedServices:
     async def close(self):
         if self._close_task is None:
             self.closed = True
-            self.browser_bridge.close()
+            # Calls waiting for a startup that will not finish are answered.
+            self._ready.set()
+            if self.listener is None:
+                # A holder-backed bridge closes once its gateway stops
+                # accepting (_stop_owned).
+                self.browser_bridge.close()
 
             async def cleanup():
                 async with self._start_lock:

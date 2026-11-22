@@ -62,15 +62,15 @@ def report_specs() -> dict[str, ToolSpec]:
     refs = {"type": "array", "items": _REF_SCHEMA, "maxItems": 8}
     progress = _report_spec(
         "report_progress",
-        "Report a meaningful goal checkpoint to Core. State the changed work, evidence, completion criterion, and next step. The report is an attributed agent claim, not a verified finding; continue the work after reporting.",
+        "Report a meaningful goal checkpoint to Core. State the changed work, evidence, completion criterion, and next step; set plan_index to the 0-based goal plan step you are now on. The report is an attributed agent claim, not a verified finding; continue the work after reporting.",
         {
             "what_changed": text(),
             "evidence_gained": lines(),
             "criterion_advanced": text(300),
             "next_step": text(),
             "blockers": {"type": "array", "items": text(300), "maxItems": 8},
-            "next_checkpoint_at": {"type": ["string", "null"], "format": "date-time"},
             "evidence_refs": refs,
+            "plan_index": {"type": ["integer", "null"], "minimum": 0, "maximum": 199},
         },
         ["what_changed", "evidence_gained", "criterion_advanced", "next_step"],
     )

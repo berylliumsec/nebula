@@ -69,6 +69,12 @@ from .database import (
     RunEventRow,
     SearchDocumentRow,
 )
+from .deployment_protocol import RESERVED_PROJECT_IDS
+from .stored_entities import (
+    decode_stored,
+    dump_with_unknown,
+    validate_update,
+)
 from .event_history import (
     EVENT_OWNER_ENTITY_KINDS,
     RUN_EVENT_OWNER_KINDS,
@@ -153,6 +159,17 @@ async def _delete_chat_turn_ledgers(session: AsyncSession, turn_ids: Any) -> Non
 
     for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
         (await session.execute(delete(table).where(table.turn_id.in_(turn_ids))))
+
+
+def not_reserved_project() -> ColumnElement[bool]:
+    """Exclude Core's own projects (``RESERVED_PROJECT_IDS``) from project rows.
+
+    The Butler home project is a real project with its own worker, but it is
+    Core's, not the operator's: project lists, counts, pickers, scans that pick
+    "the first project" and search never see it. Reading it by id still works.
+    """
+
+    return EntityRow.id.not_in(sorted(RESERVED_PROJECT_IDS))
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
@@ -307,6 +324,8 @@ class RunBudgetExceededError(StorageError):
 
 
 def _dump_entity(entity: Entity) -> dict[str, Any]:
+    # A new row never inherits keys another row was read with, even when the
+    # entity is a copy of one; only a rewrite of that row restores them.
     return entity.model_dump(mode="json")
 
 
@@ -433,7 +452,7 @@ def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> Ent
             f"record {row.id} is {model.__name__}, expected {expected.__name__}"
         )
     try:
-        return cast(EntityT, model.model_validate(row.payload))
+        return cast(EntityT, decode_stored(model, row.payload))
     except Exception as exc:
         record_caught_exception(
             "storage",
@@ -765,7 +784,7 @@ class StoreTransaction:
         payload["updated_at"] = utc_now()
         payload["revision"] = row.revision + 1
         try:
-            updated = model.model_validate(payload)
+            updated, _ = validate_update(model, row.payload, payload, changes)
         except ValidationError:  # diagnostic-expected: re-raised as the stored row's corruption or the invalid change
             # A stored row that no longer validates is corruption, reported as
             # such; otherwise the change itself is invalid.
@@ -785,13 +804,13 @@ class StoreTransaction:
         before_attention: Approval | HarnessInteraction | ChatQueue | None = None
         if isinstance(updated, Approval):
             attention_entity = updated
-            before_attention = Approval.model_validate(row.payload)
+            before_attention = decode_stored(Approval, row.payload)
         elif isinstance(updated, HarnessInteraction):
             attention_entity = updated
-            before_attention = HarnessInteraction.model_validate(row.payload)
+            before_attention = decode_stored(HarnessInteraction, row.payload)
         elif isinstance(updated, ChatQueue):
             attention_entity = updated
-            before_attention = ChatQueue.model_validate(row.payload)
+            before_attention = decode_stored(ChatQueue, row.payload)
         goal_transition = (
             updated_goal is not None and previous_status != updated_goal.status.value
         )
@@ -816,7 +835,7 @@ class StoreTransaction:
                 )
             )
             if goal_transition:
-                before_goal = ChatGoal.model_validate(row.payload)
+                before_goal = decode_stored(ChatGoal, row.payload)
         # The statement synchronizes the cached row even when it matches
         # nothing, so the revision this update read is kept for the error.
         read_revision = row.revision
@@ -828,7 +847,7 @@ class StoreTransaction:
                 EntityRow.revision == read_revision,
             )
             .values(
-                payload=_dump_entity(updated),
+                payload=dump_with_unknown(updated),
                 engagement_id=entity_engagement_id(updated),
                 **_entity_lookup_fields(updated),
                 revision=updated.revision,
@@ -889,7 +908,7 @@ class StoreTransaction:
         ):
             run_row = await self.session.get(EntityRow, updated.run_id)
             if run_row is not None and run_row.kind == AgentRun.entity_kind:
-                run = AgentRun.model_validate(run_row.payload)
+                run = decode_stored(AgentRun, run_row.payload)
                 if (
                     run.backend == RunBackend.NATIVE
                     and run.engagement_id == updated.engagement_id
@@ -1263,7 +1282,7 @@ class NebulaStore:
         def records(rows: Sequence[EntityRow]) -> list[EntityT]:
             if readable_only:
                 return readable_entities(rows, model)
-            return [model.model_validate(row.payload) for row in rows]
+            return [decode_stored(model, row.payload) for row in rows]
 
         ordered = statement.order_by(*_entity_order(newest_first))
         if limit is not None and limit <= HISTORY_PARTITION:
@@ -1337,7 +1356,7 @@ class NebulaStore:
         )
         async with self.database.session() as session:
             calls = [
-                ToolCall.model_validate(row.payload)
+                decode_stored(ToolCall, row.payload)
                 for row in (await session.scalars(statement))
             ]
         return sorted(calls, key=lambda call: (call.created_at, call.id))
@@ -1456,7 +1475,7 @@ class NebulaStore:
         )
         async with self.database.session() as session:
             return [
-                Artifact.model_validate(row.payload)
+                decode_stored(Artifact, row.payload)
                 for row in (await session.scalars(statement))
             ]
 
@@ -1503,7 +1522,7 @@ class NebulaStore:
         )
         async with self.database.session() as session:
             row = await session.scalar(statement)
-            return model.model_validate(row.payload) if row is not None else None
+            return decode_stored(model, row.payload) if row is not None else None
 
     async def create_many(self, entities: list[Entity]) -> list[Entity]:
         async with self.transaction() as transaction:
@@ -1540,7 +1559,7 @@ class NebulaStore:
                 if project_row is None or project_row.kind != Engagement.entity_kind:
                     raise NotFoundError(f"engagements entity not found: {project_id}")
                 if (
-                    Engagement.model_validate(project_row.payload).workspace_path
+                    decode_stored(Engagement, project_row.payload).workspace_path
                     != expected_path
                 ):
                     raise ConflictError(
@@ -1911,6 +1930,8 @@ class NebulaStore:
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
         if model.entity_kind == "chat_sessions" and not include_temporary:
             statement = statement.where(not_temporary_chat_session())
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -1997,6 +2018,8 @@ class NebulaStore:
         """The ``find_entities`` query, or None when a filter accepts no value."""
 
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -2446,6 +2469,8 @@ class NebulaStore:
         )
         if model.entity_kind == "chat_sessions" and not include_temporary:
             statement = statement.where(not_temporary_chat_session())
+        if model.entity_kind == "engagements":
+            statement = statement.where(not_reserved_project())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         async with self.database.session() as session:
@@ -2711,7 +2736,7 @@ class NebulaStore:
                     "revision": expected_revision + 1,
                 }
             )
-            updated_entity = model.model_validate(payload)
+            updated_entity, _ = validate_update(model, row["payload"], payload, changes)
             result = await connection.execute(
                 update(EntityRow)
                 .where(
@@ -2720,7 +2745,7 @@ class NebulaStore:
                     EntityRow.revision == expected_revision,
                 )
                 .values(
-                    payload=_dump_entity(updated_entity),
+                    payload=dump_with_unknown(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
                     **_entity_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
@@ -2892,7 +2917,7 @@ class NebulaStore:
                     "revision": expected_revision + 1,
                 }
             )
-            updated_entity = model.model_validate(payload)
+            updated_entity, _ = validate_update(model, row["payload"], payload, changes)
             result = await connection.execute(
                 update(EntityRow)
                 .where(
@@ -2901,7 +2926,7 @@ class NebulaStore:
                     EntityRow.revision == expected_revision,
                 )
                 .values(
-                    payload=_dump_entity(updated_entity),
+                    payload=dump_with_unknown(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
                     **_entity_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
@@ -3564,6 +3589,7 @@ class NebulaStore:
         statement = (
             select(EntityRow.kind, func.count())
             .where(or_(EntityRow.kind != "chat_sessions", not_temporary_chat_session()))
+            .where(or_(EntityRow.kind != "engagements", not_reserved_project()))
             .group_by(EntityRow.kind)
         )
         if engagement_id is not None:
@@ -3962,7 +3988,7 @@ class NebulaStore:
                 f"record {row['id']} is {row['kind']}, expected {model.entity_kind}"
             )
         try:
-            return model.model_validate(row["payload"])
+            return decode_stored(model, row["payload"])
         except Exception as exc:
             record_caught_exception(
                 "storage",

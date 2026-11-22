@@ -77,6 +77,7 @@ _PARAMETERS: dict[str, type[NebulaModel]] = {
     "reconcile_project": ReconcileParameters,
     "rollback_code": VersionRevisionParameters,
     "retire": RuntimeParameters,
+    "evict_execution": ReconcileParameters,
     "shutdown": ShutdownParameters,
 }
 
@@ -96,6 +97,7 @@ class DeploymentOperationRequest(NebulaModel):
         "reconcile_project",
         "rollback_code",
         "retire",
+        "evict_execution",
         "shutdown",
     ]
     parameters: dict
@@ -110,6 +112,9 @@ class RuntimeManagement:
         # Operations whose request a stopping generation may cancel; the
         # supervisor joins them before releasing host authority.
         self.inflight: set[asyncio.Future] = set()
+        # What each in-flight operation is, for the deployer's host-swap
+        # check: a stop waits for these, so it must not begin while one runs.
+        self.running: dict[asyncio.Future, dict[str, str]] = {}
 
         async def principal(request):
             await authentication.require_auth(
@@ -160,6 +165,11 @@ class RuntimeManagement:
                 )
                 self.inflight.add(execution)
                 execution.add_done_callback(self.inflight.discard)
+                self.running[execution] = {
+                    "operation_id": command.operation_id,
+                    "action": command.action,
+                }
+                execution.add_done_callback(lambda done: self.running.pop(done, None))
                 # A supervisor generation that stops relaying this request
                 # still completes the operation and its receipt; the caller
                 # reads that receipt again with the same operation ID.
@@ -193,6 +203,22 @@ class RuntimeManagement:
                     self.notify_shutdown, command.operation_id
                 )
             return response
+
+        @app.get("/api/v1/deployment/operations")
+        async def running(request: Request):
+            # Only this supervisor generation's in-flight operations: a row a
+            # previous generation left "running" is not waited for here and
+            # becomes uncertain when it is read or replayed.
+            await principal(request)
+            return JSONResponse(
+                {
+                    "running": sorted(
+                        self.running.values(),
+                        key=lambda item: item["operation_id"],
+                    )
+                },
+                headers={"Cache-Control": "private, no-store"},
+            )
 
         @app.post("/api/v1/deployment/operations/{operation_id}/reconcile")
         async def reconcile(operation_id: str, request: Request):
@@ -282,10 +308,47 @@ class RuntimeManagement:
             identity = await root.host.retire(**values)
             await root.proxy.discard_endpoint(identity.endpoint)
             return identity.model_dump(mode="json")
+        elif action == "evict_execution":
+            return await root.evict_execution(
+                expected_owner=ProjectLease(**values["expected_owner"])
+            )
         elif action == "shutdown":
             if root._shutdown_requested is None:
                 raise HTTPException(
                     409, "This host has no coordinated shutdown callback"
                 )
             return await root.shutdown(**values)
-        return (await root.coordinator.status()).model_dump(mode="json")
+        return await self.deployment_summary(
+            values.get("project_id") if action == "handoff" else None
+        )
+
+    async def deployment_summary(self, project_id: str | None = None) -> dict:
+        """A bounded readback of the deployment after an operation's effect.
+
+        The full status lists every project and staged release; on a busy
+        host it outgrows the 64 KiB operation receipt, and the committed effect
+        was then reported as uncertain. Deployers read status themselves, so
+        the receipt keeps only what identifies the resulting state.
+        """
+        status = (await self.supervisor.coordinator.status()).model_dump(mode="json")
+        summary = {
+            key: status.get(key)
+            for key in (
+                "protocol",
+                "revision",
+                "api_version",
+                "target_execution_version",
+                "resident_versions",
+                "health",
+            )
+        }
+        if project_id is not None:
+            summary["project"] = next(
+                (
+                    row
+                    for row in status.get("projects") or []
+                    if row.get("project_id") == project_id
+                ),
+                None,
+            )
+        return summary

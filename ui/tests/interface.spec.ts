@@ -223,6 +223,31 @@ async function installTruthfulCore(page: Page) {
         activation_supported: true, activation_unavailable_reason: null, executor_scope: "report-pdfs",
         executor_state: "disabled", worker_count: 0, active_jobs: 0, queued_jobs: 0, maximum_worker_cpus: 4,
         detail: "Background PDF workers are disabled."};
+    } else if (path.endsWith("/host-pressure")) {
+      // Settings > Setup renders host admission thresholds. Without this
+      // branch the catch-all array crashes the whole Settings workspace.
+      const thresholds = {cpu: 0.8, memory: 0.8, load: 0.8, io: 0.8};
+      body = {host_id: "preview-host", host_name: "Preview host", revision: 1,
+        saved_thresholds: thresholds, effective_thresholds: thresholds,
+        readings: {cpu: 0.12, memory: 0.34, load: 0.1, io: 0}, waiting: false,
+        pressure_metric: null, reason: null, sample: {load_average_ratio: 0.1, host_io_pressure_ratio: 0},
+        concurrency: {provider_limit: 60, background_limit: 58, active: 0, active_background: 0}};
+    } else if (path.includes("/memory-budgets/host-commands")) {
+      body = {settings: {revision: 1, running_at_once: 8}, running_count: 0, running: [], queued: []};
+    } else if (path.endsWith("/memory-budgets/jobs")) {
+      body = {items: [], at_limit: false, display_limit: 50};
+    } else if (path.endsWith("/memory-budgets")) {
+      // Advanced > Usage renders memory budgets; a catch-all array has no
+      // capabilities list and crashes the Settings workspace.
+      const gib = 1024 ** 3;
+      body = {revision: 1,
+        policy: {default_job: {max_bytes: 2 * gib, high_bytes: null, swap_bytes: 0}, aggregate_bytes: 12 * gib,
+          reserve_bytes: 2 * gib, environment_defaults: {}, profile_overrides: {}},
+        administrator_limits: {capacity_bytes: 16 * gib, maximum_job_bytes: 8 * gib, maximum_aggregate_bytes: 14 * gib,
+          minimum_reserve_bytes: 2 * gib, maximum_swap_bytes: 2 * gib},
+        capabilities: [], profiles: [], reserved_bytes: 0, available_bytes: 12 * gib, effective_aggregate_bytes: 12 * gib,
+        held_jobs: 0, queued_jobs: 0, application_state: "unavailable",
+        detail: "Policy saved. No runner has verified enforcement."};
     } else if (path.endsWith("/diagnostics/settings")) {
       body = {
         schema: "nebula.diagnostics-settings/v1",
@@ -4251,6 +4276,89 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   expect(accessibility.violations).toEqual([]);
 });
 
+reloadTest("assistant upgrade conversation menu holds a chat and marks it high priority", async ({ page }) => {
+  test.setTimeout(180_000);
+  const main = { ...entity, id: "hold-main", engagement_id: "scratch-project", title: "Operator research", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const other = { ...entity, id: "hold-other", engagement_id: "scratch-project", title: "New direction", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const items = [main, other];
+  let chatHolds: Array<Record<string, unknown>> = [];
+  const holdView = () => ({ project_id: "scratch-project", held: false, hold: null, chat_holds: chatHolds, active_turns: 0, running_goals: 0 });
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: items });
+    if (path.endsWith("/engagements/scratch-project/hold") && request.method() === "GET") return route.fulfill({ json: holdView() });
+    if (path.endsWith("/engagements/scratch-project/holds") && request.method() === "POST") {
+      const body = request.postDataJSON() as { session_ids: string[] };
+      const placed = body.session_ids.map(id => ({ id: `hold-${id}`, status: "held", reason: "Priorities changed", grace_seconds: 180, created_at: "2026-11-22T10:00:00Z", paused_goals: [], session_id: id, batch_id: "batch-1" }));
+      chatHolds = [...chatHolds, ...placed];
+      return route.fulfill({ json: { ...holdView(), batch_id: "batch-1", holds: placed } });
+    }
+    if (path.endsWith("/engagements/scratch-project/holds/release") && request.method() === "POST") {
+      const body = request.postDataJSON() as { session_ids?: string[] };
+      chatHolds = chatHolds.filter(hold => !(body.session_ids ?? []).includes(String(hold.session_id)));
+      return route.fulfill({ json: holdView() });
+    }
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && request.method() === "PATCH") {
+      const change = request.postDataJSON() as { priority?: "high" | "normal"; expected_revision?: number };
+      if (change.expected_revision !== undefined && change.expected_revision !== selected.revision) return route.fulfill({ status: 409, json: { detail: "Conversation changed" } });
+      const metadata: Record<string, unknown> = { ...selected.metadata };
+      if (change.priority === "high") metadata.priority = "high";
+      if (change.priority === "normal") delete metadata.priority;
+      Object.assign(selected, { revision: selected.revision + 1, metadata });
+      return route.fulfill({ json: selected });
+    }
+    if (selected && request.method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/hold-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/hold-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=hold-main", "Workbench");
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  const row = sidebar.locator(".session-list-item").filter({ has: page.locator('[data-session-id="hold-main"]') });
+  const openActions = async () => {
+    await row.hover();
+    await sidebar.getByRole("button", { name: "More actions for Operator research" }).click();
+    return page.getByRole("menu", { name: "Actions for Operator research" });
+  };
+
+  // High priority is a checkable menu item; the list marks the chat with blue chevrons.
+  let menu = await openActions();
+  const priority = menu.getByRole("menuitemcheckbox", { name: "High priority" });
+  await expect(priority).toHaveAttribute("aria-checked", "false");
+  await priority.click();
+  await expect(row.getByRole("img", { name: "High priority" })).toBeVisible();
+  menu = await openActions();
+  await expect(menu.getByRole("menuitemcheckbox", { name: "High priority" })).toHaveAttribute("aria-checked", "true");
+  if (mobile) {
+    const bounds = await menu.getByRole("menuitem", { name: "Hold chat" }).boundingBox();
+    expectTouchTarget(bounds?.height, "Hold chat height");
+  }
+
+  // Hold acts at once: no dialog. The row is marked, and the open chat says so.
+  await menu.getByRole("menuitem", { name: "Hold chat" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(row).toHaveClass(/\bheld\b/);
+  await expect(row.getByRole("img", { name: "On hold" })).toBeVisible();
+  if (mobile && await sidebar.isVisible()) await sidebar.locator('[data-session-id="hold-main"]').click();
+  const notice = page.getByRole("status").filter({ hasText: "This chat is on hold" });
+  await expect(notice).toContainText("Priorities changed");
+  await expect(page.getByRole("button", { name: "Release and send" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+
+  // Release from the notice: Send returns.
+  await notice.getByRole("button", { name: "Release" }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".chat-composer, .chat-hold-notice").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable in the conversation pane", async ({ page }) => {
   test.setTimeout(270_000);
   const butler = { ...entity, id: "group-butler", engagement_id: "scratch-project", title: "Butler", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { control_assistant: true } };
@@ -7511,15 +7619,9 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
       return;
     }
     if (path.endsWith("/chat/turns/turn-hook/hooks")) {
-      await route.fulfill({ json: [{
-        id: "hook-run-1",
-        hook_id: "audit",
-        event_name: "chat.turn.completed",
-        status: "complete",
-        side_effects: "none",
-        started_at: entity.created_at,
-        completed_at: entity.updated_at,
-      }] });
+      // One run per tool call: the outcomes list shares a row for identical clean runs.
+      const hookRun = (id: string, event_name: string) => ({ id, hook_id: "audit", event_name, status: "complete", side_effects: "none", started_at: entity.created_at, completed_at: entity.updated_at });
+      await route.fulfill({ json: [hookRun("hook-run-1", "chat.turn.completed"), hookRun("hook-run-2", "tool.before"), hookRun("hook-run-3", "tool.before")] });
       return;
     }
     await route.fallback();
@@ -7562,7 +7664,23 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Run the audit hook");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByText("Hooked answer")).toBeVisible();
-  await expect(page.getByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
+  const hookSummary = page.getByText("Lifecycle hooks · 3/3 completed");
+  await expect(hookSummary).toBeVisible();
+  await hookSummary.click();
+  const hookRows = page.getByRole("list", { name: "Lifecycle hook outcomes" }).getByRole("listitem");
+  await expect(hookRows).toHaveCount(2);
+  await expect(hookRows.nth(1)).toHaveText(/Before tool · 2 complete$/);
+  const hookLayout = await hookRows.nth(1).evaluate((row) => {
+    const name = row.querySelector("strong")!.getBoundingClientRect();
+    const detail = row.querySelector("small")!.getBoundingClientRect();
+    const list = row.parentElement!.getBoundingClientRect();
+    return { nameStartsList: Math.abs(name.left - row.getBoundingClientRect().left) < 1, gap: detail.left - name.right, wrapped: detail.top >= name.bottom - 1, listLeft: list.left, rowLeft: row.getBoundingClientRect().left };
+  });
+  // Left-aligned rows, and the hook name never runs into its detail.
+  expect(hookLayout.nameStartsList).toBe(true);
+  expect(hookLayout.wrapped || hookLayout.gap >= 4).toBe(true);
+  expect(hookLayout.rowLeft - hookLayout.listLeft).toBeLessThan(24);
+  expect((await new AxeBuilder({ page }).include('[data-guide="hook-outcomes"]').analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds)).toEqual(["audit"]);
   await openSessionDetails(page);
   await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
@@ -12392,6 +12510,7 @@ test("stabilization audit primary mutation dialogs through the shared dialog con
   await captureDialog("dialog-provider", page.getByRole("button", { name: "Add provider" }), "Add model provider");
 
   await openWorkspace(page, "/settings#automation-settings", "Settings");
+  await captureDialog("dialog-claude", page.getByRole("button", { name: "Add Claude" }), "Add Claude");
   await captureDialog("dialog-grok", page.getByRole("button", { name: "Add Grok" }), "Add Grok ACP");
   await captureDialog("dialog-codex", page.getByRole("button", { name: "Add Codex" }), "Add Codex");
   await captureDialog("dialog-mcp", page.getByRole("button", { name: "Add MCP server" }), "Add MCP server");

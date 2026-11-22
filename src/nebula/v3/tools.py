@@ -20,7 +20,9 @@ import shutil
 import socket
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from enum import Enum
 from pathlib import Path
 from threading import Lock
@@ -53,7 +55,10 @@ from .tool_results import (
     MAX_GENERATED_BYTES,
     MAX_GENERATED_FILES,
     MAX_MODEL_ARTIFACT_REFS,
+    MAX_TOOL_OUTPUT_READ_LINES,
+    DEFAULT_TOOL_OUTPUT_READ_LINES,
     ParserState,
+    ToolOutputPreview,
     ToolParserReceipt,
     ToolResultStatus,
     ToolTimingReceipt,
@@ -64,7 +69,7 @@ from .tool_results import (
     WebResultObservation,
     WorkspaceOutputService,
     artifact_ref,
-    small_output_preview,
+    command_output_preview,
     bytes_are_searchable,
 )
 
@@ -140,12 +145,20 @@ class ProjectHookPolicyDenied(PolicyDenied):
     """A project hook denied a command before it ran; its output is untrusted."""
 
     def __init__(
-        self, decision: PolicyDecision, *, hook_id: str, stdout: str, stderr: str
+        self,
+        decision: PolicyDecision,
+        *,
+        hook_id: str,
+        stdout: str,
+        stderr: str,
+        route_to: Sequence[str] = (),
     ) -> None:
         super().__init__(decision)
         self.hook_id = hook_id
         self.hook_stdout = stdout
         self.hook_stderr = stderr
+        # The tools the hook's manifest routes a denied command to.
+        self.route_to = tuple(route_to)
 
 
 class ToolNotPermitted(PolicyDenied):
@@ -226,6 +239,33 @@ class ParallelismPolicy(str, Enum):
 
 
 # Core's own bounded reads of recorded output, project files, the
+# The workspace a Butler session in Butler's own project reads: its focus
+# project's. Set only around workspace.find/search/read by the focus broker;
+# the call's ledger, receipt and evidence stay in Butler's project.
+FOCUS_WORKSPACE_READS = frozenset(
+    {"workspace.find", "workspace.search", "workspace.read"}
+)
+_focus_workspace: ContextVar[Path | None] = ContextVar(
+    "butler_focus_workspace", default=None
+)
+
+
+@contextmanager
+def focus_workspace_reads(workspace: Path) -> Iterator[None]:
+    token = _focus_workspace.set(workspace)
+    try:
+        yield
+    finally:
+        _focus_workspace.reset(token)
+
+
+def retrieval_workspace(invocation: "ToolInvocation") -> Path:
+    """The workspace a workspace.* read serves: the focus project's, if set."""
+
+    focus = _focus_workspace.get()
+    return focus if focus is not None else invocation.workspace
+
+
 # conversation's archived messages and the project's indexed knowledge. They change nothing, so an attempt
 # interrupted by a Core restart can run again.
 RETRIEVAL_TOOL_NAMES = frozenset(
@@ -1421,31 +1461,44 @@ class StoreToolEvidenceRecorder:
             warnings.append(
                 f"{warning_count - len(warnings)} additional warnings are available in execution diagnostics"
             )
-        preview = small_output_preview(self.artifact_store, stream_artifacts)
-        receipt = ToolResultReceipt(
-            tool_call_id=call.id,
-            tool_name=spec.name,
-            tool_version=spec.version,
-            status=status,
-            exit_code=result.exit_code,
-            summary=_compact_tool_summary(result, status),
-            observations=_compact_tool_observations(result),
-            timing=ToolTimingReceipt(
-                started_at=result.execution.get("started_at"),
-                completed_at=result.execution.get("completed_at"),
-                duration_seconds=result.execution.get("duration_seconds"),
-            ),
-            artifacts=model_references,
-            output_preview=preview,
-            next_actions=[] if preview else ["tool_output.search", "tool_output.read"],
-            truncated=truncated,
-            incomplete=incomplete,
-            parser=ToolParserReceipt(
-                state=parser_state,
-                artifact_id=parsed_artifact_id,
-                contract=spec.parser_contract,
-            ),
-            warnings=warnings,
+
+        def build_receipt(preview: list[ToolOutputPreview]) -> ToolResultReceipt:
+            complete = bool(preview) and not any(item.partial for item in preview)
+            return ToolResultReceipt(
+                tool_call_id=call.id,
+                tool_name=spec.name,
+                tool_version=spec.version,
+                status=status,
+                exit_code=result.exit_code,
+                summary=_compact_tool_summary(result, status),
+                observations=_compact_tool_observations(result),
+                timing=ToolTimingReceipt(
+                    started_at=result.execution.get("started_at"),
+                    completed_at=result.execution.get("completed_at"),
+                    duration_seconds=result.execution.get("duration_seconds"),
+                ),
+                artifacts=model_references,
+                output_preview=preview,
+                next_actions=(
+                    [] if complete else ["tool_output.search", "tool_output.read"]
+                ),
+                truncated=truncated,
+                incomplete=incomplete,
+                parser=ToolParserReceipt(
+                    state=parser_state,
+                    artifact_id=parsed_artifact_id,
+                    contract=spec.parser_contract,
+                ),
+                warnings=warnings,
+            )
+
+        receipt = build_receipt(
+            await asyncio.to_thread(
+                command_output_preview,
+                self.artifact_store,
+                stream_artifacts,
+                lambda candidate: build_receipt(candidate).as_model_result(),
+            )
         )
         receipt_payload = json.dumps(
             receipt.as_model_result(),
@@ -1583,15 +1636,15 @@ def register_artifact_retrieval_tools(
         )
 
     async def workspace_search(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.search, **invocation.arguments)
 
     async def workspace_find(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.find, **invocation.arguments)
 
     async def workspace_read(invocation: ToolInvocation) -> dict[str, Any]:
-        service = WorkspaceOutputService(invocation.workspace)
+        service = WorkspaceOutputService(retrieval_workspace(invocation))
         return await asyncio.to_thread(service.read, **invocation.arguments)
 
     definitions: list[
@@ -1653,7 +1706,7 @@ def register_artifact_retrieval_tools(
         ),
         (
             "tool_output.read",
-            "Read at most 200 lines and 8 KiB from one authorized tool artifact. Follow continuation_cursor to resume inside a long line.",
+            f"Read at most {MAX_TOOL_OUTPUT_READ_LINES} lines and 8 KiB from one authorized tool artifact. Follow continuation_cursor to resume inside a long line.",
             {
                 "type": "object",
                 "properties": {
@@ -1665,8 +1718,8 @@ def register_artifact_retrieval_tools(
                     "line_count": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": 200,
-                        "default": 100,
+                        "maximum": MAX_TOOL_OUTPUT_READ_LINES,
+                        "default": DEFAULT_TOOL_OUTPUT_READ_LINES,
                     },
                     "continuation_cursor": {"type": "string", "maxLength": 4096},
                 },

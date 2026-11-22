@@ -38,6 +38,8 @@ interface CodeMirrorSurfaceProps {
   languageServer?: { apiBaseUrl: string; engagementId: string; token?: string; onState(state: LanguageServerState): void };
   breakpointLines?: number[];
   onToggleBreakpoint?(line: number): void;
+  /** Lines an agent added or changed, drawn as bars beside the line numbers. */
+  changeMarks?: AgentChangeMark[];
   bracketPairColors?: boolean;
   gotoLineRequest?: number;
   indentGuides?: boolean;
@@ -55,6 +57,35 @@ class BreakpointMarker extends GutterMarker {
 }
 
 const breakpointMarker = new BreakpointMarker();
+
+export interface AgentChangeMark { start: number; lines: number; kind: "added" | "changed"; title?: string }
+
+const NO_CHANGE_MARKS: AgentChangeMark[] = [];
+
+class AgentChangeMarker extends GutterMarker {
+  constructor(readonly kind: AgentChangeMark["kind"], readonly title: string | undefined) { super(); }
+  eq(other: GutterMarker): boolean { return other instanceof AgentChangeMarker && other.kind === this.kind && other.title === this.title; }
+  toDOM(): HTMLElement {
+    const marker = document.createElement("span");
+    marker.className = "cm-agent-change";
+    marker.dataset.kind = this.kind;
+    if (this.title) marker.title = this.title;
+    return marker;
+  }
+}
+
+function agentChangeGutter(marks: AgentChangeMark[]): Extension {
+  if (!marks.length) return [];
+  const byLine = new Map<number, AgentChangeMarker>();
+  for (const mark of marks) {
+    const marker = new AgentChangeMarker(mark.kind, mark.title);
+    for (let line = mark.start; line < mark.start + Math.max(mark.lines, 1); line += 1) if (!byLine.has(line)) byLine.set(line, marker);
+  }
+  return gutter({
+    class: "cm-agent-change-gutter",
+    lineMarker: (view, line) => byLine.get(view.state.doc.lineAt(line.from).number) ?? null,
+  });
+}
 
 function breakpointGutter(lines: number[], onToggle?: (line: number) => void): Extension {
   const selected = new Set(lines);
@@ -112,7 +143,7 @@ async function languageForPath(path: string): Promise<Extension> {
   return parser ? StreamLanguage.define(parser) : [];
 }
 
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, definitionRequest = 0, findRequest = 0, gotoLineRequest = 0, problemsRequest = 0, formatRequest = 0, referencesRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint, bracketPairColors: colorBrackets = true, indentGuides: showIndentGuides = true, minimap: showMinimap = true, stickyScroll: showStickyScroll = true }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, definitionRequest = 0, findRequest = 0, gotoLineRequest = 0, problemsRequest = 0, formatRequest = 0, referencesRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint, changeMarks = NO_CHANGE_MARKS, bracketPairColors: colorBrackets = true, indentGuides: showIndentGuides = true, minimap: showMinimap = true, stickyScroll: showStickyScroll = true }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -120,6 +151,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   const keymapRef = useRef(new Compartment());
   const settingsRef = useRef(new Compartment());
   const breakpointRef = useRef(new Compartment());
+  const changeMarksRef = useRef(new Compartment());
   const renderRef = useRef(new Compartment());
   const filePathRef = useRef(filePath);
   filePathRef.current = filePath;
@@ -166,6 +198,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
           // positioned on the wrong line by macOS WKWebView after Enter key updates.
           // The native contenteditable caret stays coupled to the browser selection.
           lineNumbers(),
+          changeMarksRef.current.of(agentChangeGutter(changeMarks)),
           breakpointRef.current.of(breakpointGutter(breakpointLines, onToggleBreakpoint)),
           foldGutter(),
           highlightActiveLineGutter(),
@@ -289,6 +322,10 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   useEffect(() => {
     viewRef.current?.dispatch({ effects: breakpointRef.current.reconfigure(breakpointGutter(breakpointLines, onToggleBreakpoint)) });
   }, [breakpointLines, onToggleBreakpoint]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: changeMarksRef.current.reconfigure(agentChangeGutter(changeMarks)) });
+  }, [changeMarks]);
 
   useEffect(() => { if (active) viewRef.current?.requestMeasure(); }, [active]);
 

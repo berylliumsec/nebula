@@ -27,8 +27,30 @@ CHECKPOINT_FORMAT = "nebula.project-checkpoint/v1"
 CHECKPOINT_BATCH_ROWS = 10_000
 _PREFIX = "handoff-inventory:"
 
+
+def _inventory_id(lease, key):
+    """Name one inventory entry of one project owner.
+
+    Resource IDs are global primary keys, and an earlier owner's rows stay in
+    the table after it closes them (or after recovery closes them for it).
+    Scoping the ID to this incarnation lets a later owner record the same
+    blocker instead of colliding with, or adopting, that history.
+    """
+    material = "\0".join(
+        (lease.project_id, lease.runtime_id, str(lease.fencing_token), key)
+    )
+    return _PREFIX + hashlib.sha256(material.encode()).hexdigest()
+
+
 # These handles have no implemented restoration adapter. Their presence is a
-# concrete blocker, including idle vendor connections and background descendants.
+# concrete blocker, including busy vendor connections and background
+# descendants. The exceptions are released at the boundary before this
+# inventory: an idle Host automation session is closed
+# (release_idle_sessions_for_handoff) and an idle vendor connection is
+# detached, its saved vendor thread resumed by the next owner's next turn
+# (release_idle_connections_for_handoff). A participant's
+# ``restorable_handles()`` names entries a later owner rebuilds from SQL
+# (a scheduled Mission still sleeping), which never pin.
 _HANDLES = {
     "automation_runtime": ("_sessions", "_processes"),
     "notebooks": ("workers", "_drains"),
@@ -51,8 +73,15 @@ _HANDLES = {
 }
 _LIVE_SQL = {
     "automation_sessions": {"starting", "ready", "running", "active"},
-    "command_executions": {"running", "interrupted"},
-    "harness_sessions": {"starting", "idle", "running", "waiting_approval"},
+    # An interrupted command has no process in this runtime: Core already
+    # gave up on it, and a late results callback reaches whichever runtime
+    # owns the project. It must not pin the project to this runtime forever.
+    "command_executions": {"running"},
+    # A starting or idle session row is durable state: a new owner opens or
+    # resumes its vendor session on the next turn. A resident connection, a
+    # connecting or queued non-Mission turn, or a goal dispatch still pins
+    # through the harness service's handles and handoff_blockers().
+    "harness_sessions": {"running", "waiting_approval"},
     "harness_turns": {"running"},
     "native_hook_executions": {"running"},
     "tool_calls": {"running"},
@@ -268,6 +297,8 @@ class ProjectHandoffAgent:
                 raise CoordinationConflict(
                     "The handoff participant is unavailable: " + name
                 )
+            restorable_handles = getattr(participant, "restorable_handles", None)
+            restorable = restorable_handles() if restorable_handles else {}
             for attribute in attributes:
                 values = getattr(participant, attribute, None)
                 if not isinstance(values, dict):
@@ -277,11 +308,13 @@ class ProjectHandoffAgent:
                         + "."
                         + attribute
                     )
+                skip = restorable.get(attribute, ())
                 active = sum(
                     not value.done()
                     if isinstance(value, (asyncio.Task, asyncio.Future))
                     else bool(value)
-                    for value in values.values()
+                    for key, value in values.items()
+                    if key not in skip
                 )
                 if active:
                     found[name + "." + attribute] = (
@@ -316,10 +349,7 @@ class ProjectHandoffAgent:
             await self.coordinator.resource(
                 self.lease,
                 ResourceSnapshot(
-                    id=_PREFIX
-                    + hashlib.sha256(
-                        (self.lease.project_id + "\0contract").encode()
-                    ).hexdigest(),
+                    id=_inventory_id(self.lease, "contract"),
                     project_id=self.lease.project_id,
                     runtime_id=self.lease.runtime_id,
                     fencing_token=self.lease.fencing_token,
@@ -347,7 +377,25 @@ class ProjectHandoffAgent:
             await self.chat.park_queued_for_handoff()
         else:
             await self.chat.restore_locally_parked_turns()
+        # An idle Host session holds nothing a later owner needs: close it so
+        # it neither pins the project nor waits out the eviction grace.
+        release = getattr(
+            getattr(self.app.state, "automation_runtime", None),
+            "release_idle_sessions_for_handoff",
+            None,
+        )
+        if release is not None:
+            await release(self.lease.project_id)
+        # An idle vendor connection is detached the same way: the session row
+        # keeps its saved vendor thread, which the next owner's turn resumes.
+        harness = getattr(self.app.state, "harness_runtime_service", None)
+        detach = getattr(harness, "release_idle_connections_for_handoff", None)
+        if detach is not None:
+            await detach(self.lease.project_id)
         found = self.handles()
+        harness_blockers = getattr(harness, "handoff_blockers", None)
+        if harness_blockers is not None:
+            found.update(await harness_blockers(self.lease.project_id))
         callback_blockers = getattr(self.chat, "handoff_callback_blockers", None)
         if callback_blockers is not None:
             found.update(await callback_blockers())
@@ -468,13 +516,7 @@ class ProjectHandoffAgent:
             now = await self.coordinator.coordination._clock_ms(session)
             current = {}
             for key, detail in found.items():
-                identity = (
-                    _PREFIX
-                    + hashlib.sha256(
-                        (self.lease.project_id + "\0" + key).encode()
-                    ).hexdigest()
-                )
-                current[identity] = detail
+                current[_inventory_id(self.lease, key)] = detail
             for row in await session.scalars(
                 select(RuntimeResourceRow).where(
                     RuntimeResourceRow.project_id == self.lease.project_id,

@@ -21,6 +21,7 @@ from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     DEFAULT_GOAL_RESUME_INSTRUCTION,
+    GOAL_START_INSTRUCTION,
     ChatBackend,
     Approval,
     ApprovalStatus,
@@ -50,6 +51,12 @@ from .chat_snapshot_parts import (
     split_skill_snapshots,
     stage_snapshot_parts,
 )
+from .project_hold_gate import (
+    HOLD_MARKER,
+    ProjectHoldConflict,
+    active_hold,
+    held_detail,
+)
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -59,6 +66,16 @@ from .storage import (
     StoreTransaction,
 )
 from .skill_catalog import SkillSelection, SkillSnapshot
+
+# A turn in one of these states produces nothing more and keeps no claim.
+_ENDED_TURN_STATUSES = frozenset(
+    {
+        ChatTurnStatus.COMPLETE,
+        ChatTurnStatus.FAILED,
+        ChatTurnStatus.CANCELLED,
+        ChatTurnStatus.INTERRUPTED,
+    }
+)
 
 
 class GoalCreate(BaseModel):
@@ -92,6 +109,17 @@ class GoalWrite(BaseModel):
 
 class GoalUpdate(GoalCreate):
     expected_revision: int = Field(ge=1)
+    # The plan entry now being worked on (0-based). Sent as null it clears the
+    # marker; left out it is kept while it still names an entry of the plan.
+    active_plan_index: int | None = Field(default=None, ge=0, le=199)
+
+    @model_validator(mode="after")
+    def active_plan_index_names_a_step(self) -> "GoalUpdate":
+        if self.active_plan_index is not None and self.active_plan_index >= len(
+            self.plan
+        ):
+            raise ValueError("active_plan_index must name an entry of the plan")
+        return self
 
 
 class GoalSkillWrite(BaseModel):
@@ -136,6 +164,35 @@ class GoalConversationCreate(GoalCreate):
         default=None, min_length=1, max_length=200
     )
     butler_initiated: bool = False
+    # A name for the chat; without one the objective names it.
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    # A draft Butler proposed for the operator to start, edit or cancel.
+    proposed_by_butler: bool = False
+    butler_session_id: str | None = Field(default=None, min_length=1, max_length=200)
+    reports_to_session_id: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+
+    def session_title(self) -> str:
+        return (
+            " ".join((self.title or "").split())[:300]
+            or " ".join(self.objective.split())[:300]
+            or "Goal conversation"
+        )
+
+    def proposal_metadata(self) -> dict[str, object]:
+        """Session metadata naming who proposed the draft and who it reports to."""
+
+        metadata: dict[str, object] = {}
+        if self.title and self.title.strip():
+            metadata["initial_title_state"] = "operator"
+        if self.proposed_by_butler:
+            metadata["proposed_by"] = "butler"
+            if self.butler_session_id:
+                metadata["butler_session_id"] = self.butler_session_id
+        if self.reports_to_session_id:
+            metadata["reports_to_session_id"] = self.reports_to_session_id
+        return metadata
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
@@ -331,6 +388,12 @@ class ChatGoalService:
         """Persist an empty conversation and its goal draft as one unit."""
 
         (await self.store.get(Engagement, body.engagement_id))
+        for linked_id in (body.butler_session_id, body.reports_to_session_id):
+            if linked_id is None:
+                continue
+            linked = await self.store.get(ChatSession, linked_id)
+            if linked.engagement_id != body.engagement_id:
+                raise ConflictError("a linked chat belongs to another project")
         recovery_metadata: dict[str, str] = {}
         if body.butler_recovery_case_id:
             case = await self.store.get(
@@ -398,7 +461,7 @@ class ChatGoalService:
                 session = ChatSession(
                     id=str(uuid4()),
                     engagement_id=body.engagement_id,
-                    title=" ".join(body.objective.split())[:300] or "Goal conversation",
+                    title=body.session_title(),
                     backend=ChatBackend.HARNESS,
                     harness_profile_id=profile.id,
                     harness_session_id=harness_session.id,
@@ -429,6 +492,7 @@ class ChatGoalService:
                             if body.butler_initiated or body.butler_recovery_case_id
                             else {}
                         ),
+                        **body.proposal_metadata(),
                     },
                 )
                 goal = ChatGoal(
@@ -490,7 +554,7 @@ class ChatGoalService:
                     f"MCP server {mcp_profile.name!r} is disabled and cannot be selected"
                 )
         session_id = str(uuid4())
-        title = " ".join(body.objective.split())[:300] or "Goal conversation"
+        title = body.session_title()
         session = ChatSession(
             id=session_id,
             engagement_id=body.engagement_id,
@@ -533,6 +597,7 @@ class ChatGoalService:
                 "last_sequence": 0,
                 "initial_title_state": "goal",
                 **({"butler_initiated": True} if body.butler_initiated else {}),
+                **body.proposal_metadata(),
             },
         )
         goal = ChatGoal(
@@ -799,6 +864,18 @@ class ChatGoalService:
             )
         return GoalHandoffCreated(session=target, goal=goal, source_goal=updated)
 
+    async def _claim_held_by_live_turn(self, goal: ChatGoal) -> bool:
+        """Whether a turn that has not ended holds this goal's claim."""
+
+        if goal.execution_claim_id is None:
+            return False
+        holders = await self.store.find_entities(
+            ChatTurn,
+            {"execution_claim_id": goal.execution_claim_id},
+            session_id=goal.session_id,
+        )
+        return any(turn.status not in _ENDED_TURN_STATUSES for turn in holders)
+
     async def write(
         self,
         session_id: str,
@@ -806,12 +883,18 @@ class ChatGoalService:
         *,
         allow_pending_recovery: bool = False,
         retain_execution_claim: bool = False,
+        hold_id: str | None = None,
     ) -> ChatGoal:
         """Apply one goal action.
 
         ``retain_execution_claim`` is for a pause while project recovery is
         held: the claim names an interrupted owner's step whose effect is
         unknown, so pausing must not erase it. Recovery reconciles it.
+
+        ``hold_id`` is passed only by a project hold: its pause marks the goal
+        with the hold, and only that hold's release resumes it. While a
+        project is held, or a goal carries another hold's mark, every start
+        and resume is refused, whoever asks (an operator, Butler, recovery).
         """
         if retain_execution_claim and body.action != "pause":
             raise ConflictError("only a pause can run while project recovery is held")
@@ -820,6 +903,16 @@ class ChatGoalService:
             raise ConflictError(
                 "goal changed on another device; reload before retrying"
             )
+        hold_mark = goal.metadata.get(HOLD_MARKER)
+        if body.action in {"start", "resume"}:
+            if hold_mark is not None and hold_mark != hold_id:
+                raise ProjectHoldConflict(
+                    "A project hold paused this goal; it resumes when that hold "
+                    "is released"
+                )
+            hold = await active_hold(self.store, goal.engagement_id, goal.session_id)
+            if hold is not None:
+                raise ProjectHoldConflict(held_detail(hold))
         now = utc_now()
         changes: dict = {}
         propagate: ChatGoalStatus | None = None
@@ -853,10 +946,35 @@ class ChatGoalService:
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
                 "blocked_reason": body.reason,
-                "execution_owner_id": None,
-                "execution_claim_id": None,
-                "execution_claimed_at": None,
             }
+            # Pause stops the goal continuing; it does not stop the turn in
+            # flight (Stop does). While a live turn holds the goal's claim,
+            # the claim stays with it: the turn checks it before every step
+            # and releases it when it ends, and a goal still paused then
+            # starts no next step. Clearing it failed that turn as stale
+            # output, and left a quick resume paused by the failure. A claim
+            # no live turn holds (a turn settling and pausing its own goal)
+            # is released as before.
+            if not await self._claim_held_by_live_turn(goal):
+                changes.update(
+                    {
+                        "execution_owner_id": None,
+                        "execution_claim_id": None,
+                        "execution_claimed_at": None,
+                    }
+                )
+            if hold_id is not None:
+                changes["metadata"] = {**goal.metadata, HOLD_MARKER: hold_id}
+                # A hold lets the goal's running turn finish during its grace
+                # period, so the turn keeps its claim; clearing it would fail
+                # the turn at its next ownership check. The turn's settlement
+                # releases the claim, and a paused goal does not continue.
+                for field in (
+                    "execution_owner_id",
+                    "execution_claim_id",
+                    "execution_claimed_at",
+                ):
+                    changes.pop(field, None)
             if retain_execution_claim:
                 changes["metadata"] = marked
                 for field in (
@@ -864,7 +982,7 @@ class ChatGoalService:
                     "execution_claim_id",
                     "execution_claimed_at",
                 ):
-                    del changes[field]
+                    changes.pop(field, None)
                 if goal.execution_claim_id is not None:
                     changes["blocked_reason"] = body.reason or (
                         "Paused while project recovery is held. Its interrupted "
@@ -939,10 +1057,11 @@ class ChatGoalService:
                     raise ConflictError(
                         "the operator paused this goal during project recovery"
                     )
+            if OPERATOR_RECOVERY_PAUSE in goal.metadata or hold_mark is not None:
                 changes["metadata"] = {
                     key: value
                     for key, value in goal.metadata.items()
-                    if key != OPERATOR_RECOVERY_PAUSE
+                    if key not in {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER}
                 }
         elif body.action == "cancel":
             if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
@@ -1032,6 +1151,7 @@ class ChatGoalService:
         reason: str | None = None,
         allow_pending_recovery: bool = False,
         check: Callable[[ChatGoal], None] | None = None,
+        hold_id: str | None = None,
     ) -> ChatGoal:
         """Apply a Core-initiated goal action on the goal's newest revision.
 
@@ -1055,6 +1175,7 @@ class ChatGoalService:
                         expected_revision=goal.revision, action=action, reason=reason
                     ),
                     allow_pending_recovery=allow_pending_recovery,
+                    hold_id=hold_id,
                 )
             except ConflictError:
                 # diagnostic-expected: only a moved revision is retried; every
@@ -1106,6 +1227,14 @@ class ChatGoalService:
                     "objective": body.objective,
                     "completion_criteria": body.completion_criteria,
                     "plan": body.plan,
+                    "active_plan_index": (
+                        body.active_plan_index
+                        if "active_plan_index" in body.model_fields_set
+                        else goal.active_plan_index
+                        if goal.active_plan_index is not None
+                        and goal.active_plan_index < len(body.plan)
+                        else None
+                    ),
                     **(
                         {"resume_instruction": body.resume_instruction}
                         if body.resume_instruction is not None
@@ -1430,9 +1559,7 @@ def goals_router(
         updated = await service.write(session_id, body)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
-                "Begin work on the active conversation goal now. Review the goal "
-                "objective and completion criteria provided by Core, then make "
-                "concrete progress without waiting for another operator message."
+                GOAL_START_INSTRUCTION
                 if body.action == "start"
                 else updated.resume_instruction
             )

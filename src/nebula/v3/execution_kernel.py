@@ -254,6 +254,8 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database, DatabaseBusyError
+from .work_priority import forget as forget_work_priority
+from .work_priority import set_project_priority as set_work_priority
 from .work import (
     WorkAgentActivity,
     WorkCheckIn,
@@ -262,6 +264,7 @@ from .work import (
     WorkImportResult,
     WorkPatch,
     WorkSettingPatch,
+    WorkStagesPatch,
     WorkProjectBatchResult,
     WorkProjectBatchUpdate,
     WorkService,
@@ -338,6 +341,7 @@ from .integration_settings import (
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
+    HarnessTurnStatus,
     ENTITY_MODEL_BY_KIND,
     AgentAttempt,
     AgentRun,
@@ -754,6 +758,7 @@ CUSTOM_RESOURCES = {
     "butler_incidents",
     "butler_decisions",
     "butler_authority_policies",
+    "project_holds",
     "butler_actions",
     "butler_issue_destinations",
     "butler_issue_scans",
@@ -1007,6 +1012,8 @@ class ChatSessionUpdateRequest(NebulaModel):
     flag_color: Literal["red", "orange", "yellow", "green", "blue", "purple"] | None = (
         None
     )
+    # High-priority work is taken first wherever it waits for capacity.
+    priority: Literal["high", "normal"] | None = None
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     excluded_mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     mcp_context_mode: Literal["on_demand", "always_loaded"] | None = None
@@ -1028,6 +1035,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.archived is None
             and self.pinned is None
             and "flag_color" not in self.model_fields_set
+            and self.priority is None
             and self.mcp_server_ids is None
             and self.excluded_mcp_server_ids is None
             and self.mcp_context_mode is None
@@ -1042,7 +1050,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.subagent_model is None
         ):
             raise ValueError(
-                "Provide a title, archived state, pin, flag, or assistant settings"
+                "Provide a title, archived state, pin, flag, priority, or assistant settings"
             )
         for name, values in (
             ("MCP server", self.mcp_server_ids),
@@ -1052,6 +1060,10 @@ class ChatSessionUpdateRequest(NebulaModel):
             if values is not None and len(values) != len(set(values)):
                 raise ValueError(f"{name} selection contains duplicates")
         return self
+
+
+class ProjectPriorityWrite(NebulaModel):
+    priority: Literal["high", "normal"]
 
 
 class ChatAssistantConfigWrite(NebulaModel):
@@ -1281,7 +1293,9 @@ class NotebookFileIndexRequest(NebulaModel):
 class AutomationPolicyUpdateRequest(NebulaModel):
     execution_mode: Literal["docker", "host"] | None = None
     host_access_acknowledged: bool = False
-    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    # Omitted keeps the project's current policy; a default here would
+    # silently reset it whenever a client changed another field.
+    approval_policy: AutomationApprovalPolicy | None = None
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
     vpn_profile_id: str | None = Field(default=None, max_length=200)
@@ -2531,6 +2545,10 @@ def create_execution_kernel(
                             exc,
                             stage="runtime-switch",
                         )
+                    holds = getattr(app.state, "project_holds", None)
+                    if holds is not None:
+                        # Its own failures are recorded per project.
+                        await holds.tick_all()
                     # Its scans run asynchronously and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
@@ -3283,6 +3301,10 @@ def create_execution_kernel(
     runtime_usage.harness_account_reader = read_harness_account
 
     async def resolve_memory_cleanup_runner(job):
+        from .host_memory_client import HOST_RUNNER_PROFILE_ID, HostMemoryRunner
+
+        if job.snapshot.profile_id == HOST_RUNNER_PROFILE_ID:
+            return HostMemoryRunner.from_environment()
         if automation_runtime is None or job.snapshot.profile_id is None:
             from .memory_policy import MemoryEnforcementUnavailable
 
@@ -3291,6 +3313,8 @@ def create_execution_kernel(
             )
         profile = await store.get(RunnerProfile, job.snapshot.profile_id)
         return automation_runtime._runner(profile)
+
+    from .host_memory_client import HostMemoryRunner
 
     memory_reconciler = MemoryReconciler(memory_budgets, resolve_memory_cleanup_runner)
     app.state.memory_reconciler = memory_reconciler
@@ -3312,6 +3336,7 @@ def create_execution_kernel(
         if automation_runtime is not None
         else None,
         apply_running=memory_compute.apply_running,
+        host_runner=HostMemoryRunner.from_environment(),
     )
 
     # Reserve connection capacity for interactive reads using the discovered
@@ -3810,7 +3835,13 @@ def create_execution_kernel(
     @app.exception_handler(ChatHistoryConflict)
     @app.exception_handler(ChatPrivacyError)
     async def chat_conflict_handler(request: Request, exc: ChatError) -> JSONResponse:
-        return diagnostic_error_response(request, exc, status_code=409, detail=str(exc))
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=409,
+            detail=str(exc),
+            code=getattr(exc, "code", None),
+        )
 
     @app.exception_handler(ChatConfigurationError)
     async def chat_configuration_handler(
@@ -7616,6 +7647,29 @@ def create_execution_kernel(
             else None
         )
         harness_turn = await approval_harness_turn(store, approval)
+        if harness_turn is not None and harness_turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            # The harness turn that asked has ended: no decision can reach it.
+            # Recording one would leave a delivery nobody can confirm, which
+            # pins the project at every handoff. Retire the card instead.
+            await store.update(
+                Approval,
+                approval.id,
+                {
+                    "status": ApprovalStatus.EXPIRED,
+                    "decided_by": "system",
+                    "decided_at": utc_now(),
+                    "decision_note": "The harness turn that asked for this "
+                    "approval has ended; no decision can reach it.",
+                },
+                expected_revision=approval.revision,
+            )
+            raise HTTPException(
+                status_code=410,
+                detail="The harness request has ended; start a new response.",
+            )
         if harness_turn is not None and request.edited_arguments is not None:
             raise HTTPException(
                 status_code=422,
@@ -8263,6 +8317,28 @@ def create_execution_kernel(
     ) -> Engagement:
         return await work_service.set_enabled(
             engagement_id, body.enabled, expected_revision=body.expected_revision
+        )
+
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/priority",
+        response_model=Engagement,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_project_priority(
+        engagement_id: str, body: ProjectPriorityWrite
+    ) -> Engagement:
+        return await set_work_priority(store, engagement_id, body.priority)
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/stages",
+        response_model=Engagement,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_work_stages(engagement_id: str, body: WorkStagesPatch) -> Engagement:
+        return await work_service.set_stages(
+            engagement_id, body.stages, expected_revision=body.expected_revision
         )
 
     @app.post(
@@ -9346,7 +9422,7 @@ def create_execution_kernel(
         try:
             return await automation_runtime.update_project_policy(
                 engagement_id,
-                approval_policy=request.approval_policy,
+                approval_policy=request.approval_policy or current.approval_policy,
                 execution_mode=request.execution_mode,
                 host_access_acknowledged=request.host_access_acknowledged,
                 network_enabled=request.network_enabled,
@@ -11956,6 +12032,26 @@ def create_execution_kernel(
 
     provider_chat.goal_dispatcher = dispatch_conversation_goal
 
+    from .project_holds import ProjectHoldService, project_holds_router
+
+    async def stop_harness_turn_for_hold(harness_turn_id: str, reason: str) -> None:
+        await harness_runtime.cancel_turn(harness_turn_id, reason=reason)
+
+    project_holds = ProjectHoldService(
+        store,
+        stop_provider_turn=provider_chat.stop_provider_turn,
+        stop_harness_turn=stop_harness_turn_for_hold,
+        dispatch_goal=dispatch_conversation_goal,
+        wake_subagents=provider_chat.subagents.wake_after_hold,
+        wake_queues=chat_queue.wake_after_hold,
+    )
+    app.state.project_holds = project_holds
+    app.include_router(
+        project_holds_router(project_holds),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
     app.include_router(
         goals_router(
             store,
@@ -12032,6 +12128,22 @@ def create_execution_kernel(
 
     app.include_router(
         linked_project_chats_router(store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
+    from .butler_board import butler_board_router
+
+    app.include_router(
+        butler_board_router(store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
+    from .file_attribution import file_attribution_router
+
+    app.include_router(
+        file_attribution_router(store, artifact_store),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
@@ -12715,6 +12827,12 @@ def create_execution_kernel(
                 metadata.pop("flag_color", None)
             else:
                 metadata["flag_color"] = request.flag_color
+        if request.priority is not None:
+            if request.priority == "high":
+                metadata["priority"] = "high"
+            else:
+                metadata.pop("priority", None)
+            forget_work_priority()
         if request.mcp_server_ids is not None:
             for profile_id in request.mcp_server_ids:
                 profile = await store.get(McpServerProfile, profile_id)

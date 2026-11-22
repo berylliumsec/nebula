@@ -1,7 +1,7 @@
 import type { ApiClient } from "../api/client";
 import type { ChatSessionSummary } from "../api/types";
 
-export type ChatBulkAction = "archive" | "restore" | "pin" | "unpin" | "clear-flag" | "delete"
+export type ChatBulkAction = "archive" | "restore" | "pin" | "unpin" | "clear-flag" | "delete" | "priority:high" | "priority:normal"
   | `flag:${NonNullable<ChatSessionSummary["flagColor"]>}`;
 
 export function conversationMatchesSearch(session: ChatSessionSummary, search: string): boolean {
@@ -21,6 +21,8 @@ function hasDesiredState(session: ChatSessionSummary | undefined, action: ChatBu
   if (action === "pin") return Boolean(session.pinned);
   if (action === "unpin") return !session.pinned;
   if (action === "clear-flag") return !session.flagColor;
+  if (action === "priority:high") return session.priority === "high";
+  if (action === "priority:normal") return session.priority !== "high";
   return session.flagColor === action.slice(5);
 }
 
@@ -57,6 +59,8 @@ export async function applyChatBulkAction(
         } else {
           await api.setChatSessionPriority(id, action === "pin" ? { pinned: true }
             : action === "unpin" ? { pinned: false }
+              : action === "priority:high" ? { priority: "high" }
+                : action === "priority:normal" ? { priority: "normal" }
               : { flagColor: action === "clear-flag" ? null : action.slice(5) as ChatSessionSummary["flagColor"] }, session.revision);
         }
       } catch (error) {

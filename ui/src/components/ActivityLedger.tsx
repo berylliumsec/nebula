@@ -65,6 +65,7 @@ export function ActivityLedger({
   historyPending = false,
   progress,
   latestUpdate,
+  liveStatus,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
@@ -75,6 +76,8 @@ export function ActivityLedger({
   historyPending?: boolean;
   /** Most recent public harness commentary; the complete event remains in activity. */
   latestUpdate?: string;
+  /** Live per-tool state read from Core (for example, a Host command's queue place); shown while the run is active. */
+  liveStatus?: ReactNode;
   /** The provider's visible prose while it calls tools, retained as work history. */
   progress?: {
     headline?: string;
@@ -95,7 +98,7 @@ export function ActivityLedger({
     }
   }, [expanded, model.entries.length]);
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
-  const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
+  const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || entry.pinned || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
   const commentaryCount = model.entries.filter((entry) => Boolean(entry.sourceItem?.streams.commentary?.trim())).length;
   const compactReceipt = [
@@ -136,6 +139,7 @@ export function ActivityLedger({
       </p>)}
 
       {compact && active && (progress?.headline || model.currentAction) && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{progress?.headline ?? model.currentAction}</span></p>}
+      {active && liveStatus && <div className="activity-ledger-live-status">{liveStatus}</div>}
       {compact && active && (progress?.latest || latestUpdate) && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span><ReactMarkdown
         remarkPlugins={[remarkGfm]}
         allowedElements={["p", "strong", "em", "del", "code", "br"]}

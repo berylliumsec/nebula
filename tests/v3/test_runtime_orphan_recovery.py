@@ -1052,7 +1052,12 @@ async def test_dead_owner_closes_its_handoff_inventory_handles(orphan):
         ).state == "active"
 
 
-async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):
+async def test_unknown_tool_effect_is_recorded_and_resumes_like_a_restart(orphan):
+    """A stopped worker's unknown effect is carried forward, never replayed.
+
+    The operator prefers a project that keeps working (possibly repeating a
+    step) over an interrupted turn waiting for review after every deploy.
+    """
     value = orphan
     call = await value.store.create(
         ToolCall(
@@ -1071,9 +1076,27 @@ async def test_unknown_tool_effect_remains_recorded_and_requires_review(orphan):
     await value.expire()
     await value.reconcile()
     turn = await value.store.get(ChatTurn, value.turn.id)
-    assert turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == [call.id]
-    assert turn.request_snapshot["recovery"]["cause"] == "runtime_loss"
+    recovery = turn.request_snapshot["recovery"]
+    assert recovery["unknown_tool_call_ids"] == [call.id]
+    assert recovery["cause"] == "core_restart"
+    assert "resume automatically without replaying the effect" in turn.error
+    # Unknown until restart reconciliation carries it forward as outcome-unknown;
+    # then Core resumes the turn by itself.
     assert not recoverable_after_core_restart(turn)
+    reconciled = turn.model_copy(
+        update={
+            "request_snapshot": {
+                **turn.request_snapshot,
+                "recovery": {
+                    **recovery,
+                    "unknown_tool_call_ids": [],
+                    "auto_continued_unknown_tool_call_ids": [call.id],
+                    "required": False,
+                },
+            }
+        }
+    )
+    assert recoverable_after_core_restart(reconciled)
     saved = await value.store.get(ToolCall, call.id)
     assert saved.status == ToolCallStatus.RUNNING and saved.revision == call.revision
 

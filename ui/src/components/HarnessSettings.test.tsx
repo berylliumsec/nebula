@@ -54,6 +54,35 @@ describe("harness settings persistence boundaries", () => {
   }
 });
 
+describe("Claude harness profiles", () => {
+  beforeEach(() => {vi.resetAllMocks(); api.listMcpServers.mockResolvedValue([]);});
+
+  it("creates a managed Claude profile without an account folder or CLI override", async () => {
+    const claude: HarnessProfile = {...profile, id: "claude", name: "Claude fixture", kind: "claude_agent_sdk", executable: undefined};
+    let saved = false;
+    api.createHarness.mockImplementation(async () => {saved = true; return claude;});
+    api.listHarnesses.mockImplementation(async () => saved ? [claude] : []);
+    api.checkHarness.mockResolvedValue({healthy: true});
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", {name: "Add Claude"}));
+    const dialog = screen.getByRole("dialog", {name: "Add Claude"});
+    expect(within(dialog).queryByRole("textbox", {name: "Account home folder"})).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("option", {name: "Unrestricted host access"})).not.toBeInTheDocument();
+    expect(within(dialog).getByText("/login")).toBeVisible();
+    await user.type(within(dialog).getByRole("textbox", {name: "Name"}), claude.name);
+    await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "claude_agent_sdk", connection_mode: "spawn", transport: "stdio", executable: null,
+      home_directory: null, auth_mode: "existing_session", secret_ref: null, permission_mode: "managed",
+      native_capabilities: expect.objectContaining({browser: false, computer_use: false, image_generation: false, shell: false}),
+    }));
+    expect(await screen.findByText("Claude Agent SDK")).toBeVisible();
+    expect(screen.getByRole("heading", {name: claude.name})).toBeVisible();
+  });
+});
+
 describe("shared harness catalog updates", () => {
   beforeEach(() => {
     vi.resetAllMocks();

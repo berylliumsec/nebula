@@ -39,6 +39,12 @@ def _offline_api_read(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
     monkeypatch.setattr(deployer, "stop_supervisor_service", lambda _identity: deployer.service("stop"))
+    # These hosts have no socket unit and their fake Cores predate the
+    # running-operation listing; tests/test_simulation_host_restart.py covers both.
+    monkeypatch.setattr(deployer, "socket_activation", lambda: None)
+    monkeypatch.setattr(
+        deployer, "wait_no_running_operations", lambda: {"supported": False}
+    )
 
 
 class _ApiCore:
@@ -209,7 +215,8 @@ def test_degraded_worker_post_readback_requires_degraded_baseline_and_healthy_ap
     assert readback["deployment_health"] == "degraded"
     assert readback["degraded_baseline_accepted"] is True
 
-    with pytest.raises(RuntimeError, match="ready supervisor API status"):
+    # Without an accepted degraded baseline the wait is bounded and names why.
+    with pytest.raises(RuntimeError, match="deployment status is degraded"):
         deployer.wait_supervisor_host_ready(
             commit,
             expected_api_version=api_version,
@@ -452,11 +459,17 @@ def test_host_process_identity_accepts_verified_onefile_child(
     executable.write_bytes(b"immutable runtime executable")
     deployer.atomic_json(
         release / "simulation-acceptance.json",
-        {"core_sha256": deployer.sha256(executable)},
+        {
+            "commit": version,
+            "status": "accepted_candidate",
+            "core_sha256": deployer.sha256(executable),
+        },
     )
     monkeypatch.setattr(
         deployer, "runtime_release", lambda _version: (release, "d" * 64)
     )
+    # release_core_sha256 (#1167) reads the receipt under RELEASES itself.
+    monkeypatch.setattr(deployer, "RELEASES", tmp_path)
 
     def snapshot(
         pid: int,
@@ -499,11 +512,11 @@ def test_host_process_identity_accepts_verified_onefile_child(
         deployer.require_runtime_process_in_service(service, runtime, version)
     runtime["process_birth"] = "core-birth"
     processes[434411]["executable"] = release / "different-core"
-    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+    with pytest.raises(RuntimeError, match="does not match the expected executable"):
         deployer.require_runtime_process_in_service(service, runtime, version)
     processes[434411]["executable"] = executable
     processes[434314]["executable"] = release / "different-parent"
-    with pytest.raises(RuntimeError, match="does not match the accepted onefile executable"):
+    with pytest.raises(RuntimeError, match="does not match the expected executable"):
         deployer.require_runtime_process_in_service(service, runtime, version)
 
 
@@ -1414,3 +1427,49 @@ def test_postgres_migration_readback_is_read_only_and_hides_errors(tmp_path, mon
     with pytest.raises(RuntimeError, match="PostgreSQL access") as error:
         deployer.migration_status(version)
     assert "private-value" not in str(error.value)
+
+
+def test_supervisor_readiness_waits_out_a_draining_api_degraded_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The replaced API worker reports degraded while it drains; readiness
+    waits for ready within its bound instead of failing the deployment."""
+    commit, api_version = "b" * 40, "a" * 40
+    package_version = "3.0.0-beta.3+80d43d956ba75c35"
+    monkeypatch.setattr(deployer, "confirm_api_read", lambda: None, raising=False)
+    monkeypatch.setattr(
+        deployer, "runtime_package_version", lambda _version: package_version
+    )
+    monkeypatch.setattr(deployer, "unit_state", lambda _unit: "active")
+    monkeypatch.setattr(
+        deployer,
+        "host_connection",
+        lambda **_kwargs: {
+            "package_version": package_version,
+            "pid": 434411,
+            "process_birth": "linux:36155290-b5d2-43ea-9ee9-94c8b3220809:240197513",
+        },
+    )
+    monkeypatch.setattr(deployer, "supervisor_service_identity", lambda: {})
+    monkeypatch.setattr(
+        deployer, "require_runtime_process_in_service", lambda *_args: None
+    )
+    health = {"status": "ok", "database": "ok", "commit": commit,
+              "recovery_version": package_version}
+    reads = []
+
+    def read():
+        status = _status()
+        if len(reads) < 3:
+            status["health"] = "degraded"
+            status["detail"] = "API worker 1 of 2 is draining"
+        reads.append(status["health"])
+        return health, status
+
+    monkeypatch.setattr(deployer, "read_supervisor_health", read)
+    _fast_clock(monkeypatch, 1)
+    readback = deployer.wait_supervisor_host_ready(
+        commit, expected_api_version=api_version, prior_status=None, timeout=30
+    )
+    assert reads == ["degraded", "degraded", "degraded", "ready"]
+    assert readback["api_version"] == api_version

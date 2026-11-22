@@ -323,3 +323,310 @@ async def test_linked_project_chats_page_active_first_and_skip_empty_projects(
             await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
             == 0
         )
+
+
+async def test_butler_board_lists_goal_chats_in_three_sections(project_reads):
+    from nebula.v3.domain import (
+        Approval,
+        ChatGoal,
+        ChatGoalStatus,
+        EngagementStatus,
+        RiskClass,
+    )
+
+    store = project_reads.store
+    research = await store.create(Engagement(name="Research"))
+    bounty = await store.create(Engagement(name="Bounty"))
+    archived = await store.create(
+        Engagement(name="Old", status=EngagementStatus.ARCHIVED)
+    )
+
+    async def chat(project, title, **metadata):
+        return await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+                metadata=metadata,
+            )
+        )
+
+    async def turn(session, status, **fields):
+        return await store.create(
+            ChatTurn(
+                engagement_id=session.engagement_id,
+                session_id=session.id,
+                provider_profile_id="provider",
+                model="model",
+                status=status,
+                **fields,
+            )
+        )
+
+    async def goal(session, status, **fields):
+        if status == ChatGoalStatus.COMPLETED:
+            fields.setdefault("completion_summary", "Done")
+            fields.setdefault("completion_evidence", [{"kind": "note"}])
+        if status == ChatGoalStatus.BLOCKED:
+            fields.setdefault("blocked_reason", "Needs a device")
+        return await store.create(
+            ChatGoal(
+                engagement_id=session.engagement_id,
+                session_id=session.id,
+                objective=f"Goal of {session.title}",
+                completion_criteria=["Report"],
+                status=status,
+                **fields,
+            )
+        )
+
+    waiting = await chat(research, "Kernel fuzz")
+    approval = await store.create(
+        Approval(
+            engagement_id=research.id,
+            run_id="chat-run",
+            origin="chat",
+            chat_session_id=waiting.id,
+            risk_class=RiskClass.HIGH_IMPACT_ACTION,
+            exact_request={
+                "tool_name": "run_command",
+                "arguments": {"command": "make install"},
+            },
+            policy_rationale="Installs on the host",
+            requested_by="model",
+        )
+    )
+    await turn(waiting, ChatTurnStatus.WAITING_APPROVAL, approval_id=approval.id)
+    await goal(waiting, ChatGoalStatus.RUNNING)
+    working = await chat(bounty, "Fuzz parser")
+    await turn(working, ChatTurnStatus.ROUTING)
+    await goal(
+        working,
+        ChatGoalStatus.RUNNING,
+        plan=["Build", "Fuzz", "Reproduce"],
+        current_step=1,
+    )
+    failed = await chat(bounty, "Symbol fetch")
+    await turn(failed, ChatTurnStatus.FAILED, error="Download timed out")
+    await goal(failed, ChatGoalStatus.RUNNING)
+    between = await chat(bounty, "Between steps")
+    await turn(between, ChatTurnStatus.FAILED, error="old failure")
+    await turn(between, ChatTurnStatus.COMPLETE)
+    await goal(between, ChatGoalStatus.RUNNING)
+    paused = await chat(research, "Paused triage")
+    await goal(paused, ChatGoalStatus.PAUSED)
+    blocked = await chat(bounty, "Blocked repro")
+    await goal(blocked, ChatGoalStatus.BLOCKED)
+    long_block = await chat(bounty, "Long block")
+    await goal(long_block, ChatGoalStatus.BLOCKED, blocked_reason="x " * 60)
+    proposal = await chat(research, "Proposed sweep", proposed_by="butler")
+    await goal(proposal, ChatGoalStatus.DRAFT)
+    completed = [await chat(research, f"Done {index}") for index in range(3)]
+    for item in completed:
+        await goal(item, ChatGoalStatus.COMPLETED)
+    cancelled = await chat(bounty, "Dropped idea")
+    await goal(cancelled, ChatGoalStatus.CANCELLED)
+    # Never listed: chats without a goal, an operator's unstarted draft,
+    # Butler's own chats, side chats, subagents and archived chats or projects.
+    no_goal = await chat(research, "No goal at all")
+    await turn(no_goal, ChatTurnStatus.ROUTING)
+    await goal(await chat(research, "Operator draft"), ChatGoalStatus.DRAFT)
+    await goal(
+        await chat(research, "Butler", control_assistant=True),
+        ChatGoalStatus.RUNNING,
+    )
+    await goal(await chat(research, "Side", side_chat=True), ChatGoalStatus.RUNNING)
+    await goal(
+        await chat(research, "Child", subagent_id="subagent-1"),
+        ChatGoalStatus.RUNNING,
+    )
+    await goal(
+        await chat(research, "Archived chat", archived_at="2026-11-01T00:00:00Z"),
+        ChatGoalStatus.RUNNING,
+    )
+    hidden = await chat(archived, "Archived project chat")
+    await turn(hidden, ChatTurnStatus.ROUTING)
+    await goal(hidden, ChatGoalStatus.RUNNING)
+
+    answer = await project_reads.client.get("/api/v1/butler/board", headers=AUTH)
+    assert answer.status_code == 200, answer.text
+    body = answer.json()
+    assert body["counts"] == {"active": 4, "idle": 4, "completed": 4}
+    assert body["states"] == {"waiting": 2, "working": 1, "failed": 1}
+    assert body["projects"] == [
+        {
+            "id": bounty.id,
+            "name": "Bounty",
+            "counts": {"active": 3, "idle": 2, "completed": 1},
+        },
+        {
+            "id": research.id,
+            "name": "Research",
+            "counts": {"active": 1, "idle": 2, "completed": 3},
+        },
+    ]
+    assert [
+        (item["title"], item["section"], item["state"]) for item in body["items"]
+    ] == [
+        ("Kernel fuzz", "active", "waiting"),
+        ("Fuzz parser", "active", "working"),
+        ("Symbol fetch", "active", "failed"),
+        ("Between steps", "active", "idle"),
+        ("Proposed sweep", "idle", "waiting"),
+        ("Long block", "idle", "idle"),
+        ("Blocked repro", "idle", "idle"),
+        ("Paused triage", "idle", "idle"),
+    ]
+    items = {item["title"]: item for item in body["items"]}
+    first = items["Kernel fuzz"]
+    assert first["project"] == {"id": research.id, "name": "Research"}
+    assert first["attention"]["kind"] == "approval"
+    assert first["attention"]["action_id"] == approval.id
+    assert first["now"] == "Approve run_command: make install"
+    assert items["Fuzz parser"]["now"] == "Working"
+    assert items["Fuzz parser"]["goal"] == {
+        "objective": "Goal of Fuzz parser",
+        "status": "running",
+        "current_step": 1,
+        "plan_length": 3,
+        "revision": 1,
+    }
+    assert items["Symbol fetch"]["now"] == "Download timed out"
+    assert items["Between steps"]["now"] is None
+    assert items["Proposed sweep"]["attention"]["kind"] == "proposal"
+    assert items["Paused triage"]["now"] == "Paused"
+    assert items["Blocked repro"]["now"] == "Blocked: Needs a device"
+    assert items["Long block"]["now"] == "Blocked"
+    assert body["section"] is None and body["next_offset"] is None
+    assert body["truncated"] is False
+
+    # Completed pages on request, in total or in one project.
+    page = await project_reads.client.get(
+        "/api/v1/butler/board",
+        params={"section": "completed", "limit": 2},
+        headers=AUTH,
+    )
+    assert page.status_code == 200, page.text
+    first_page = page.json()
+    assert first_page["section"] == "completed"
+    assert first_page["counts"] == body["counts"]
+    assert len(first_page["items"]) == 2 and first_page["next_offset"] == 2
+    rest = await project_reads.client.get(
+        "/api/v1/butler/board",
+        params={"section": "completed", "limit": 2, "offset": 2},
+        headers=AUTH,
+    )
+    assert rest.json()["next_offset"] is None
+    seen = first_page["items"] + rest.json()["items"]
+    assert {item["session_id"] for item in seen} == {
+        cancelled.id,
+        *(item.id for item in completed),
+    }
+    assert {item["now"] for item in seen} == {"Completed", "Cancelled"}
+    assert {item["goal"]["status"] for item in seen} == {"completed", "cancelled"}
+    in_bounty = await project_reads.client.get(
+        "/api/v1/butler/board",
+        params={"section": "completed", "project_id": bounty.id},
+        headers=AUTH,
+    )
+    assert [item["title"] for item in in_bounty.json()["items"]] == ["Dropped idea"]
+    active_page = await project_reads.client.get(
+        "/api/v1/butler/board",
+        params={"section": "active", "limit": 3},
+        headers=AUTH,
+    )
+    assert [item["title"] for item in active_page.json()["items"]] == [
+        "Kernel fuzz",
+        "Fuzz parser",
+        "Symbol fetch",
+    ]
+    assert active_page.json()["next_offset"] == 3
+    # The older spelling still pages Idle.
+    legacy = await project_reads.client.get(
+        "/api/v1/butler/board", params={"state": "idle"}, headers=AUTH
+    )
+    assert [item["section"] for item in legacy.json()["items"]] == ["idle"] * 4
+
+    found = await project_reads.client.get(
+        "/api/v1/butler/board", params={"q": "bounty"}, headers=AUTH
+    )
+    assert found.json()["counts"] == {"active": 3, "idle": 2, "completed": 1}
+    assert [item["title"] for item in found.json()["items"]] == [
+        "Fuzz parser",
+        "Symbol fetch",
+        "Between steps",
+        "Long block",
+        "Blocked repro",
+    ]
+    by_title = await project_reads.client.get(
+        "/api/v1/butler/board", params={"q": "no goal"}, headers=AUTH
+    )
+    assert by_title.json()["items"] == [] and by_title.json()["projects"] == []
+
+    unchanged = await project_reads.client.get(
+        "/api/v1/butler/board",
+        headers={**AUTH, "If-None-Match": answer.headers["etag"]},
+    )
+    assert unchanged.status_code == 304
+
+    async with project_reads.database.session() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(ProjectOwnershipRow))
+            == 0
+        )
+
+
+async def test_butler_threads_list_every_project_with_state(project_reads):
+    from nebula.v3.domain import EngagementStatus
+
+    store = project_reads.store
+    research = await store.create(Engagement(name="Research"))
+    bounty = await store.create(Engagement(name="Bounty"))
+    archived = await store.create(
+        Engagement(name="Old", status=EngagementStatus.ARCHIVED)
+    )
+
+    async def thread(project, title, **metadata):
+        return await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+                metadata={"control_assistant": True, "butler_thread": True, **metadata},
+            )
+        )
+
+    idle = await thread(research, "Which chats need me?")
+    working = await thread(bounty, "Pause the fuzzers")
+    await store.create(
+        ChatTurn(
+            engagement_id=bounty.id,
+            session_id=working.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    await thread(research, "Archived thread", archived_at="2026-11-01T00:00:00Z")
+    await thread(archived, "In an archived project")
+    # The project's current Butler conversation is not a thread.
+    await store.create(
+        ChatSession(
+            engagement_id=research.id,
+            title="Butler",
+            provider_profile_id="provider",
+            model="model",
+            metadata={"control_assistant": True},
+        )
+    )
+
+    answer = await project_reads.client.get("/api/v1/butler/threads", headers=AUTH)
+    assert answer.status_code == 200, answer.text
+    items = {item["session_id"]: item for item in answer.json()["items"]}
+    assert set(items) == {idle.id, working.id}
+    assert items[working.id]["state"] == "working"
+    assert items[working.id]["turn_id"]
+    assert items[working.id]["project"] == {"id": bounty.id, "name": "Bounty"}
+    assert items[idle.id]["state"] == "idle"

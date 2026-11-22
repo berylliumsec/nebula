@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy import and_, case, delete, func, or_, select
 
+from .work_priority import high_project_ids
 from .database import (
     DeploymentHostRow,
     DeploymentOperationRow,
@@ -29,6 +30,8 @@ from .database import (
     RuntimeResourceRow,
 )
 from .deployment_protocol import (
+    BUTLER_HOME_FEATURE,
+    BUTLER_HOME_PROJECT,
     GLOBAL_EXECUTION_PROJECT,
     IDLE_RETIREMENT_FEATURE,
     ReleaseManifest,
@@ -48,6 +51,7 @@ from .runtime_view_leases import live_view_lease
 from .setup import bootstrap_scratch_project
 
 _RECOVERY_ACTOR = "runtime-auto-recovery"
+_UNFINISHED_HANDOFF = ("requested", "finishing", "transferable", "transferred")
 # A failed project admission is retried after these delays, and at once when
 # the host or memory policy changes. After _ADMISSION_PERSISTENT failures in a
 # row the diagnostic says the failure is not transient.
@@ -180,6 +184,10 @@ class RuntimeAutoAdmission:
         # Whether each staged release can quiesce under a project retirement
         # hold. A staged release's manifest never changes.
         self._idle_retirement: dict[str, bool] = {}
+        # Whether each staged release can host the Butler home project, and
+        # the last release noted as unable to, so the hold is said once.
+        self._butler_home: dict[str, bool] = {}
+        self._butler_home_noted: str | None = None
         # The idle worker last noted as skipped, and why, so each skip is
         # recorded once instead of on every half-second pass.
         self._idle_skips: dict[str, str] = {}
@@ -228,6 +236,10 @@ class RuntimeAutoAdmission:
         async with self._serial:
             supervisor = self.supervisor
             await self._recover_legacy_chat_starts()
+            # Operator-marked high-priority projects get a worker first and
+            # are not the ones retired to make room.
+            high = list(await high_project_ids(supervisor.store))
+            high_first = case((ProjectOwnershipRow.project_id.in_(high), 0), else_=1)
             async with supervisor.coordinator.database.session() as session:
                 host = await session.get(DeploymentHostRow, "host")
                 if host is None or host.shutdown_requested:
@@ -405,7 +417,7 @@ class RuntimeAutoAdmission:
                                 ProjectOwnershipRow.retirement_requested.is_(False),
                                 active_demand,
                             )
-                            .order_by(ProjectOwnershipRow.project_id)
+                            .order_by(high_first, ProjectOwnershipRow.project_id)
                             .limit(8)
                         )
                     )
@@ -416,6 +428,7 @@ class RuntimeAutoAdmission:
                 demands = list(
                     await session.execute(
                         demand_query.order_by(
+                            high_first,
                             case((active_demand, 0), else_=1),
                             ProjectOwnershipRow.project_id,
                         ).limit(16)
@@ -524,8 +537,15 @@ class RuntimeAutoAdmission:
                         ProjectOwnershipRow.lease_expires_at_ms > now_ms,
                         ProjectOwnershipRow.retirement_requested.is_(False),
                         ProjectOwnershipRow.project_id != GLOBAL_EXECUTION_PROJECT,
+                        # Butler's own worker is not traded for memory: it is
+                        # what the operator uses to see the other projects.
+                        ProjectOwnershipRow.project_id != BUTLER_HOME_PROJECT,
                         ProjectOwnershipRow.project_id.not_in(
-                            [*capacity_waiters, *(p for p, _r in idle_owners)]
+                            [
+                                *capacity_waiters,
+                                *(p for p, _r in idle_owners),
+                                *high,
+                            ]
                         ),
                         ~pending_chat_start,
                         ~legacy_chat_start,
@@ -648,7 +668,10 @@ class RuntimeAutoAdmission:
                     if runtime_id is None:
                         # Unknown unassigned processes may be manually prepared
                         # targets or a lost spawn response. Never steal/recreate
-                        # them; require explicit reconciliation instead.
+                        # them; require explicit reconciliation instead. The
+                        # target of an unfinished handoff is known: it waits
+                        # for its project, and a rolling release keeps one
+                        # in flight for most of the roll.
                         async with supervisor.coordinator.database.session() as session:
                             reserved = list(
                                 await session.scalars(
@@ -666,10 +689,27 @@ class RuntimeAutoAdmission:
                                                 )
                                             )
                                         ),
+                                        ~RuntimeProcessRow.runtime_id.in_(
+                                            select(
+                                                ProjectHandoffRow.target_runtime_id
+                                            ).where(
+                                                ProjectHandoffRow.phase.in_(
+                                                    _UNFINISHED_HANDOFF
+                                                )
+                                            )
+                                        ),
                                     )
                                 )
                             )
                         if reserved:
+                            continue
+                        if (
+                            project.id == BUTLER_HOME_PROJECT
+                            and not await self._hosts_butler_home(version)
+                        ):
+                            # An older release would run Butler's home under
+                            # project-local Butler code; it waits for a release
+                            # that declares butler.home/v1.
                             continue
                         worker = await supervisor.prepare_execution(version)
                         runtime_id = worker.runtime_id
@@ -959,6 +999,39 @@ class RuntimeAutoAdmission:
                 stage="admission",
             )
 
+    async def _hosts_butler_home(self, version: str) -> bool:
+        """Whether ``version`` declares ``butler.home/v1``; says once when not."""
+
+        supported = self._butler_home.get(version)
+        if supported is None:
+            async with self.supervisor.coordinator.database.session() as session:
+                release = await session.get(RuntimeReleaseRow, version)
+            supported = release is not None and (
+                BUTLER_HOME_FEATURE
+                in ReleaseManifest.model_validate(release.manifest).features
+            )
+            if release is not None:
+                # A missing release may still be staged; ask again next pass.
+                self._butler_home[version] = supported
+        if not supported and self._butler_home_noted != version:
+            self._butler_home_noted = version
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.butler_home.release_lacks_feature",
+                "Butler's own worker waits: the execution release cannot host it.",
+                project_id=BUTLER_HOME_PROJECT,
+                stage="admission",
+                outcome="skipped",
+                operator_detail=(
+                    "Butler keeps working inside each project until a release "
+                    "with butler.home/v1 is the execution target."
+                ),
+                metadata={"version": version, "feature": BUTLER_HOME_FEATURE},
+                force=True,
+            )
+        return supported
+
     async def _retires_idle(self, session, project_id: str, runtime_id: str) -> bool:
         process = await session.get(RuntimeProcessRow, runtime_id)
         if process is None:
@@ -1113,6 +1186,45 @@ class RuntimeAutoAdmission:
                 )
                 .limit(1)
             )
+
+    async def _release_dead_owner(self, owner: dict) -> bool:
+        """Clear a reconciled dead owner whose project wants no worker.
+
+        The project then starts on demand like any idle project, and its dead
+        process can retire. Returns False when something still needs a
+        worker (a resource to restore, an unfinished transfer); the caller
+        then recovers the project as if it had demand.
+        """
+        from .runtime_coordination import ProjectLease
+        from .runtime_orphan_recovery import release_dead_owner
+
+        try:
+            await release_dead_owner(
+                self.supervisor.coordinator,
+                ProjectLease(**owner),
+                launch_origin=getattr(self.supervisor.host, "launch_origin", None),
+            )
+        except CoordinationConflict as error:
+            # diagnostic-expected: a refused release is recorded below and the project is recovered instead.
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.project_recovery.release_refused",
+                "An idle project's stopped worker left work that needs a "
+                "worker; Core recovers the project instead of releasing it.",
+                outcome="recovering",
+                stage="recovery",
+                metadata={
+                    "entity_id": owner["project_id"],
+                    "kind": "project",
+                    "detail": str(error)[:400],
+                },
+            )
+            return False
+        self._recovery_blocked.pop(owner["project_id"], None)
+        self._recovery_backoff_noted.pop(owner["project_id"], None)
+        await self._clear_hold(owner["project_id"])
+        return True
 
     async def _recovery_target(
         self, owner: dict, version: str, gone: dict
@@ -1531,20 +1643,26 @@ class RuntimeAutoAdmission:
             project_work = project_worker_commands(
                 ProjectOwnershipRow.project_id, ("queued", "running")
             )
-            query = select(ProjectOwnershipRow, project_work).where(
+            demanded = or_(
+                open_chat,
+                pending_chat_start,
+                legacy_chat_start,
+                project_work,
+                # An open project view is demand, as in admission.
+                live_view_lease(ProjectOwnershipRow.project_id, now),
+                # A storage alert recorded before the owner died opens its
+                # incident chat only from a recovered worker.
+                pending_storage_dispatches(
+                    ProjectOwnershipRow.project_id, session.bind.dialect.name
+                ),
+            )
+            # Every expired owner is considered, not only those with demand:
+            # a dead owner of an idle project would otherwise keep its
+            # project unavailable and its dead process resident forever.
+            # Without demand the project is released instead of recovered.
+            query = select(ProjectOwnershipRow, project_work, demanded).where(
                 ProjectOwnershipRow.runtime_id.is_not(None),
                 ProjectOwnershipRow.lease_expires_at_ms <= now,
-                or_(
-                    open_chat,
-                    pending_chat_start,
-                    legacy_chat_start,
-                    project_work,
-                    # A storage alert recorded before the owner died opens its
-                    # incident chat only from a recovered worker.
-                    pending_storage_dispatches(
-                        ProjectOwnershipRow.project_id, session.bind.dialect.name
-                    ),
-                ),
             )
             if self._recovery_cursor is not None:
                 query = query.where(
@@ -1576,7 +1694,7 @@ class RuntimeAutoAdmission:
         # expired lease. Once it is provably unresponsive the host kills it,
         # and the normal dead-owner recovery below runs in this same pass.
         retire_unresponsive = getattr(supervisor.host, "retire_unresponsive", None)
-        expired = {owner.runtime_id for owner, _work in owners}
+        expired = {owner.runtime_id for owner, _work, _demanded in owners}
         for worker in discovered:
             if (
                 retire_unresponsive is None
@@ -1601,7 +1719,7 @@ class RuntimeAutoAdmission:
                     stage="recovery",
                     metadata={"entity_id": worker.runtime_id, "kind": "runtime"},
                 )
-        for owner, has_project_work in owners:
+        for owner, has_project_work, has_demand in owners:
             worker = observed.get(owner.runtime_id)
             if worker is None:
                 continue
@@ -1610,11 +1728,16 @@ class RuntimeAutoAdmission:
                 if blocked[2] > now:
                     continue
             try:
-                project = await supervisor.store.get(Engagement, owner.project_id)
-                if project.status == "archived" and not has_project_work:
-                    # As in admission: an archived project's chats keep no
-                    # worker, but its delete or unarchive request does.
-                    continue
+                # As in admission: an archived project's chats keep no
+                # worker, but its delete or unarchive request does. A project
+                # without demand is not read: host work has no project entity.
+                idle = not has_demand or (
+                    not has_project_work
+                    and (
+                        await supervisor.store.get(Engagement, owner.project_id)
+                    ).status
+                    == "archived"
+                )
                 expected_owner = {
                     "project_id": owner.project_id,
                     "runtime_id": owner.runtime_id,
@@ -1665,6 +1788,8 @@ class RuntimeAutoAdmission:
                     "reconcile_project",
                     {"expected_owner": expected_owner},
                 )
+                if idle and await self._release_dead_owner(expected_owner):
+                    continue
                 target_runtime_id, attempt = await self._recovery_target(
                     expected_owner,
                     target_version or worker.identity.version,

@@ -18,6 +18,7 @@ from pydantic import Field
 from sqlalchemy import literal, select, tuple_
 from sqlalchemy.orm import aliased
 
+from .stored_entities import decode_stored
 from .async_utils import cancel_and_join
 from .chat import ChatCompletionRequest, ChatRequestMessage
 from .chat_queue import QueueWrite
@@ -168,7 +169,7 @@ async def _open_rows(
     statement = statement.order_by(*order).limit(limit)
     async with store.database.session(bulk=True) as session:
         return [
-            model.model_validate(row.payload)
+            decode_stored(model, row.payload)
             for row in await session.scalars(statement)
         ]
 
@@ -481,7 +482,7 @@ class StorageIntegrationService:
             )
             volume_row = await tx.session.get(EntityRow, volume_key)
             previous_volume = (
-                StorageVolume.model_validate(volume_row.payload) if volume_row else None
+                decode_stored(StorageVolume, volume_row.payload) if volume_row else None
             )
             current = (
                 previous_volume is None
@@ -514,7 +515,7 @@ class StorageIntegrationService:
                 if incident_id:
                     incident_row = await tx.session.get(EntityRow, incident_id)
                     incident = (
-                        StorageIncident.model_validate(incident_row.payload)
+                        decode_stored(StorageIncident, incident_row.payload)
                         if incident_row
                         else None
                     )

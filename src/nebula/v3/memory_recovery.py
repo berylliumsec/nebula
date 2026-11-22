@@ -26,6 +26,9 @@ from .process_identity import (
 
 
 def runner_fingerprint(runner) -> str:
+    custom = getattr(runner, "memory_fingerprint", None)
+    if custom is not None:
+        return custom()
     if runner.profile is None:
         raise MemoryEnforcementUnavailable(
             "the cleanup runner has no explicit identity"
@@ -41,6 +44,9 @@ def runner_fingerprint(runner) -> str:
 
 async def runner_identity(runner) -> str | None:
     """Docker supplies a persistent daemon ID; other agents must supply one."""
+    custom = getattr(runner, "memory_identity", None)
+    if custom is not None:
+        return await custom()
     if runner.profile.runtime_type.value != "docker":
         return None
     output, error, code = await runner._capture("info", "--format", "{{json .}}")
@@ -103,6 +109,17 @@ class MemoryReconciler:
             await asyncio.sleep(5)
 
     async def once(self) -> list[str]:
+        try:
+            # A queued Host command whose worker died never heartbeats again.
+            await self.service.cancel_stale_queued()
+        except Exception as error:
+            record_caught_exception(
+                "runtime",
+                "memory.reconciliation.stale_queue",
+                "Stale queued Host commands could not be removed yet; retried next pass.",
+                error,
+                stage="reconciliation",
+            )
         jobs = await self.service.reconciliation_jobs(after=self.cursor)
         self.cursor = jobs[-1].id if len(jobs) == 64 else ""
         released = []
@@ -170,6 +187,8 @@ class MemoryReconciler:
                 "the owning daemon identity is unavailable or changed; retain the reservation"
             )
         job = await self.service.worker_lost(job.id, job.revision)
+        if getattr(runner, "memory_fingerprint", None) is not None:
+            return await self._reconcile_host(job, runner, owner.runner_identity)
         raw, error, code = await runner._capture(
             "inspect", groups.group_id, "--format", "{{json .}}"
         )
@@ -262,4 +281,60 @@ class MemoryReconciler:
                     + "Dead launch owner; immutable workload and helper groups verified removed. Explicit retry required.",
                 ),
             )
+        return True
+
+    async def _reconcile_host(self, job: MemoryJob, runner, identity: str) -> bool:
+        """Remove a dead owner's protected host group and settle with its proof.
+
+        The group name is derived from the job identity. ``remove`` kills every
+        process in it and reports empty only after the kernel removed it, so an
+        absent group is itself proof that no descendant survives.
+        """
+        from .host_memory_client import host_evidence, host_limits
+
+        report = await runner.remove(job.id)
+        if await runner_identity(runner) != identity:
+            raise MemoryEnforcementUnavailable(
+                "runner authority changed during cleanup; retain the reservation"
+            )
+        current = await self.service.get_job(job.id)
+        if current.state == "finished":
+            return True
+        old = current.evidence
+        if old is None:
+            await self.service.unstarted_cleanup(
+                job.id,
+                current.revision,
+                group_id=report["group_id"],
+                detail="Dead launch owner; host memory group verified removed before release.",
+                verified_empty=True,
+            )
+            return True
+        limits = old.applied
+        drift = False
+        if "max_bytes" in report:
+            observed = host_limits(report)
+            if observed == current.pending_limits:
+                limits = observed
+            elif observed != old.applied:
+                drift = True
+        oom = type(report.get("oom_kill_count")) is int and report["oom_kill_count"] > 0
+        evidence = host_evidence(
+            {
+                **report,
+                "max_bytes": limits.max_bytes,
+                "swap_bytes": limits.swap_bytes,
+                "high_bytes": limits.high_bytes,
+            },
+            job.id,
+            termination_reason="memory_limit_exceeded" if oom else "worker_lost",
+            detail=(
+                "Applied limits were uncertain; last verified limits retained. "
+                if drift
+                else ""
+            )
+            + "Dead launch owner; host memory group and every descendant verified removed. Explicit retry required.",
+            peak_bytes=old.peak_bytes,
+        ).model_copy(update={"application_uncertain": drift})
+        await self.service.finish(job.id, current.revision, evidence)
         return True

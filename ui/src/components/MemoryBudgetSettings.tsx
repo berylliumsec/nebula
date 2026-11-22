@@ -4,6 +4,7 @@ import type {ApiClient} from "../api/client";
 import {GIB, MEMORY_BUDGET_CHANGED, applyMemoryLimits, getMemoryJobs, getMemorySettings, memoryAmount, probeMemoryRunner, saveMemorySettings, type MemoryEnvironment, type MemoryJob, type MemoryLimits, type MemoryPolicy, type MemorySettings} from "../api/memoryBudgets";
 import {logCaughtDiagnostic} from "../diagnostics/logger";
 import {announceSettingsSaved} from "./SettingsSaveFeedback";
+import {HostCommandSettings} from "./HostCommandSettings";
 import styles from "./MemoryBudgetSettings.module.css";
 
 const environments: MemoryEnvironment[] = ["local", "container", "ssh", "remote", "cpu-worker"];
@@ -42,7 +43,7 @@ function RunningLimits({api, job, settings, onApplied}: {api: ApiClient; job: Me
   </details>;
 }
 
-export function MemoryBudgetSettings({api, previewMode = false}: {api?: ApiClient; previewMode?: boolean}) {
+export function MemoryBudgetSettings({api, previewMode = false, projects}: {api?: ApiClient; previewMode?: boolean; projects?: {id: string; name: string}[]}) {
   const [saved, setSaved] = useState<MemorySettings>();
   const [policy, setPolicy] = useState<MemoryPolicy>();
   const [jobs, setJobs] = useState<MemoryJob[]>([]);
@@ -135,5 +136,6 @@ export function MemoryBudgetSettings({api, previewMode = false}: {api?: ApiClien
         {job.state === "running" && api && <RunningLimits key={`${job.id}:${job.revision}`} api={api} job={job} settings={saved} onApplied={() => setReload(value => value + 1)} />}
       </li>;})}</ul>
     </>}
+    <HostCommandSettings key={reload} api={api} previewMode={previewMode} projects={projects} />
   </section>;
 }

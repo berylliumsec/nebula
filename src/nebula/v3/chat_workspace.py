@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, select, exists, func
 from sqlalchemy.orm import aliased
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .domain import (
     ChatBookmark,
@@ -98,7 +99,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
         )
         async with store.database.session() as database:
             page = [
-                ChatMessage.model_validate(row.payload)
+                decode_stored(ChatMessage, row.payload)
                 for row in (await database.scalars(statement))
             ]
         # Offsets count stored rows, retracted ones included, so decide whether
@@ -141,7 +142,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                     EntityRow.chat_session_id == session_id,
                 )
             )
-            return [ChatBookmark.model_validate(row.payload) for row in rows]
+            return [decode_stored(ChatBookmark, row.payload) for row in rows]
 
     @router.put("/chat/sessions/{session_id}/bookmarks/{message_id}")
     async def set_bookmark(session_id: str, message_id: str, request: BookmarkWrite):

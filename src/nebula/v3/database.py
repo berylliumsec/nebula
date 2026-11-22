@@ -297,6 +297,9 @@ class MemoryJobRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+    # Operator-facing context for queued and running Host commands (command,
+    # chat, tool call) and their cancel request. Older Core ignores it.
+    labels: Mapped[dict[str, Any] | None] = mapped_column(JSON)
 
 
 class MemoryBudgetAuditRow(Base):
@@ -550,6 +553,9 @@ class RuntimeResourceRow(Base):
 
 class DeploymentReceiptRow(Base):
     __tablename__ = "deployment_receipts"
+    __table_args__ = (
+        Index("ix_deployment_receipt_action_time", "action", "occurred_at_ms"),
+    )
     id: Mapped[str] = mapped_column(String(200), primary_key=True)
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     result: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)

@@ -101,6 +101,8 @@ interface WorkspaceContextValue {
   archivedEngagements: EngagementSummary[];
   deleteArchivedEngagement: (id: string, expectedRevision?: number) => Promise<void>;
   setEngagementArchived: (id: string, archived: boolean, expectedRevision?: number) => Promise<string | undefined>;
+  /** Mark a whole project high or normal priority; its chats' waiting work is taken first. */
+  setEngagementPriority: (id: string, high: boolean) => Promise<void>;
   renameEngagementAtRevision: (id: string, name: string, expectedRevision: number) => Promise<EngagementSummary>;
   refreshProjectLifecycle: (id: string) => ReturnType<ApiClient["getProjectLifecycle"]>;
   operatorProfiles: OperatorProfile[];
@@ -799,6 +801,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return nextId;
   }, [api, coreState, selectedEngagementId]);
 
+  const setEngagementPriority = useCallback(async (id: string, high: boolean) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to update a project.");
+    const saved = await api.setEngagementPriority(id, high ? "high" : "normal");
+    setEngagements((current) => current.map((item) => item.id === saved.id ? saved : item));
+    setEngagement((current) => current?.id === saved.id ? saved : current);
+  }, [api, coreState]);
+
   const resolveApproval = useCallback(
     async (id: string, request: ApprovalDecisionRequest) => {
       // Core still holds the approval; the card stays until a decision reaches it.
@@ -1261,6 +1270,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       renameEngagementAtRevision,
       refreshProjectLifecycle,
       setEngagementArchived,
+      setEngagementPriority,
       deleteArchivedEngagement,
       addAsset,
       createFinding,
@@ -1328,6 +1338,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       renameEngagementAtRevision,
       refreshProjectLifecycle,
       setEngagementArchived,
+      setEngagementPriority,
       deleteArchivedEngagement,
       addAsset,
       createFinding,

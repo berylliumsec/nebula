@@ -1,0 +1,31 @@
+.root {min-width: 0; margin-top: 1.25rem; padding-top: .8rem; border-top: 1px solid var(--border-subtle, #8884); scroll-margin-top: 1rem; overflow-wrap: anywhere;}
+.root h3 {margin: 0 0 .3rem;}
+.root h4 {margin: 1rem 0 .3rem; font-size: .85rem;}
+.form {display: grid; gap: .3rem; max-width: 26rem; margin: .8rem 0;}
+.limit {display: flex; gap: .5rem; align-items: center;}
+.limit input {width: 6rem; min-height: 44px; box-sizing: border-box;}
+.form small {opacity: .75; font-size: .75rem;}
+.summary {margin: .6rem 0; color: var(--muted);}
+.list {display: grid; gap: 0; margin: 0; padding: 0; list-style: none;}
+.row {display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .4rem .8rem; padding: .5rem 0; border-top: 1px solid var(--border-subtle, #8884); min-width: 0;}
+.queuedRow {grid-template-columns: 1.6rem minmax(0, 1fr) auto auto;}
+.position {display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid var(--blue); border-radius: 50%; color: var(--blue); font-size: .75rem; font-variant-numeric: tabular-nums;}
+.main {display: grid; gap: .2rem; min-width: 0;}
+.command {font-family: var(--font-mono, ui-monospace, monospace); font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;}
+.origin {display: flex; flex-wrap: wrap; align-items: center; gap: .3rem; color: var(--muted); font-size: .75rem;}
+.detachedLabel {display: inline-flex; align-items: center; gap: .3rem; color: var(--orange);}
+.dot {display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--orange);}
+.meta {color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; white-space: nowrap;}
+.action {display: inline-grid; place-items: center; min-width: 36px; min-height: 36px;}
+.stop {color: var(--red);}
+@media (max-width: 720px), (pointer: coarse) {
+  .action {min-width: 44px; min-height: 44px;}
+}
+@media (max-width: 560px) {
+  .row {grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main action" "meta action";}
+  .queuedRow {grid-template-columns: 1.6rem minmax(0, 1fr) auto; grid-template-areas: "position main action" "position meta action";}
+  .position {grid-area: position; align-self: start;}
+  .main {grid-area: main;}
+  .meta {grid-area: meta; white-space: normal;}
+  .action {grid-area: action;}
+}

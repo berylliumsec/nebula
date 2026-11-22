@@ -296,12 +296,16 @@ class HostLoadMonitor:
 
 
 class HostLoadGate:
-    """Shared, live pressure policy; FIFO waiters never own runtime slots."""
+    """Shared, live pressure policy; FIFO waiters never own runtime slots.
+
+    High-priority waiters queue ahead of normal ones, in their own FIFO order.
+    """
 
     def __init__(self, monitor: HostLoadMonitor | None = None) -> None:
         self.monitor = monitor or HostLoadMonitor()
         self._refresh: asyncio.Task[HostLoadSnapshot] | None = None
         self._waiters: deque[object] = deque()
+        self._high: set[object] = set()
         self.thresholds = self.monitor.thresholds
         self._changed = asyncio.Event()
 
@@ -331,13 +335,22 @@ class HostLoadGate:
     async def wait(
         self,
         on_deferred: Callable[[str | None], Awaitable[None]] | None = None,
+        *,
+        high: bool = False,
     ) -> None:
         ticket = object()
-        self._waiters.append(ticket)
+        if high:
+            # After every high waiter already queued, ahead of normal ones.
+            position = sum(1 for waiter in self._waiters if waiter in self._high)
+            self._waiters.insert(position, ticket)
+            self._high.add(ticket)
+        else:
+            self._waiters.append(ticket)
         try:
             await self._wait(ticket, on_deferred)
         finally:
             self._waiters.remove(ticket)
+            self._high.discard(ticket)
             self.wake()
 
     async def _wait(

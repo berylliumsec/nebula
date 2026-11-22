@@ -23,6 +23,7 @@ from nebula.v3.butler_oversight import (
     GoalProgressReport,
     ReportEvidenceRef,
     acknowledge_incident,
+    incident_id,
     butler_router,
     ingest_agent_report,
     project_stream_id,
@@ -217,7 +218,7 @@ async def test_goal_transitions_commit_watch_and_project_events_then_close_after
 
     watch = await store.get(ButlerGoalWatch, watch_id(running.id))
     assert watch.status == ChatGoalStatus.RUNNING
-    assert watch.progress_due_at is not None
+    assert watch.progress_due_at is None
     assert [(item.sequence, item.event_type) for item in (await _events(store))] == [
         (1, "goal.started")
     ]
@@ -231,7 +232,7 @@ async def test_goal_transitions_commit_watch_and_project_events_then_close_after
         "session-project", GoalWrite(expected_revision=paused.revision, action="resume")
     )
     resumed_watch = await store.get(ButlerGoalWatch, watch.id)
-    assert resumed_watch.progress_due_at is not None
+    assert resumed_watch.progress_due_at is None
     assert resumed_watch.deadline_generation == 2
     cancelled = await goals.write(
         "session-project",
@@ -368,71 +369,72 @@ async def test_restart_restores_missing_watches_and_replays_unseen_events(tmp_pa
     (await restarted.reconcile_watches())
     recovered = await restarted_store.get(ButlerGoalWatch, watch_id(legacy.id))
     assert recovered.status == ChatGoalStatus.RUNNING
-    assert recovered.progress_due_at is not None
+    assert recovered.progress_due_at is None
     assert "restored" in recovered.coverage_reason
     assert (await _events(restarted_store))[-1].event_type == "goal.watch_recovered"
     (await restarted.reconcile_watches())
     assert len((await _events(restarted_store))) == 3
 
 
-async def test_expired_worker_cannot_emit_deadline_after_takeover(tmp_path):
+async def test_running_goal_never_reports_an_overdue_checkpoint(tmp_path):
+    from nebula.v3.butler_recovery import PERIODIC_EVENTS
+    from nebula.v3.butler_review import MEANINGFUL_EVENTS
+
     _, store, goals = await _setup(tmp_path)
     running = await _start(goals)
-    old_worker = ButlerOversightService(store)
-    new_worker = ButlerOversightService(store)
-    assert await old_worker.replay_project("project")
+    worker = ButlerOversightService(store)
+    assert await worker.replay_project("project")
+    # A watch saved by an earlier build may still carry a past deadline.
     (
         await store.update(
             ButlerGoalWatch,
             watch_id(running.id),
-            {"progress_due_at": utc_now() - timedelta(seconds=1)},
+            {"progress_due_at": utc_now() - timedelta(hours=1)},
         )
     )
-    assert (await new_worker.replay_project("project")) is False
-    (
-        await store.update(
-            ButlerProjectState,
-            project_state_id("project"),
-            {"lease_expires_at": utc_now() - timedelta(seconds=1)},
-        )
-    )
-    assert await new_worker.replay_project("project")
-    assert (await old_worker.fire_due_deadlines("project")) == 0
-    assert (await new_worker.fire_due_deadlines("project")) == 1
-    assert (await new_worker.fire_due_deadlines("project")) == 0
-    assert [event.event_type for event in (await _events(store))].count(
-        "goal.progress_overdue"
-    ) == 1
-    assert await new_worker.replay_project("project")
-    assert (
-        await store.get(ButlerProjectState, project_state_id("project"))
-    ).last_event_sequence == 3
+    assert await worker.replay_project("project")
+    assert not hasattr(worker, "fire_due_deadlines")
+    assert "goal.progress_overdue" not in {
+        event.event_type for event in (await _events(store))
+    }
+    # Events an earlier build already queued neither reach review nor open a
+    # Butler investigation chat.
+    assert "goal.progress_overdue" not in MEANINGFUL_EVENTS
+    assert "goal.progress_overdue" not in PERIODIC_EVENTS
 
 
-async def test_overdue_checkpoint_is_a_durable_incident_until_progress_report(tmp_path):
+async def test_legacy_overdue_incident_stays_open_until_progress_report(tmp_path):
     path, store, goals = await _setup(tmp_path)
     goal = await _start(goals)
-    worker = ButlerOversightService(store)
-    assert await worker.replay_project("project")
+    key = f"goal-progress-overdue:{goal.id}"
+    # Earlier builds opened this incident when a checkpoint was missed.
     (
-        await store.update(
-            ButlerGoalWatch,
-            watch_id(goal.id),
-            {"progress_due_at": utc_now() - timedelta(seconds=1)},
+        await store.create(
+            ButlerIncident(
+                id=incident_id("project", key),
+                engagement_id="project",
+                incident_key=key,
+                source="goal_checkpoint",
+                verification_state="core_observed",
+                summary="Progress checkpoint is overdue.",
+                impact="Core has not received a progress report.",
+                next_action="Review the goal.",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="goal", id=goal.id, project_id="project"
+                    ).model_dump()
+                ],
+                goal_ids=[goal.id],
+                session_ids=[goal.session_id],
+                observed_at=utc_now(),
+            )
         )
     )
-    assert (await worker.fire_due_deadlines("project")) == 1
-    assert (await worker.fire_due_deadlines("project")) == 0
     incidents = await store.find_entities(
         ButlerIncident, {"source": "goal_checkpoint"}, engagement_id="project", limit=10
     )
     assert len(incidents) == 1
     assert incidents[0].status == "open"
-    assert incidents[0].verification_state == "core_observed"
-    assert [event.event_type for event in (await _events(store))][-2:] == [
-        "goal.progress_overdue",
-        "incident.opened",
-    ]
 
     paused = await goals.write(
         goal.session_id, GoalWrite(expected_revision=goal.revision, action="pause")
@@ -579,7 +581,7 @@ def test_event_packet_rejects_foreign_or_oversize_evidence():
         )
 
 
-async def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempotent(
+async def test_progress_report_records_progress_and_replay_is_idempotent(
     tmp_path,
 ):
     _, store, goals = await _setup(tmp_path)
@@ -591,7 +593,6 @@ async def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempo
         evidence_gained=["The repeatable probe returned no matching response."],
         criterion_advanced="Distinguish candidate input paths.",
         next_step="Try the second input path.",
-        next_checkpoint_at=utc_now() + timedelta(hours=8),
         evidence_refs=[ReportEvidenceRef(kind="chat_turn", id=turn.id)],
     )
     report, incident = await ingest_agent_report(
@@ -609,13 +610,9 @@ async def test_progress_report_reschedules_bounded_deadline_and_replay_is_idempo
         {"kind": "chat_turn", "id": turn.id, "project_id": "project"}
     ]
     after = await store.get(ButlerGoalWatch, watch_id(goal.id))
-    assert after.deadline_generation == before.deadline_generation + 1
+    assert after.deadline_generation == before.deadline_generation
     assert after.last_progress_at is not None
-    assert (
-        timedelta(hours=1, minutes=59)
-        < after.progress_due_at - after.last_progress_at
-        <= timedelta(hours=2)
-    )
+    assert after.progress_due_at is None
     assert after.report_capability == "validated"
     assert (await _events(store))[-1].event_type == "agent.progress_reported"
     assert (await _events(store))[-1].payload["verification_state"] == "agent_reported"

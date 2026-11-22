@@ -25,6 +25,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["memory", "ram", "gib", "worker", "budget", "out of memory", "oom", "limits", "swap", "reserve", "compute", "pressure", "butler", "search service", "searxng", "waiting for memory", "core reserve", "project workers", "projects at once", "default reserve"],
   },
   {
+    id: "settings.host-commands",
+    label: "Host commands",
+    description: "See every running and queued Host command across projects, set how many run at once, and cancel a queued command or stop a running or detached one",
+    category: "Automation",
+    scope: "Workspace",
+    target: "host-command-settings",
+    keywords: ["host commands", "running at once", "host commands running at once", "command queue", "host queue", "waiting for host capacity", "in line", "queued command", "cancel command", "stop command", "detached process", "run_command", "concurrent commands", "parallel commands", "fair queue"],
+  },
+  {
     id: "settings.butler-instructions",
     label: "Nebula-wide Butler instructions",
     description: "Open Nebula-wide BUTLER.md directly in the Markdown code editor, or upload a replacement",
@@ -157,7 +166,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
+    keywords: ["harness", "codex", "grok", "claude", "claude agent sdk", "claude code", "add claude", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
   },
   {
     id: "settings.mcp",
@@ -257,6 +266,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     scope: "Workspace",
     target: "setup-settings",
     keywords: ["host pressure", "threshold", "CPU", "memory", "runnable tasks", "load average", "Core I/O PSI", "backup disk", "some avg10", "80%", "100%", "turn off", "waiting for host pressure", "never starts", "queued", "admission", "nebula.work.host_pressure", "nebula.global.host_pressure"],
+  },
+  {
+    id: "settings.work-stages",
+    label: "Work stages",
+    description: "Define the ordered stages a project's Work items move through, flag a stage that should not stay empty, and see each project's stages on All projects. Subprojects use their parent's stages unless they define their own, and a parent counts its subprojects by stage",
+    category: "Project Policy",
+    scope: "Project",
+    target: "work-stages",
+    keywords: ["work stages", "project stages", "pipeline", "stage", "group by stage", "flag when empty", "missing a stage", "stage gap", "portfolio", "all projects stages", "stage columns", "move item to stage", "add a stage", "reorder stages", "subproject stages", "parent stages", "inherit stages", "subprojects by stage", "stage roll-up", "nebula.work.work_stages", "nebula.work.set_work_stages"],
   },
   {
     id: "settings.setup",

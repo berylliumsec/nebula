@@ -21,6 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from urllib.error import HTTPError
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts/simulation"
@@ -34,6 +35,14 @@ spec.loader.exec_module(deployer)
 REAL_RUNTIME_RELEASE = deployer.runtime_release
 REAL_PACKAGE_VERSION = deployer.runtime_package_version
 REAL_REQUIRE_PROCESS = deployer.require_runtime_process_in_service
+
+
+@pytest.fixture(autouse=True)
+def single_pass_handoffs(monkeypatch):
+    # These resume tests check one deployer pass at a time. The grace-period
+    # stop and its polling are covered in tests/test_staged_deployer.py.
+    monkeypatch.setattr(deployer, "HANDOFF_GRACE_SECONDS", None)
+
 
 OLD = "5" * 40
 NEW = "3" * 40
@@ -148,6 +157,10 @@ class Host:
             "recovery_version": package(self.host_version),
             "schema_version": SCHEMA,
         }
+
+    def read(self, path: str, **parameters):
+        # The deployer's transient-tolerant promotion read.
+        return self.get(path, **parameters)
 
     def get(self, path: str, **_parameters):
         if self.unit != "active":
@@ -377,7 +390,7 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
     monkeypatch.setattr(deployer, "CURRENT", tmp_path / "current")
     monkeypatch.setattr(deployer, "STATE", tmp_path / "deployer-state.json")
     monkeypatch.setattr(deployer, "api", lambda: core)
-    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
+    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda *_: {})
 
     def deployment_post(path, parameters):
         if path.endswith("/reconcile"):
@@ -388,17 +401,15 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
                     "state": "succeeded",
                     "result": {"version": NEW, "state": "current"},
                 }
+            if original["state"] == "uncertain":
+                # Core retains an uncertain receipt it cannot prove.
+                raise HTTPError(
+                    path, 409, "Operation effect is not fully reconciled", {}, None
+                )
             return original
         return core.post(path, parameters)
 
     monkeypatch.setattr(deployer, "deployment_post", deployment_post)
-    monkeypatch.setattr(
-        deployer,
-        "reconcile_operation",
-        lambda operation_id: deployment_post(
-            "deployment/operations/" + operation_id + "/reconcile", {}
-        ),
-    )
     monkeypatch.setattr(
         deployer,
         "migration_status",
@@ -412,6 +423,12 @@ def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Host:
     monkeypatch.setattr(deployer, "runtime_package_version", package)
     monkeypatch.setattr(deployer, "unit_state", lambda _unit: core.unit)
     monkeypatch.setattr(deployer, "service", core.service)
+    # No socket unit, and a Core older than the running-operation listing;
+    # tests/test_simulation_host_restart.py covers both.
+    monkeypatch.setattr(deployer, "socket_activation", lambda: None)
+    monkeypatch.setattr(
+        deployer, "wait_no_running_operations", lambda: {"supported": False}
+    )
     monkeypatch.setattr(
         deployer, "stop_supervisor_service", lambda _identity: core.service("stop")
     )
@@ -545,7 +562,7 @@ def test_degraded_host_activation_then_resume_holds_execution_target(
     assert host.host_version == OLD and host.target == OLD
     assert host.restarts == 0
 
-    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda: {})
+    monkeypatch.setattr(deployer, "wait_quiet_restart_boundary", lambda *_: {})
     activation = deployer.activate_host(allow_degraded_workers=True)
     assert activation["status"] == "host_activated"
     assert activation["version"] == NEW
@@ -573,19 +590,25 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
     bundle_manifest_hash = hashlib.sha256(bundle_manifest.read_bytes()).hexdigest()
     manifest_path = manual_release / "nebula-runtime.json"
     manifest_path.write_text(
-        json.dumps({
-            "version": manual,
-            "schema_family": SCHEMA,
-            "migration_head": "head",
-            "files": {"dist/nebula-runtime/nebula-runtime.json": bundle_manifest_hash},
-        })
+        json.dumps(
+            {
+                "version": manual,
+                "schema_family": SCHEMA,
+                "migration_head": "head",
+                "files": {
+                    "dist/nebula-runtime/nebula-runtime.json": bundle_manifest_hash
+                },
+            }
+        )
     )
     executable = manual_release / "dist/nebula-core"
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"manual core executable")
     manual_manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     monkeypatch.setattr(
-        deployer, "runtime_release", lambda version: (host.releases / version, digest(version))
+        deployer,
+        "runtime_release",
+        lambda version: (host.releases / version, digest(version)),
     )
     monkeypatch.setattr(deployer, "runtime_package_version", package)
     host.host_version = manual
@@ -619,39 +642,94 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         deployer,
         "linux_process_snapshot",
-        lambda pid: {
-            "pid": pid,
-            "parent_pid": 0,
-            "process_birth": f"birth-{pid}",
-            "effective_uid": deployer.os.getuid(),
-            "executable": executable.resolve(),
-        }
-        if pid == host.pid
-        else None,
+        lambda pid: (
+            {
+                "pid": pid,
+                "parent_pid": 0,
+                "process_birth": f"birth-{pid}",
+                "effective_uid": deployer.os.getuid(),
+                "executable": executable.resolve(),
+            }
+            if pid == host.pid
+            else None
+        ),
     )
     proc_root = Path(deployer.STATE).parent / "proc"
     live_executable = proc_root / str(host.pid) / "exe"
     live_executable.parent.mkdir(parents=True)
     live_executable.symlink_to(executable)
     monkeypatch.setattr(deployer, "PROC_ROOT", proc_root)
-    monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (host.health(), host.status()))
+    monkeypatch.setattr(
+        deployer, "read_supervisor_health", lambda: (host.health(), host.status())
+    )
 
     journal_steps = {}
     receipts = {}
     for step, action, parameters, receipt_state, result in (
-        ("stage", "stage", {"source": str(host.releases / NEW), "manifest_sha256": digest(NEW)}, "succeeded", {"version": NEW, "manifest_sha256": digest(NEW)}),
-        ("migrate", "migrate", {"version": NEW, "expected_revision": 40}, "succeeded", {"version": NEW, "state": "current", "target_head": "head", "current_head": "head"}),
-        ("api", "prepare_api", {"version": NEW}, "succeeded", {"version": NEW, "runtime_id": "api-new", "role": "api"}),
-        ("promote-api", "promote_api", {"runtime_id": "api-new", "expected_revision": 41}, "uncertain", {"error_type": "ValueError", "detail": "reply lost"}),
-        ("target", "target_execution", {"version": NEW}, "uncertain", {"error_type": "ValueError", "detail": "reply lost"}),
+        (
+            "stage",
+            "stage",
+            {"source": str(host.releases / NEW), "manifest_sha256": digest(NEW)},
+            "succeeded",
+            {"version": NEW, "manifest_sha256": digest(NEW)},
+        ),
+        (
+            "migrate",
+            "migrate",
+            {"version": NEW, "expected_revision": 40},
+            "succeeded",
+            {
+                "version": NEW,
+                "state": "current",
+                "target_head": "head",
+                "current_head": "head",
+            },
+        ),
+        (
+            "api",
+            "prepare_api",
+            {"version": NEW},
+            "succeeded",
+            {"version": NEW, "runtime_id": "api-new", "role": "api"},
+        ),
+        (
+            "promote-api",
+            "promote_api",
+            {"runtime_id": "api-new", "expected_revision": 41},
+            "uncertain",
+            {"error_type": "ValueError", "detail": "reply lost"},
+        ),
+        (
+            "target",
+            "target_execution",
+            {"version": NEW},
+            "uncertain",
+            {"error_type": "ValueError", "detail": "reply lost"},
+        ),
     ):
         operation_id = f"{deployment_id}:{step}"
-        receipt = {"operation_id": operation_id, "action": action, "state": receipt_state, "result": result}
+        receipt = {
+            "operation_id": operation_id,
+            "action": action,
+            "state": receipt_state,
+            "result": result,
+        }
         receipts[operation_id] = receipt
-        entry = {"operation_id": operation_id, "action": action, "parameters": parameters, "receipt": receipt}
+        entry = {
+            "operation_id": operation_id,
+            "action": action,
+            "parameters": parameters,
+            "receipt": receipt,
+        }
         if step in {"promote-api", "target"}:
-            field = "api_version" if step == "promote-api" else "target_execution_version"
-            entry["settled"] = {"by": "deployment_status", "evidence": {field: NEW}, "result": {field: NEW}}
+            field = (
+                "api_version" if step == "promote-api" else "target_execution_version"
+            )
+            entry["settled"] = {
+                "by": "deployment_status",
+                "evidence": {field: NEW},
+                "result": {field: NEW},
+            }
         journal_steps[step] = entry
     deployment_journal = {
         "id": deployment_id,
@@ -664,12 +742,21 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
             "version": NEW,
             "operation_id": deployment_id + ":host-activation",
             "state": "complete",
-            "result": {"operation_id": deployment_id + ":host-activation", "status": "host_activated", "version": NEW, "health_commit": NEW},
+            "result": {
+                "operation_id": deployment_id + ":host-activation",
+                "status": "host_activated",
+                "version": NEW,
+                "health_commit": NEW,
+            },
         },
     }
     for operation_id, receipt in receipts.items():
         host.ledger[operation_id] = {**receipt, "request_hash": "preserved"}
-    legacy = {"operation_id": "a781:api:reserve-retry", "state": "uncertain", "result": {"error_type": "CoordinationConflict"}}
+    legacy = {
+        "operation_id": "a781:api:reserve-retry",
+        "state": "uncertain",
+        "result": {"error_type": "CoordinationConflict"},
+    }
     state = {
         "deployment_mode": "supervisor",
         "active": OLD,
@@ -682,16 +769,52 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
     }
     deployer.atomic_json(deployer.STATE, state)
 
-    def manual_operation(action: str, suffix: str, request_parameters: dict, result: dict):
+    def manual_operation(
+        action: str, suffix: str, request_parameters: dict, result: dict
+    ):
         operation_id = "manual:" + suffix
-        receipt = {"operation_id": operation_id, "action": action, "state": "succeeded", "result": result}
+        receipt = {
+            "operation_id": operation_id,
+            "action": action,
+            "state": "succeeded",
+            "result": result,
+        }
         host.ledger[operation_id] = {**receipt, "request_hash": "manual"}
-        return {"request": {"operation_id": operation_id, "action": action, "parameters": request_parameters}, "receipt": receipt}
+        return {
+            "request": {
+                "operation_id": operation_id,
+                "action": action,
+                "parameters": request_parameters,
+            },
+            "receipt": receipt,
+        }
 
-    stage = manual_operation("stage", "stage", {"source": str(manual_release), "manifest_sha256": manual_manifest_hash}, {"version": manual, "manifest_sha256": manual_manifest_hash})
-    migration = manual_operation("migrate", "migrate", {"version": manual}, {"version": manual, "state": "current", "target_head": "head", "current_head": "head"})
-    prepare = manual_operation("prepare_api", "prepare", {"version": manual}, {"version": manual, "runtime_id": "api-manual", "role": "api"})
-    promote = manual_operation("promote_api", "promote", {"runtime_id": "api-manual"}, {"api_version": manual})
+    stage = manual_operation(
+        "stage",
+        "stage",
+        {"source": str(manual_release), "manifest_sha256": manual_manifest_hash},
+        {"version": manual, "manifest_sha256": manual_manifest_hash},
+    )
+    migration = manual_operation(
+        "migrate",
+        "migrate",
+        {"version": manual},
+        {
+            "version": manual,
+            "state": "current",
+            "target_head": "head",
+            "current_head": "head",
+        },
+    )
+    prepare = manual_operation(
+        "prepare_api",
+        "prepare",
+        {"version": manual},
+        {"version": manual, "runtime_id": "api-manual", "role": "api"},
+    )
+    promote = manual_operation(
+        "promote_api", "promote", {"runtime_id": "api-manual"}, {"api_version": manual}
+    )
     prefix_dir = Path(deployer.STATE).parent / "deployment-records"
     prefix_dir.mkdir(exist_ok=True)
     monkeypatch.setattr(deployer, "DEPLOYMENT_RECORDS", prefix_dir)
@@ -699,15 +822,21 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
         "stage": stage,
         "migrate": migration,
         "host-switch-manual": {
-            "phase": "complete", "version": manual, "previous_version": NEW,
-            "operation_id": "host-manual", "readback": {
-                "health_commit": manual, "api_version": manual,
-                "runtime_package_version": package(manual), "ui_commit": manual,
+            "phase": "complete",
+            "version": manual,
+            "previous_version": NEW,
+            "operation_id": "host-manual",
+            "readback": {
+                "health_commit": manual,
+                "api_version": manual,
+                "runtime_package_version": package(manual),
+                "ui_commit": manual,
                 "owner_changes": {},
             },
         },
         "promote-api-manual": {
-            "version": manual, "prepared_runtime_id": "api-manual",
+            "version": manual,
+            "prepared_runtime_id": "api-manual",
             "steps": {"prepare-api": prepare, "promote-api": promote},
             "promoted_readback": {"api_version": manual},
         },
@@ -725,7 +854,9 @@ def _superseded_manual_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
 def test_reconcile_superseded_manual_archives_full_uncertain_journal_and_aligns(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ):
-    deployment_id, prefix, manual, legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, manual, legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     original_journal = deployer.state()["runtime_deployment"]
     state_before = Path(deployer.STATE).read_bytes()
     dry_run = deployer.reconcile_superseded_manual_deployment(
@@ -755,14 +886,179 @@ def test_reconcile_superseded_manual_archives_full_uncertain_journal_and_aligns(
     assert saved["operator_disabled"] is True
     live_readback = archived["live_readback"]["host_executable"]
     assert live_readback["path"] == str(host.releases / manual / "dist/nebula-core")
-    assert live_readback["sha256"] == hashlib.sha256(b"manual core executable").hexdigest()
-    assert live_readback["identity_source"] == "current_manual_release_and_live_process_image"
+    assert (
+        live_readback["sha256"] == hashlib.sha256(b"manual core executable").hexdigest()
+    )
+    assert (
+        live_readback["identity_source"]
+        == "current_manual_release_and_live_process_image"
+    )
+
+
+def _unactivated_supersession_fixture(host: Host, monkeypatch: pytest.MonkeyPatch):
+    old_id, _prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployer.reconcile_superseded_manual_deployment(old_id, manual_prefix=_prefix)
+    host.processes["exec-prior-2"]["version"] = OTHER
+    promotion_id = "a" * 32
+    rollback_id = "b" * 32
+
+    def step(
+        deployment_id: str, name: str, action: str, parameters: dict, result: dict
+    ):
+        operation_id = f"{deployment_id}:{name}"
+        receipt = {
+            "operation_id": operation_id,
+            "action": action,
+            "state": "succeeded",
+            "result": result,
+        }
+        host.ledger[operation_id] = receipt
+        return {
+            "operation_id": operation_id,
+            "action": action,
+            "parameters": parameters,
+            "receipt": receipt,
+        }
+
+    promotion = {
+        "id": promotion_id,
+        "action": "promote",
+        "version": NEW,
+        "previous": OLD,
+        "state": "running",
+        "steps": {
+            "stage": step(
+                promotion_id,
+                "stage",
+                "stage",
+                {"source": str(host.releases / NEW), "manifest_sha256": digest(NEW)},
+                {"version": NEW, "manifest_sha256": digest(NEW)},
+            ),
+            "migrate": step(
+                promotion_id,
+                "migrate",
+                "migrate",
+                {"version": NEW, "expected_revision": 50},
+                {
+                    "version": NEW,
+                    "state": "current",
+                    "target_head": "head",
+                    "current_head": "head",
+                },
+            ),
+        },
+        "host_activation": {
+            "operation_id": promotion_id + ":host-activation",
+            "state": "requested",
+            "version": NEW,
+        },
+    }
+    rollback = {
+        "id": rollback_id,
+        "action": "rollback",
+        "version": OLD,
+        "previous": manual,
+        "state": "running",
+        "superseded": promotion,
+        "steps": {
+            "stage": step(
+                rollback_id,
+                "stage",
+                "stage",
+                {"source": str(host.releases / OLD), "manifest_sha256": digest(OLD)},
+                {"version": OLD, "manifest_sha256": digest(OLD)},
+            )
+        },
+        "host_activation": {
+            "operation_id": rollback_id + ":host-activation",
+            "state": "requested",
+            "version": OLD,
+        },
+    }
+    record = deployer.state()
+    record["runtime_deployment"] = rollback
+    record["pending"] = NEW
+    record["host_active"] = OLD
+    deployer.atomic_json(deployer.STATE, record)
+    monkeypatch.setattr(
+        deployer,
+        "migration_status",
+        lambda version: {
+            "version": version,
+            "current_head": "head",
+            "target_head": "head",
+        },
+    )
+    return rollback_id, manual
+
+
+def test_unactivated_supersession_dry_run_and_archive(
+    host: Host, monkeypatch: pytest.MonkeyPatch
+):
+    rollback_id, manual = _unactivated_supersession_fixture(host, monkeypatch)
+    before = Path(deployer.STATE).read_bytes()
+    preview = deployer.reconcile_unactivated_supersession(rollback_id, dry_run=True)
+    assert preview["status"] == "dry_run_validated"
+    assert preview["proposed"]["clear_pending"] == NEW
+    assert Path(deployer.STATE).read_bytes() == before
+    result = deployer.reconcile_unactivated_supersession(rollback_id)
+    assert result["status"] == "reconciled_superseded"
+    saved = deployer.state()
+    assert saved["pending"] is None
+    assert "runtime_deployment" not in saved
+    assert saved["active"] == saved["host_active"] == manual
+    assert saved["canonical_runtime_version"] == OTHER
+    assert (
+        saved["runtime_deployment_history"][-1]["journal"]["superseded"]["id"]
+        == "a" * 32
+    )
+    assert (
+        deployer.reconcile_unactivated_supersession(rollback_id)["status"]
+        == "already_reconciled"
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["pending", "activation", "receipt", "old_runtime", "migration"]
+)
+def test_unactivated_supersession_refuses_unproven_state(
+    host: Host, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    rollback_id, _manual = _unactivated_supersession_fixture(host, monkeypatch)
+    record = deployer.state()
+    if failure == "pending":
+        record["pending"] = None
+    elif failure == "activation":
+        record["runtime_deployment"]["host_activation"]["state"] = "complete"
+    elif failure == "receipt":
+        record["runtime_deployment"]["steps"]["stage"]["receipt"]["result"][
+            "version"
+        ] = NEW
+    elif failure == "old_runtime":
+        host.processes["exec-prior-2"]["version"] = OLD
+    else:
+        monkeypatch.setattr(
+            deployer,
+            "migration_status",
+            lambda version: {
+                "version": version,
+                "current_head": "later",
+                "target_head": "head",
+            },
+        )
+    deployer.atomic_json(deployer.STATE, record)
+    before = Path(deployer.STATE).read_bytes()
+    with pytest.raises(RuntimeError):
+        deployer.reconcile_unactivated_supersession(rollback_id)
+    assert Path(deployer.STATE).read_bytes() == before
 
 
 def test_reconcile_superseded_manual_accepts_manual_binary_without_acceptance_receipt(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ):
-    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     executable = host.releases / manual / "dist/nebula-core"
     assert not (host.releases / manual / "simulation-acceptance.json").exists()
     result = deployer.reconcile_superseded_manual_deployment(
@@ -777,7 +1073,9 @@ def test_reconcile_superseded_manual_accepts_manual_binary_without_acceptance_re
 def test_reconcile_superseded_manual_refuses_live_executable_mismatch(
     host: Host, monkeypatch: pytest.MonkeyPatch, failure: str
 ):
-    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     executable = host.releases / manual / "dist/nebula-core"
     live_executable = deployer.PROC_ROOT / str(host.pid) / "exe"
     if failure == "path":
@@ -804,7 +1102,9 @@ def test_reconcile_superseded_manual_refuses_live_executable_mismatch(
 def test_reconcile_superseded_manual_requires_explicit_degraded_acceptance(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ):
-    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     original_status = host.status
 
     def degraded_status() -> dict:
@@ -813,7 +1113,9 @@ def test_reconcile_superseded_manual_requires_explicit_degraded_acceptance(
         return status
 
     monkeypatch.setattr(host, "status", degraded_status)
-    monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (host.health(), host.status()))
+    monkeypatch.setattr(
+        deployer, "read_supervisor_health", lambda: (host.health(), host.status())
+    )
     with pytest.raises(RuntimeError, match="Current authenticated Core health"):
         deployer.reconcile_superseded_manual_deployment(
             deployment_id, manual_prefix=prefix
@@ -832,19 +1134,35 @@ def test_reconcile_superseded_manual_requires_explicit_degraded_acceptance(
 def test_reconcile_superseded_manual_refuses_unproven_supersession(
     host: Host, monkeypatch: pytest.MonkeyPatch, unsafe: str
 ):
-    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     if unsafe == "old_resident":
-        host.processes["old-leftover"] = {"version": NEW, "role": "execution", "state": "ready"}
+        host.processes["old-leftover"] = {
+            "version": NEW,
+            "role": "execution",
+            "state": "ready",
+        }
     elif unsafe == "old_owner":
         host.projects["project-1"]["runtime_id"] = "old-leftover"
-        host.processes["old-leftover"] = {"version": NEW, "role": "execution", "state": "ready"}
+        host.processes["old-leftover"] = {
+            "version": NEW,
+            "role": "execution",
+            "state": "ready",
+        }
     elif unsafe == "settlement":
         record = deployer.state()
-        record["runtime_deployment"]["steps"]["target"]["settled"]["evidence"]["target_execution_version"] = OLD
+        record["runtime_deployment"]["steps"]["target"]["settled"]["evidence"][
+            "target_execution_version"
+        ] = OLD
         deployer.atomic_json(deployer.STATE, record)
     else:
         if unsafe == "api_mismatch":
-            host.processes["api-old"] = {"version": OLD, "role": "api", "state": "ready"}
+            host.processes["api-old"] = {
+                "version": OLD,
+                "role": "api",
+                "state": "ready",
+            }
             host.api_runtime = "api-old"
         else:
             monkeypatch.setattr(deployer, "read_supervisor_health", lambda: (None, []))
@@ -858,10 +1176,15 @@ def test_reconcile_superseded_manual_refuses_unproven_supersession(
 def test_reconcile_superseded_manual_refuses_receipt_prefix_mismatch(
     host: Host, monkeypatch: pytest.MonkeyPatch
 ):
-    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     wrong_prefix = "20261116-ffffffff"
     for path in Path(deployer.DEPLOYMENT_RECORDS).glob(f"{prefix}-*.json"):
-        (Path(deployer.DEPLOYMENT_RECORDS) / path.name.replace(prefix, wrong_prefix, 1)).write_text(path.read_text())
+        (
+            Path(deployer.DEPLOYMENT_RECORDS)
+            / path.name.replace(prefix, wrong_prefix, 1)
+        ).write_text(path.read_text())
     with pytest.raises(RuntimeError, match="later release"):
         deployer.reconcile_superseded_manual_deployment(
             deployment_id, manual_prefix=wrong_prefix
@@ -871,12 +1194,19 @@ def test_reconcile_superseded_manual_refuses_receipt_prefix_mismatch(
 
 @pytest.mark.parametrize(
     "inventory_field",
-    ["resident_versions", "project_runtime_version", "process_version", "process_runtime_version"],
+    [
+        "resident_versions",
+        "project_runtime_version",
+        "process_version",
+        "process_runtime_version",
+    ],
 )
 def test_reconcile_superseded_manual_refuses_old_runtime_package_identity(
     host: Host, monkeypatch: pytest.MonkeyPatch, inventory_field: str
 ):
-    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(host, monkeypatch)
+    deployment_id, prefix, _manual, _legacy = _superseded_manual_fixture(
+        host, monkeypatch
+    )
     original_read = deployer.read_supervisor_health
     old_package_version = package(NEW)
 
@@ -927,9 +1257,7 @@ def test_reconciled_manual_release_is_a_verified_baseline_for_later_promotion(
     # Before reconciliation the manual release has no managed acceptance.
     with pytest.raises(FileNotFoundError):
         REAL_RUNTIME_RELEASE(manual)
-    deployer.reconcile_superseded_manual_deployment(
-        deployment_id, manual_prefix=prefix
-    )
+    deployer.reconcile_superseded_manual_deployment(deployment_id, manual_prefix=prefix)
     _restore_real_release_verification(monkeypatch)
     manifest_sha256 = hashlib.sha256(
         (release / "nebula-runtime.json").read_bytes()
@@ -954,9 +1282,7 @@ def test_reconciled_manual_release_refuses_changed_files(
     deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
         host, monkeypatch
     )
-    deployer.reconcile_superseded_manual_deployment(
-        deployment_id, manual_prefix=prefix
-    )
+    deployer.reconcile_superseded_manual_deployment(deployment_id, manual_prefix=prefix)
     _restore_real_release_verification(monkeypatch)
     release = host.releases / manual
     if tampered == "executable":
@@ -975,9 +1301,7 @@ def test_reconciled_manual_identity_does_not_apply_to_other_releases(
     deployment_id, prefix, manual, _legacy = _superseded_manual_fixture(
         host, monkeypatch
     )
-    deployer.reconcile_superseded_manual_deployment(
-        deployment_id, manual_prefix=prefix
-    )
+    deployer.reconcile_superseded_manual_deployment(deployment_id, manual_prefix=prefix)
     _restore_real_release_verification(monkeypatch)
     assert deployer.reconciled_manual_release(manual) is not None
     assert deployer.reconciled_manual_release(NEW) is None
@@ -1456,3 +1780,17 @@ def test_successor_reads_original_retirement_receipt_before_holding(
     assert len(host.actions("retire")) == len(
         [item for item in before if item[1] == "retire"]
     ) + (1 if retirement_proven else 0)
+
+
+def test_uncertain_target_is_settled_when_core_refuses_to_reconcile_it(host: Host):
+    """Core answers 409 for a target change it cannot prove; the deployer
+    keeps the uncertain receipt and settles the step from deployment status."""
+    host.faults["target_execution"] = ["uncertain_after_effect"]
+    with pytest.raises(RuntimeError, match="uncertain"):
+        deployer.promote()
+    assert host.status()["target_execution_version"] == NEW
+    promote_until_converged(host)
+    assert len(host.actions("target_execution")) == 1
+    step = deployer.state()["runtime_deployment"]["steps"]["target"]
+    assert step["receipt"]["state"] == "uncertain"
+    assert step["settled"]["evidence"]["target_execution_version"] == NEW

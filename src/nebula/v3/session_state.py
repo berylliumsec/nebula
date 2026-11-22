@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .stored_entities import decode_stored
 from .chat_turn_headers import ChatTurnHeader, session_turn_headers
 from .database import EntityRow, OperationEventRow, SessionProjectionRow
 from .domain import (
@@ -141,7 +142,7 @@ async def _session_approvals(
     for statement in statements:
         for row in await database.scalars(statement):
             if row.id not in found and row.engagement_id == session.engagement_id:
-                found[row.id] = Approval.model_validate(row.payload)
+                found[row.id] = decode_stored(Approval, row.payload)
     return list(found.values())
 
 
@@ -151,7 +152,7 @@ async def _project(
     row = await database.get(EntityRow, session_id)
     if row is None or row.kind != ChatSession.entity_kind:
         raise NotFoundError(f"chat session not found: {session_id}")
-    session = ChatSession.model_validate(row.payload)
+    session = decode_stored(ChatSession, row.payload)
     # The read uses the same transaction as the cached watermark assignment.
     # Turn rows hold whole tool histories; this poll needs only their status
     # fields, which revision-keyed headers provide without parsing payloads.
@@ -168,7 +169,7 @@ async def _project(
         [turn.approval_id for turn in turns if turn.approval_id],
     )
     questions = [
-        HarnessInteraction.model_validate(row.payload)
+        decode_stored(HarnessInteraction, row.payload)
         for row in (
             await database.scalars(
                 select(EntityRow).where(
@@ -180,7 +181,7 @@ async def _project(
         )
     ]
     harnesses = {
-        row.id: HarnessTurn.model_validate(row.payload)
+        row.id: decode_stored(HarnessTurn, row.payload)
         for row in (
             await database.scalars(
                 select(EntityRow).where(
@@ -307,7 +308,7 @@ async def _project(
         # Only an interrupted turn needs its full recovery record read.
         interrupted = await database.get(EntityRow, turn.id)
         resumes = interrupted is not None and core_resumes_interrupted_turn(
-            ChatTurn.model_validate(interrupted.payload)
+            decode_stored(ChatTurn, interrupted.payload)
         )
         execution = "recovering" if resumes else "needs_stop"
     if harness and execution not in TERMINAL:
@@ -349,7 +350,7 @@ async def _project(
     if session.harness_profile_id:
         profile_row = await database.get(EntityRow, session.harness_profile_id)
         profile = (
-            HarnessProfile.model_validate(profile_row.payload)
+            decode_stored(HarnessProfile, profile_row.payload)
             if profile_row and profile_row.kind == HarnessProfile.entity_kind
             else None
         )

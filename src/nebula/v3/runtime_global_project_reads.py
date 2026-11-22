@@ -11,6 +11,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import aliased
 
+from .stored_entities import decode_stored
+from .butler_board import butler_board_router
+from .file_attribution import file_attribution_router
 from .chat_turn_headers import pending_engagement_turn_headers
 from .conditional_reads import conditional, content_etag
 from .linked_project_chats import (
@@ -195,6 +198,14 @@ def mount_global_project_reads(
     app.include_router(
         linked_project_chats_router(store), prefix="/api/v1", dependencies=dependencies
     )
+    app.include_router(
+        butler_board_router(store), prefix="/api/v1", dependencies=dependencies
+    )
+    # SQL-only: an inline patch the activity record cut short is reported
+    # without line counts here, since this worker never opens artifact files.
+    app.include_router(
+        file_attribution_router(store), prefix="/api/v1", dependencies=dependencies
+    )
 
     # Deployment inventory reads (the deploy gate, and Butler's pause and
     # resume checks) cover every project, including those without a worker.
@@ -356,7 +367,7 @@ def mount_global_project_reads(
         )
         async with store.database.session() as database:
             page = [
-                ChatMessage.model_validate(row.payload)
+                decode_stored(ChatMessage, row.payload)
                 for row in (await database.scalars(statement))
             ]
         has_more = len(page) > limit

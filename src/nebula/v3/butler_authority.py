@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 from fastapi import APIRouter, HTTPException
 from pydantic import Field, model_validator
 
+from .stored_entities import decode_stored
 from .butler_oversight import (
     ButlerEventPayload,
     ButlerEvidenceRef,
@@ -53,7 +54,6 @@ if TYPE_CHECKING:
 Authority = Literal["watch", "steer", "delegate", "act"]
 DelegateAction = Literal["pause_urgent_machine_blocker", "force_one_task_plan"]
 SUPPORTED_ACTIONS = (
-    "request_parent_status",
     "request_parent_plan_reassessment",
     "pause_urgent_machine_blocker",
     "force_one_task_plan",
@@ -92,7 +92,7 @@ class AuthorityWrite(NebulaModel):
 def _effective_actions(policy: ButlerAuthorityPolicy | None) -> list[str]:
     if policy is None or policy.authority == "watch":
         return []
-    actions = ["request_parent_status", "request_parent_plan_reassessment"]
+    actions = ["request_parent_plan_reassessment"]
     if policy.authority in {"delegate", "act"}:
         actions.extend(policy.delegate_actions)
     if policy.authority == "act":
@@ -124,7 +124,7 @@ async def _entity(
         return None
     if row.kind != model.entity_kind:
         raise ConflictError("Butler action entity kind changed")
-    return model.model_validate(row.payload)
+    return decode_stored(model, row.payload)
 
 
 class ButlerAuthorityService:
@@ -331,12 +331,6 @@ class ButlerAuthorityService:
         ) = None
         report_id: str | None = None
         if (
-            event.event_type == "goal.progress_overdue"
-            and decision.choice in {"ask", "steer"}
-            and payload.verification_state == "core_observed"
-        ):
-            kind = "request_parent_status"
-        elif (
             event.event_type == "goal.plan_changed"
             and decision.choice == "steer"
             and payload.verification_state == "core_observed"

@@ -107,6 +107,8 @@ class MemorySettingsRequest(NebulaModel):
 
 class HostMemoryControl:
     def __init__(self, host, recovery, token):
+        from .host_memory_client import HostMemoryRunner
+
         self.host, self.store, self.token = host, recovery.store, token
         self.service = _DelegatedBudgets(host.coordinator, recovery.budgets)
         self.app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -121,6 +123,7 @@ class HostMemoryControl:
             runner_factory=recovery.runner_for_profile,
             apply_running=self.apply_host_job,
             register_running_apply=False,
+            host_runner=HostMemoryRunner.from_environment(),
         )
 
         @self.app.exception_handler(MemoryBudgetError)

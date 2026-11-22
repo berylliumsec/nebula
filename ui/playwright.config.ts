@@ -2,7 +2,6 @@ import {parallelCoreSpecs} from "../scripts/playwright_entry_args.mjs";
 import conversationOrder from "./playwright.conversation-order.config";
 import applicationModel from "./playwright.application-model.config";
 import applicationReopen from "./playwright.application-reopen.config";
-import catchUp from "./playwright.catch-up.config";
 import hostMode from "./playwright.host-mode.config";
 import projectDeletion from "./playwright.project-deletion.config";
 import workspaceQuota from "./playwright.workspace-quota.config";
@@ -36,7 +35,6 @@ const fixtureConfigs = {
   "tests/assistant-browser-viewer.spec.ts": applicationModel,
   "tests/working-knowledge.spec.ts": applicationModel,
   "tests/application-reopen.spec.ts": applicationReopen,
-  "tests/catch-up.spec.ts": catchUp,
   "tests/host-mode.spec.ts": hostMode,
   "tests/project-deletion.spec.ts": projectDeletion,
   "tests/workspace-quota.spec.ts": workspaceQuota,
@@ -156,6 +154,11 @@ export default selectedFixtures.find(Boolean) ?? defineConfig({
       grep: /phone shell |assistant popup|stabilization Nebula Voice|Terminal opens Assistant beside the live shell|Assistant opens the live terminal beside the chat|browser Assistant |assistant upgrade|universal search opens|VPN settings keep|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell|Phosphor icon pack|chat companions reveal Code, Browser, and Notes from the conversation|notebook Workbench tab and chat companion keep the same Python file/,
 
       use: { ...devices["iPhone 13"], viewport: { width: 430, height: 932 } },
+    },
+    // Work board geometry in desktop WebKit; the assistant-real projects cover Chromium and phone WebKit.
+    {
+      name: "assistant-real-webkit-desktop", testMatch: "**/work-import.spec.ts", grep: /work hub board layout /,
+      use: { ...devices["Desktop Safari"], viewport: { width: 1440, height: 900 } },
     },
     {
       name: "real-core",

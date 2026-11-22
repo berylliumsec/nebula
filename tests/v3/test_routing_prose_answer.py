@@ -37,6 +37,7 @@ from nebula.v3.native_hooks import discover_native_hooks, snapshot_native_hook
 from tests.v3.test_chat import _write_native_hook
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared
 from tests.v3.test_native_hook_turn_ends import PAYLOAD_HOOK
+from tests.v3.revision_window import before_update
 
 GLM = "z-ai/glm-5.3-flash"
 
@@ -332,6 +333,60 @@ async def test_goal_turn_answered_by_routing_is_charged_once_and_completes(tmp_p
     charged = await store.get(ChatGoal, goal.id)
     assert charged.usage.total_tokens == 5_000
     assert charged.status == ChatGoalStatus.PAUSED
+
+
+async def test_goal_turn_completes_when_a_subagent_charge_lands_mid_charge(tmp_path):
+    """A subagent debits the shared goal inside the parent turn's own charge.
+
+    The parent turn failed with "revision conflict on chat_goals" and its
+    response went uncharged. It now completes, and both debits are kept.
+    """
+
+    store, service, prepared, _, _seen = await _glm_turn(
+        tmp_path, [_answer("Hello!", total_tokens=7), _synthesis("Unused.")]
+    )
+    goal = await store.create(
+        ChatGoal(
+            id="goal",
+            engagement_id="project",
+            session_id="session",
+            objective="Greet the operator",
+            completion_criteria=["The operator was greeted"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    prepared.turn = await store.update(
+        ChatTurn,
+        "turn",
+        {"goal_id": goal.id},
+        expected_revision=prepared.turn.revision,
+    )
+
+    async def subagent_charge():
+        current = await store.get(ChatGoal, goal.id)
+        await store.update(
+            ChatGoal,
+            goal.id,
+            {
+                "usage": current.usage.model_copy(
+                    update={"total_tokens": current.usage.total_tokens + 100}
+                )
+            },
+            expected_revision=current.revision,
+        )
+
+    window = before_update(
+        store, "_charge_goal", subagent_charge, model=ChatGoal, direct=False
+    )
+
+    completion = await service.complete(prepared)
+
+    assert window.fired
+    assert completion.message.content == "Hello!"
+    turn = await store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert turn.error is None
+    assert (await store.get(ChatGoal, goal.id)).usage.total_tokens == 107
 
 
 async def test_routing_answer_runs_the_completed_hook_once(tmp_path):

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 import fcntl
@@ -33,11 +34,21 @@ import time
 import zipfile
 from uuid import uuid4
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from urllib.error import HTTPError
+from http.client import HTTPException
 
-from nebula_deploy_gate import CoreClient, blockers, service_token
+from nebula_deploy_gate import (
+    TRANSIENT_BUDGET_SECONDS,
+    TRANSIENT_FIRST_DELAY_SECONDS,
+    TRANSIENT_MAX_DELAY_SECONDS,
+    CoreClient,
+    blockers,
+    service_token,
+    tolerate_transient,
+    transient_reason,
+)
 from nebula_staged_deployer import StagedDeployer
 from nebula_postgres_backup import (
     BACKUP_FILES,
@@ -71,6 +82,10 @@ HELPER = "/home/simulation/.local/bin/simulation-git-credential"
 POETRY = "/home/simulation/.local/share/poetry-2.1.3/bin/poetry"
 PATH = "/home/simulation/.cargo/bin:/home/simulation/.local/bin:/usr/local/bin:/usr/bin:/bin"
 SERVICE = "nebula-core.service"
+# Holds the public listener across supervisor generations when installed.
+SOCKET = "nebula-core.socket"
+SOCKET_LISTEN = "127.0.0.1:8000 (Stream)"
+LISTEN_FD_ARGUMENT = re.compile(r"(?:^|\s)--listen-fd(?:=|\s+)3(?:\s|;|$)")
 EDGE = "nebula-lan-tls.service"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 GITHUB_REPOSITORY = "berylliumsec/nebula"
@@ -78,16 +93,100 @@ GITHUB_API = "https://api.github.com"
 CI_ARTIFACT_LIMIT = 1024 * 1024
 CI_RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+# Acceptance records written before required jobs matched by family listed
+# each terminal-client matrix job by its exact GitHub name. Validation accepts
+# only this exact legacy expansion in place of the "terminal-client" family.
+LEGACY_TERMINAL_CLIENT_CI_JOBS = frozenset(
+    f"terminal-client ({runner}, {version})"
+    for runner in ("ubuntu-latest", "macos-15")
+    for version in ("3.11", "3.12", "3.13")
+)
 DEPLOYMENT_HISTORY_LIMIT = 32
 SUPERVISOR_STOP_GRACE_SECONDS = 30
 SUPERVISOR_EXIT_SECONDS = 30
+# A project's old worker gets this long to reach a safe handoff boundary.
+# After it, the deployer stops that worker and adopts Core's crash-style
+# recovery of its projects, so a deployment never waits on a project.
+HANDOFF_GRACE_SECONDS = 180
+# How long a stopped worker's projects may take to recover on the target.
+HANDOFF_RECOVERY_WAIT_SECONDS = 300
 HOST_START_ATTEMPTS = 16
 HOST_RESTART_DELAY_SECONDS = 5
 HOST_QUIET_WAIT_SECONDS = 300
+# How long a host swap waits for Core's in-flight deployment operations; the
+# supervisor's stop would otherwise wait for them, past its stop grace.
+HOST_OPERATION_WAIT_SECONDS = 120
+HOST_OPERATION_POLL_SECONDS = 2
 HOST_QUIET_POLL_SECONDS = 5
+# Workers built from this commit or later wait out a supervisor replacement
+# for host reads (#1023), so a turn may safely cross the host restart.
+HOST_RECONNECT_COMMIT = "445c5067072df94daa8100340e1c54ee76b3d35c"
 # Longer than an owner lease (30 s) plus Core's dead-owner recovery pass, so
 # an owner that recovers on its own is never reported.
 HOST_UNAVAILABLE_OWNER_SECONDS = 60
+# Project holds (Core #1232): turns may finish for the grace period, then
+# Core stops them. The wait covers the grace, Core's 15 s hold pass and the
+# stop settling.
+PROJECT_HOLD_GRACE_SECONDS = 180
+PROJECT_HOLD_WAIT_SECONDS = 600
+PROJECT_HOLD_POLL_SECONDS = 5
+HOST_RESTART_HOLD_PREFIX = "host-restart-"
+# A promote or cycle that finds a prebuild holding the deploy lock waits this
+# long for it: the prebuild is producing the release that promote needs.
+PREBUILD_LOCK_WAIT_SECONDS = 1800
+LOCK_POLL_SECONDS = 2
+
+
+class StepTimings:
+    """Wall-clock seconds for each deployment step, reported as it ends.
+
+    ``begin`` ends the running step and starts the next one. Use ``run`` around
+    the whole operation: a step that raises is still recorded and reported, so
+    a failed run shows how far it got and how long each step took.
+    """
+
+    def __init__(self, label: str, clock=time.monotonic) -> None:
+        self.label = label
+        self.clock = clock
+        self.started = clock()
+        self.steps: list[dict[str, Any]] = []
+        self._current: tuple[str, float] | None = None
+
+    def begin(self, name: str) -> None:
+        self.end()
+        self._current = (name, self.clock())
+
+    def end(self, *, failed: bool = False) -> None:
+        if self._current is None:
+            return
+        name, started = self._current
+        self._current = None
+        seconds = round(self.clock() - started, 1)
+        entry: dict[str, Any] = {"step": name, "seconds": seconds}
+        if failed:
+            entry["failed"] = True
+        self.steps.append(entry)
+        print(
+            f"{self.label}: {name} {'failed after' if failed else 'took'} {seconds}s",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    @contextmanager
+    def run(self):
+        try:
+            yield self
+        except BaseException:
+            self.end(failed=True)
+            raise
+        self.end()
+
+    def record(self) -> dict[str, Any]:
+        self.end()
+        return {
+            "steps": list(self.steps),
+            "total_seconds": round(self.clock() - self.started, 1),
+        }
 
 
 class _LegacyAttempt:
@@ -265,9 +364,8 @@ def candidate(sha: str) -> Path:
     return directory
 
 
-def selected_plan(
-    directory: Path, previous: str
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def selected_plan(directory: Path, previous: str) -> dict[str, Any]:
+    """Validate every commit's diff-bound selection and record their union."""
     build = directory / "build"
     build.mkdir(exist_ok=True)
     selected = build / "simulation-test-selection.json"
@@ -355,95 +453,16 @@ def selected_plan(
         raise RuntimeError(
             "candidate deployment history did not reach its exact commit"
         )
-    if overlaps:
-        review = ROOT / "cumulative-reviews" / f"{previous}-{head}.json"
-        if not review.is_file() or review.is_symlink():
-            raise RuntimeError(
-                f"overlapping selections require an exact cumulative review: {overlaps}"
-            )
-        receipt = build / "simulation-cumulative-selection-receipt.json"
-        reviewed = json.loads(
-            run(
-                "/usr/bin/python3",
-                "scripts/test_selection.py",
-                "--baseline",
-                previous,
-                "--candidate",
-                head,
-                "--plan",
-                str(review),
-                "--output",
-                str(receipt),
-                cwd=directory,
-                capture=True,
-            )
-        )
-        if reviewed.get("coverage_review_required") or not reviewed.get(
-            "change_digest"
-        ):
-            raise RuntimeError("cumulative selection failed diff-bound validation")
-        if (
-            reviewed.get("baseline_commit") != previous
-            or reviewed.get("candidate_commit") != head
-            or reviewed.get("reviewed_commits") != commits
-        ):
-            raise RuntimeError(
-                "cumulative selection does not name the exact deployment history"
-            )
-        for kind in ("python", "frontend", "native", "playwright"):
-            if reviewed[kind] != plan[kind]:
-                raise RuntimeError(
-                    f"cumulative {kind} selection differs from reviewed commit union"
-                )
-        plan["expected_tests"] = reviewed["expected_tests"]
-        plan["reason"] = reviewed["reason"]
-        plan["exclusions"] = reviewed["exclusions"]
-        plan["cumulative_review"] = str(review)
-        plan["cumulative_change_digest"] = reviewed["change_digest"]
-        plan["overlaps"] = overlaps
-    else:
-        plan["reason"] = (
-            f"Combined focused selections from {len(commits)} reviewed main commits."
-        )
-        plan["exclusions"] = (
-            "Each commit keeps its own diff-bound review; no duplicate selectors."
-        )
+    # Tests run in CI, once per commit; a selection repeated by later commits
+    # is recorded, not re-reviewed, because nothing is counted or run here.
+    plan["overlaps"] = overlaps
+    plan["reason"] = (
+        f"Combined focused selections from {len(commits)} reviewed main commits; "
+        "CI ran each commit's selection."
+    )
+    plan["exclusions"] = "Each commit keeps its own diff-bound review."
     atomic_json(selected, plan)
-    impact = build / "simulation-playwright-selection.json"
-    args = [
-        "/usr/bin/python3",
-        "scripts/playwright_impact.py",
-        "select",
-        "--manifest",
-        "ui/playwright-impact.json",
-        "--baseline",
-        previous,
-        "--candidate",
-        "HEAD",
-        "--review-reason",
-        f"{plan['reason']} {plan['exclusions']}",
-        "--output",
-        str(impact),
-        "--receipt",
-        str(build / "simulation-playwright-receipt.md"),
-    ]
-    for selector in plan["playwright"]:
-        qualified = (
-            selector
-            if selector.startswith(("area:", "entry:", "project:"))
-            else f"entry:{selector}"
-        )
-        args += ["--selection", qualified]
-    if not plan["playwright"]:
-        args += ["--selection", "none"]
-    run(*args, cwd=directory, capture=True)
-    selected_impact = json.loads(impact.read_text())
-    if selected_impact.get("coverage_review_required"):
-        raise RuntimeError("Playwright impact selection requires review")
-    entries = selected_impact.get("include")
-    if not isinstance(entries, list):
-        raise RuntimeError("Playwright selection is malformed")
-    return plan, entries
+    return plan
 
 
 class _StripAuthorizationRedirect(HTTPRedirectHandler):
@@ -681,26 +700,50 @@ def selected_ci_jobs(
     return required
 
 
+def ci_job_in_family(name: str, family: str) -> bool:
+    """Return whether a GitHub job name belongs to a required job family.
+
+    GitHub names each matrix instance "<job name> (<matrix values>)", so a
+    family is the exact job name or that name followed by " (". A bare prefix
+    never matches, which keeps "python (3.12)" apart from "python (3.11)".
+    """
+    return name == family or name.startswith(f"{family} (")
+
+
 def require_ci_jobs(jobs: list[dict[str, Any]], required: set[str]) -> dict[str, str]:
-    conclusions: dict[str, list[tuple[str | None, str | None]]] = {}
-    for job in jobs:
-        if not isinstance(job, dict) or not isinstance(job.get("name"), str):
-            continue
-        conclusions.setdefault(job["name"], []).append(
-            (job.get("status"), job.get("conclusion"))
-        )
-    missing = sorted(
-        name
-        for name in required
-        if not conclusions.get(name)
-        or any(
-            status != "completed" or conclusion != "success"
-            for status, conclusion in conclusions[name]
-        )
-    )
+    named = [
+        job
+        for job in jobs
+        if isinstance(job, dict) and isinstance(job.get("name"), str)
+    ]
+    missing = []
+    for family in sorted(required):
+        members = [job for job in named if ci_job_in_family(job["name"], family)]
+        if not members or any(
+            job.get("status") != "completed" or job.get("conclusion") != "success"
+            for job in members
+        ):
+            missing.append(family)
     if missing:
         raise RuntimeError(f"CI selected jobs did not succeed: {', '.join(missing)}")
     return {name: "success" for name in sorted(required)}
+
+
+def recorded_ci_jobs_match(recorded: Any, expected: dict[str, str]) -> bool:
+    """Compare a recorded selected-job map with the recomputed expectation.
+
+    Records written before family matching may list the six exact
+    terminal-client matrix jobs instead of the "terminal-client" family.
+    """
+    if recorded == expected:
+        return True
+    if "terminal-client" not in expected or not isinstance(recorded, dict):
+        return False
+    legacy = {
+        name: value for name, value in expected.items() if name != "terminal-client"
+    }
+    legacy.update(dict.fromkeys(LEGACY_TERMINAL_CLIENT_CI_JOBS, "success"))
+    return recorded == legacy
 
 
 def first_parent_commits(directory: Path, *, previous: str, sha: str) -> list[str]:
@@ -843,10 +886,66 @@ def git_tree(directory: Path, sha: str) -> str:
     return tree
 
 
-def require_merged_pr_for_commit(
-    *, head_sha: str, base_sha: str, merge_sha: str, directory: Path
-) -> dict[str, Any]:
-    pulls = github_json_value(f"commits/{head_sha}/pulls")
+def require_pr_merge_shape(
+    directory: Path, *, merge_sha: str, base_sha: str, head_sha: str
+) -> str:
+    """Prove that a PR head tested exactly the tree main received.
+
+    A merge commit must have exactly ``[base, head]`` as parents. A squash
+    merge has one parent, ``base``; its PR head must contain that parent and
+    have the identical tree, so the head's diff from ``base`` is exactly the
+    squash commit's diff. Either way the head tree equals the main tree.
+    Returns the shape, "merge" or "squash".
+    """
+    parents = commit_parents(directory, merge_sha)
+    if parents == [base_sha, head_sha]:
+        shape = "merge"
+    elif parents == [base_sha]:
+        try:
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "merge-base",
+                "--is-ancestor",
+                base_sha,
+                head_sha,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(
+                "Squash-merged PR head does not contain its main parent"
+            ) from error
+        shape = "squash"
+    else:
+        raise RuntimeError("PR CI evidence does not match the merge commit parents")
+    if git_tree(directory, head_sha) != git_tree(directory, merge_sha):
+        raise RuntimeError("PR head tree differs from the exact main merge tree")
+    return shape
+
+
+def ensure_pr_head(directory: Path, head_sha: str, pull_number: int) -> None:
+    """Fetch a merged PR's head when its branch is gone from this clone."""
+    try:
+        run("git", "-C", str(directory), "cat-file", "-e", f"{head_sha}^{{commit}}")
+        return
+    except RuntimeError:
+        # diagnostic-expected: absent locally; fetched from the PR ref below.
+        pass
+    run(
+        "git",
+        "-C",
+        str(directory),
+        "fetch",
+        "--no-tags",
+        "origin",
+        f"refs/pull/{pull_number}/head",
+    )
+    run("git", "-C", str(directory), "cat-file", "-e", f"{head_sha}^{{commit}}")
+
+
+def squash_merged_pr_head(directory: Path, merge_sha: str) -> tuple[str, int]:
+    """The head commit and number of the one PR squash-merged as ``merge_sha``."""
+    pulls = github_json_value(f"commits/{merge_sha}/pulls")
     if not isinstance(pulls, list):
         raise RuntimeError("GitHub associated pull request listing is malformed")
     matches = [
@@ -856,8 +955,38 @@ def require_merged_pr_for_commit(
         and item.get("state") == "closed"
         and item.get("merged_at")
         and item.get("merge_commit_sha") == merge_sha
+        and isinstance(item.get("head"), dict)
+        and SHA.fullmatch(str(item["head"].get("sha", "")))
+        and isinstance(item.get("number"), int)
+        and item["number"] > 0
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            "Squash commit is not bound to one exact merged pull request"
+        )
+    head_sha = matches[0]["head"]["sha"]
+    ensure_pr_head(directory, head_sha, matches[0]["number"])
+    return head_sha, matches[0]["number"]
+
+
+def require_merged_pr_for_commit(
+    *, head_sha: str, base_sha: str, merge_sha: str, directory: Path
+) -> dict[str, Any]:
+    pulls = github_json_value(f"commits/{head_sha}/pulls")
+    if not isinstance(pulls, list):
+        raise RuntimeError("GitHub associated pull request listing is malformed")
+    squash = len(commit_parents(directory, merge_sha)) == 1
+    matches = [
+        item
+        for item in pulls
+        if isinstance(item, dict)
+        and item.get("state") == "closed"
+        and item.get("merged_at")
+        and item.get("merge_commit_sha") == merge_sha
         and isinstance(item.get("base"), dict)
-        and item["base"].get("sha") == base_sha
+        # A squash PR's base may be an older main commit; the shape check
+        # below proves its head contains the exact main parent instead.
+        and (squash or item["base"].get("sha") == base_sha)
         and isinstance(item.get("head"), dict)
         and item["head"].get("sha") == head_sha
     ]
@@ -867,12 +996,9 @@ def require_merged_pr_for_commit(
         )
     if not isinstance(matches[0].get("number"), int) or matches[0]["number"] < 1:
         raise RuntimeError("Merged pull request identity is invalid")
-    parent_list = commit_parents(directory, merge_sha)
-    if len(parent_list) != 2 or parent_list != [base_sha, head_sha]:
-        raise RuntimeError("PR CI evidence does not match the merge commit parents")
-    merge_tree = git_tree(directory, merge_sha)
-    if git_tree(directory, head_sha) != merge_tree:
-        raise RuntimeError("PR head tree differs from the exact main merge tree")
+    require_pr_merge_shape(
+        directory, merge_sha=merge_sha, base_sha=base_sha, head_sha=head_sha
+    )
     return matches[0]
 
 
@@ -970,6 +1096,10 @@ def supplemental_artifact_files(
     return files, metadata, digest
 
 
+# GitHub shows at most this many characters of a job name.
+GITHUB_JOB_NAME_LIMIT = 100
+
+
 def validate_playwright_matrix_jobs(
     jobs: list[dict[str, Any]], include: list[dict[str, Any]]
 ) -> dict[str, str]:
@@ -982,7 +1112,16 @@ def validate_playwright_matrix_jobs(
             raise RuntimeError("Playwright matrix entry is malformed")
         return tuple(entry[field] for field in fields)
 
+    def names(lane: str, entry: dict[str, Any]) -> set[str]:
+        # GitHub names a matrix job "<lane> (<values in key order>)" and shows
+        # a name over 100 characters as its first 97 plus "...".
+        name = f"{lane} ({', '.join(str(entry[key]) for key in sorted(entry))})"
+        if len(name) <= GITHUB_JOB_NAME_LIMIT:
+            return {name}
+        return {name, name[: GITHUB_JOB_NAME_LIMIT - 3] + "..."}
+
     expected = Counter(signature(entry) for entry in include)
+    remaining = list(include)
     actual: Counter[tuple[str, ...]] = Counter()
     allowed_prefixes = {"playwright", "playwright-2", "playwright-3", "playwright-4"}
     for job in jobs:
@@ -994,11 +1133,21 @@ def validate_playwright_matrix_jobs(
             continue
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             raise RuntimeError("A selected Playwright matrix job did not succeed")
-        fields = name.partition(" (")[2].split(", ")
-        if len(fields) < 5:
+        # Each successful job accounts for one selected entry whose display
+        # name it carries. When truncation leaves several entries with the
+        # same name, as many successful jobs as entries are still required.
+        match = next(
+            (
+                index
+                for index, entry in enumerate(remaining)
+                if name in names(lane, entry)
+            ),
+            None,
+        )
+        if match is None:
             raise RuntimeError("GitHub Playwright job name lacks its matrix identity")
-        actual[tuple(fields[:5])] += 1
-    if actual != expected:
+        actual[signature(remaining.pop(match))] += 1
+    if actual != expected or remaining:
         raise RuntimeError(
             "Successful Playwright jobs do not cover every selected entry"
         )
@@ -1087,10 +1236,16 @@ def expected_pr_playwright_plan(
     selection: dict[str, Any],
     *,
     head_sha: str,
-    base_sha: str,
+    base_sha: str | None,
     directory: Path,
     trusted_baseline: str,
+    review_reason: str | None = None,
 ) -> tuple[dict[str, Any], str]:
+    """The trusted selector's plan for a reviewed browser selection.
+
+    A pull request run selects against its base; a run dispatched on an
+    exact main commit has no baseline and carries its operator's reason.
+    """
     with tempfile.TemporaryDirectory(prefix="nebula-pr-playwright-") as temporary:
         temporary_path = Path(temporary)
         script = temporary_path / "playwright_impact.py"
@@ -1117,7 +1272,11 @@ def expected_pr_playwright_plan(
         )
         output = temporary_path / "expected-plan.json"
         receipt = temporary_path / "expected-receipt.md"
-        reviewed_reason = f"{selection.get('reason', '')} Exclusions: {selection.get('exclusions', '')}"
+        reviewed_reason = (
+            review_reason
+            if review_reason is not None
+            else f"{selection.get('reason', '')} Exclusions: {selection.get('exclusions', '')}"
+        )
         selectors = [
             item
             if item.startswith(("area:", "entry:", "project:"))
@@ -1130,8 +1289,6 @@ def expected_pr_playwright_plan(
             "select",
             "--manifest",
             str(manifest),
-            "--baseline",
-            base_sha,
             "--candidate",
             head_sha,
             "--scope",
@@ -1143,6 +1300,8 @@ def expected_pr_playwright_plan(
             "--receipt",
             str(receipt),
         ]
+        if base_sha is not None:
+            args.extend(("--baseline", base_sha))
         for selector in selectors or ["none"]:
             args.extend(("--selection", selector))
         run(*args, cwd=directory)
@@ -1228,6 +1387,122 @@ def verify_pr_playwright_supplement(
     }
 
 
+def verify_commit_playwright_run(
+    run_id: str, *, commit: str, directory: Path, trusted_baseline: str
+) -> dict[str, Any]:
+    """Accept a Playwright run dispatched on exactly ``commit``.
+
+    For a squash merge whose pull request never ran its reviewed browser
+    selection, a successful ``playwright-impact.yml`` dispatch on the merged
+    commit itself is direct evidence. Its plan must equal the trusted
+    selector's plan for the commit's committed selection, and every selected
+    entry needs its own successful job.
+    """
+    if not CI_RUN_ID.fullmatch(run_id):
+        raise RuntimeError(
+            "Commit Playwright run id must be a positive decimal identifier"
+        )
+    run_info = github_json(f"actions/runs/{run_id}")
+    repository = run_info.get("repository")
+    if not isinstance(repository, dict):
+        repository = {}
+    if (
+        run_info.get("head_sha") != commit
+        or run_info.get("event") != "workflow_dispatch"
+        or run_info.get("status") != "completed"
+        or run_info.get("conclusion") != "success"
+        or str(repository.get("full_name", "")).lower() != GITHUB_REPOSITORY
+        or type(run_info.get("run_attempt")) is not int
+        or run_info.get("run_attempt") < 1
+        or run_info.get("html_url")
+        != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{run_id}"
+    ):
+        raise RuntimeError(
+            "Commit Playwright run is not a successful dispatch on the exact commit"
+        )
+    workflow_id = run_info.get("workflow_id")
+    if type(workflow_id) is not int or workflow_id < 1:
+        raise RuntimeError("Commit Playwright run has no valid workflow identity")
+    workflow = github_json(f"actions/workflows/{workflow_id}")
+    if (
+        workflow.get("path") != ".github/workflows/playwright-impact.yml"
+        or workflow.get("state") != "active"
+    ):
+        raise RuntimeError(
+            "Commit Playwright run did not use the pinned active workflow"
+        )
+    verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=commit)
+    files, artifact, artifact_digest = supplemental_artifact_files(
+        int(run_id),
+        "playwright-impact-receipt",
+        {"playwright-impact-plan.json", "playwright-impact-receipt.md"},
+    )
+    try:
+        received_plan = json.loads(files["playwright-impact-plan.json"])
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            "Commit Playwright artifact contains invalid JSON"
+        ) from error
+    if (
+        not isinstance(received_plan, dict)
+        or received_plan.get("candidate_sha") != commit
+        or received_plan.get("baseline_sha") is not None
+        or not isinstance(received_plan.get("review_reason"), str)
+        or not received_plan["review_reason"].strip()
+    ):
+        raise RuntimeError("Commit Playwright plan is not bound to the exact commit")
+    selection = json.loads(
+        run(
+            "git",
+            "-C",
+            str(directory),
+            "show",
+            f"{commit}:.github/test-selection.json",
+            capture=True,
+        )
+    )
+    if not isinstance(selection.get("playwright"), list) or not selection["playwright"]:
+        raise RuntimeError("Commit has no reviewed browser selection to prove")
+    expected_plan, expected_receipt = expected_pr_playwright_plan(
+        selection,
+        head_sha=commit,
+        base_sha=None,
+        directory=directory,
+        trusted_baseline=trusted_baseline,
+        review_reason=received_plan["review_reason"],
+    )
+    if (
+        expected_plan.get("coverage_review_required")
+        or not expected_plan.get("include")
+        or received_plan != expected_plan
+        or files["playwright-impact-receipt.md"].decode("utf-8") != expected_receipt
+    ):
+        raise RuntimeError(
+            "Commit Playwright artifact differs from the pinned selector result"
+        )
+    selected_jobs = validate_playwright_matrix_jobs(
+        github_run_jobs(int(run_id)), expected_plan["include"]
+    )
+    if artifact.get("expired") is not False:
+        raise RuntimeError("Commit Playwright artifact is expired")
+    return {
+        "source": "github-actions-commit-playwright",
+        "run_id": int(run_id),
+        "run_url": run_info["html_url"],
+        "run_attempt": run_info["run_attempt"],
+        "workflow_path": ".github/workflows/playwright-impact.yml",
+        "commit": commit,
+        "review_reason": received_plan["review_reason"],
+        "playwright_plan_sha256": hashlib.sha256(
+            json.dumps(expected_plan, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "artifact_sha256": artifact_digest,
+        "artifact_expires_at": artifact["expires_at"],
+        "selected_entries": expected_plan["include"],
+        "selected_jobs": selected_jobs,
+    }
+
+
 def verify_ci_acceptance(
     run_id: str,
     *,
@@ -1236,9 +1511,15 @@ def verify_ci_acceptance(
     directory: Path,
     trusted_baseline: str | None = None,
     supplemental_playwright: dict[str, Any] | None = None,
+    commit_playwright: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not CI_RUN_ID.fullmatch(run_id):
         raise RuntimeError("CI run id must be a positive decimal identifier")
+    if supplemental_playwright is not None and commit_playwright is not None:
+        raise RuntimeError("A commit's browser evidence has exactly one source")
+    browser_proven = (
+        supplemental_playwright is not None or commit_playwright is not None
+    )
     trusted_baseline = trusted_baseline or previous
     verify_ci_trust_inputs(directory, trusted_baseline=trusted_baseline, sha=sha)
     first_parent = run(
@@ -1293,14 +1574,13 @@ def verify_ci_acceptance(
         directory=directory,
         trusted_baseline=trusted_baseline,
     )
-    if bool(selection.get("playwright")) != (supplemental_playwright is not None):
+    if bool(selection.get("playwright")) != browser_proven:
         raise RuntimeError(
-            "Selected Playwright checks require exact merged-PR supplemental evidence"
+            "Selected Playwright checks require exact merged-PR or exact-commit evidence"
         )
     jobs = github_run_jobs(int(run_id))
     required_jobs = selected_ci_jobs(
-        selection,
-        supplemental_playwright_verified=supplemental_playwright is not None,
+        selection, supplemental_playwright_verified=browser_proven
     )
     selected_conclusions = require_ci_jobs(jobs, required_jobs)
     receipt = {
@@ -1318,7 +1598,166 @@ def verify_ci_acceptance(
     }
     if supplemental_playwright is not None:
         receipt["supplemental_pr_evidence"] = supplemental_playwright
+    if commit_playwright is not None:
+        receipt["commit_playwright_evidence"] = commit_playwright
     return receipt
+
+
+class CiEvidenceUnavailable(RuntimeError):
+    """A candidate commit has no usable CI evidence; prepare stops, nothing runs locally."""
+
+
+def _newest_successful_pr_run(workflow: str, head_sha: str, label: str) -> str:
+    listing = github_json(
+        f"actions/workflows/{workflow}/runs?"
+        f"head_sha={head_sha}&event=pull_request&per_page=50"
+    )
+    runs = [
+        item
+        for item in listing.get("workflow_runs", [])
+        if isinstance(item, dict)
+        and item.get("head_sha") == head_sha
+        and item.get("event") == "pull_request"
+    ]
+    succeeded = [
+        item
+        for item in runs
+        if item.get("status") == "completed" and item.get("conclusion") == "success"
+    ]
+    if not succeeded:
+        states = sorted(
+            {f"{item.get('status')}/{item.get('conclusion') or '-'}" for item in runs}
+        )
+        raise CiEvidenceUnavailable(
+            f"{label} has no successful pull request {workflow} run on its head "
+            f"{head_sha[:12]}"
+            + (f" (runs: {', '.join(states)})" if states else " (no run)")
+            + "; re-run it"
+        )
+    return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
+
+
+def _newest_successful_commit_playwright_run(commit: str) -> str | None:
+    listing = github_json(
+        "actions/workflows/playwright-impact.yml/runs?"
+        f"head_sha={commit}&event=workflow_dispatch&per_page=50"
+    )
+    succeeded = [
+        item
+        for item in listing.get("workflow_runs", [])
+        if isinstance(item, dict)
+        and item.get("head_sha") == commit
+        and item.get("event") == "workflow_dispatch"
+        and item.get("status") == "completed"
+        and item.get("conclusion") == "success"
+    ]
+    if not succeeded:
+        return None
+    return str(max(succeeded, key=lambda item: int(item.get("id", 0)))["id"])
+
+
+def discover_pr_supplement_run_ids(
+    directory: Path, *, previous: str, sha: str
+) -> tuple[list[str], list[str], dict[str, str]]:
+    """Find browser evidence for each Playwright-selected commit.
+
+    Push CI does not run browser checks. They come from the PR whose head
+    tested exactly the tree main received (a merge commit's second parent, or
+    the head of the PR squash-merged as the commit), when both its CI and
+    Playwright runs succeeded. Otherwise they come from a successful
+    ``playwright-impact.yml`` run dispatched on the exact commit. Acceptance
+    re-verifies shapes, trees, plans and every selected job.
+    """
+
+    pr_ci: list[str] = []
+    pr_playwright: list[str] = []
+    commit_runs: dict[str, str] = {}
+    for commit in first_parent_commits(directory, previous=previous, sha=sha):
+        committed = json.loads(
+            run(
+                "git",
+                "-C",
+                str(directory),
+                "show",
+                f"{commit}:.github/test-selection.json",
+                capture=True,
+            )
+        )
+        if not committed.get("playwright"):
+            continue
+        parents = commit_parents(directory, commit)
+        if len(parents) == 2:
+            head_sha = parents[1]
+        elif len(parents) == 1:
+            head_sha, _pull = squash_merged_pr_head(directory, commit)
+        else:
+            raise CiEvidenceUnavailable(
+                f"{commit[:12]} selects Playwright checks but is neither a merge "
+                "nor a squash commit, so no pull request runs can prove them"
+            )
+        try:
+            ci_run = _newest_successful_pr_run("ci.yml", head_sha, commit[:12])
+            playwright_run = _newest_successful_pr_run(
+                "playwright-impact.yml", head_sha, commit[:12]
+            )
+        except CiEvidenceUnavailable as missing:
+            dispatched = _newest_successful_commit_playwright_run(commit)
+            if dispatched is None:
+                raise CiEvidenceUnavailable(
+                    f"{missing}; nor is there a successful playwright-impact.yml "
+                    f"run dispatched on {commit[:12]} itself"
+                ) from missing
+            commit_runs[commit] = dispatched
+            continue
+        pr_ci.append(ci_run)
+        pr_playwright.append(playwright_run)
+    return pr_ci, pr_playwright, commit_runs
+
+
+def discover_ci_run_ids(directory: Path, *, previous: str, sha: str) -> list[str]:
+    """Find the successful main push CI run for each first-parent commit.
+
+    CI already ran each commit's reviewed selection before and after merge, so
+    the deployer accepts that evidence instead of re-running tests on the Core
+    host. A commit without a successful run stops preparation with the exact
+    reason. A Playwright-selected commit still needs this run for its other
+    layers; its browser evidence comes from discover_pr_supplement_run_ids.
+    """
+
+    run_ids: list[str] = []
+    for commit in first_parent_commits(directory, previous=previous, sha=sha):
+        listing = github_json(
+            "actions/workflows/ci.yml/runs?"
+            f"head_sha={commit}&branch=main&event=push&per_page=50"
+        )
+        runs = [
+            item
+            for item in listing.get("workflow_runs", [])
+            if isinstance(item, dict)
+            and item.get("head_sha") == commit
+            and item.get("head_branch") == "main"
+            and item.get("event") == "push"
+        ]
+        succeeded = [
+            item
+            for item in runs
+            if item.get("status") == "completed" and item.get("conclusion") == "success"
+        ]
+        if not succeeded:
+            states = sorted(
+                {
+                    f"{item.get('status')}/{item.get('conclusion') or '-'}"
+                    for item in runs
+                }
+            )
+            raise CiEvidenceUnavailable(
+                f"{commit[:12]} has no successful main push CI run"
+                + (f" (runs: {', '.join(states)})" if states else " (no run yet)")
+                + "; wait for CI or re-run it"
+            )
+        newest = max(succeeded, key=lambda item: int(item.get("id", 0)))
+        run_ids.append(str(newest["id"]))
+    return run_ids
 
 
 def verify_ci_acceptance_chain(
@@ -1329,8 +1768,10 @@ def verify_ci_acceptance_chain(
     directory: Path,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
+    commit_playwright_run_ids: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     commits = first_parent_commits(directory, previous=previous, sha=sha)
+    commit_playwright_run_ids = dict(commit_playwright_run_ids or {})
     if len(run_ids) != len(commits):
         raise RuntimeError(
             "CI acceptance requires exactly one run for each first-parent commit"
@@ -1340,12 +1781,9 @@ def verify_ci_acceptance_chain(
 
     pr_ci_run_ids = pr_ci_run_ids or []
     pr_playwright_run_ids = pr_playwright_run_ids or []
-    if (
-        len(set(pr_ci_run_ids)) != len(pr_ci_run_ids)
-        or len(set(pr_playwright_run_ids)) != len(pr_playwright_run_ids)
-        or len(set((*run_ids, *pr_ci_run_ids, *pr_playwright_run_ids)))
-        != len(run_ids) + len(pr_ci_run_ids) + len(pr_playwright_run_ids)
-    ):
+    dispatch_ids = list(commit_playwright_run_ids.values())
+    every_id = (*run_ids, *pr_ci_run_ids, *pr_playwright_run_ids, *dispatch_ids)
+    if len(set(every_id)) != len(every_id):
         raise RuntimeError("CI acceptance run IDs must be unique")
     playwright_commits = []
     for commit in commits:
@@ -1362,8 +1800,14 @@ def verify_ci_acceptance_chain(
         selected = committed.get("playwright")
         if not isinstance(selected, list):
             raise RuntimeError("Committed Playwright selection is malformed")
-        if selected:
+        if selected and commit not in commit_playwright_run_ids:
             playwright_commits.append(commit)
+        elif not selected and commit in commit_playwright_run_ids:
+            raise RuntimeError(
+                "Exact-commit Playwright evidence names a commit without browser checks"
+            )
+    if set(commit_playwright_run_ids) - set(commits):
+        raise RuntimeError("Exact-commit Playwright evidence names an unknown commit")
     if len(pr_ci_run_ids) != len(playwright_commits) or len(
         pr_playwright_run_ids
     ) != len(playwright_commits):
@@ -1378,11 +1822,19 @@ def verify_ci_acceptance_chain(
         supplemental: dict[str, Any] | None = None
         if commit in playwright_commits:
             parents = commit_parents(directory, commit)
-            if len(parents) != 2:
-                raise RuntimeError(
-                    "Supplemental Playwright evidence requires a two-parent merge commit"
+            if len(parents) == 2:
+                base_sha, head_sha = parents
+            elif len(parents) == 1:
+                # A squash merge: its PR's runs count only for the identical tree.
+                base_sha = parents[0]
+                head_sha, _pull = squash_merged_pr_head(directory, commit)
+                require_pr_merge_shape(
+                    directory, merge_sha=commit, base_sha=base_sha, head_sha=head_sha
                 )
-            base_sha, head_sha = parents
+            else:
+                raise RuntimeError(
+                    "Supplemental Playwright evidence requires a merge or squash commit"
+                )
             pr_ci = verify_pr_ci_supplement(
                 pr_ci_run_ids[supplemental_index],
                 head_sha=head_sha,
@@ -1421,6 +1873,16 @@ def verify_ci_acceptance_chain(
                 )
             supplemental = {"pull_request_ci": pr_ci, "playwright": pr_playwright}
             supplemental_index += 1
+        commit_playwright = (
+            verify_commit_playwright_run(
+                commit_playwright_run_ids[commit],
+                commit=commit,
+                directory=directory,
+                trusted_baseline=previous,
+            )
+            if commit in commit_playwright_run_ids
+            else None
+        )
         receipt = verify_ci_acceptance(
             run_id,
             previous=baseline,
@@ -1428,6 +1890,7 @@ def verify_ci_acceptance_chain(
             directory=directory,
             trusted_baseline=previous,
             supplemental_playwright=supplemental,
+            commit_playwright=commit_playwright,
         )
         if receipt.get("baseline") != baseline or receipt.get("commit") != commit:
             raise RuntimeError(
@@ -1453,6 +1916,26 @@ def verify_ci_acceptance_chain(
         "commit": sha,
         "receipts": receipts,
     }
+
+
+def expected_matrix_job_record(entries: list[Any]) -> dict[str, str]:
+    """The job conclusions an accepted Playwright matrix record must hold."""
+    expected_jobs = {"plan": "success", "gate": "success"}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise RuntimeError("release CI Playwright record is invalid")
+        signature = tuple(
+            entry.get(field)
+            for field in ("area", "grep", "project", "runtime", "shard")
+        )
+        if any(not isinstance(value, str) or not value for value in signature):
+            raise RuntimeError("release CI Playwright record is invalid")
+        label = json.dumps(signature, separators=(",", ":"))
+        index = 1
+        while f"playwright:{label}:{index}" in expected_jobs:
+            index += 1
+        expected_jobs[f"playwright:{label}:{index}"] = "success"
+    return expected_jobs
 
 
 def validate_ci_acceptance_record(
@@ -1540,34 +2023,22 @@ def validate_ci_acceptance_record(
             or pr_ci["selection_plan_sha256"] != playwright["selection_plan_sha256"]
         ):
             raise RuntimeError("release CI supplemental Playwright record is invalid")
-        expected_jobs = {"plan": "success", "gate": "success"}
-        for entry in playwright["selected_entries"]:
-            if not isinstance(entry, dict):
-                raise RuntimeError(
-                    "release CI supplemental Playwright record is invalid"
-                )
-            signature = tuple(
-                entry.get(field)
-                for field in ("area", "grep", "project", "runtime", "shard")
-            )
-            if any(not isinstance(value, str) or not value for value in signature):
-                raise RuntimeError(
-                    "release CI supplemental Playwright record is invalid"
-                )
-            label = json.dumps(signature, separators=(",", ":"))
-            index = 1
-            while f"playwright:{label}:{index}" in expected_jobs:
-                index += 1
-            expected_jobs[f"playwright:{label}:{index}"] = "success"
+        expected_jobs = expected_matrix_job_record(playwright["selected_entries"])
         if playwright.get("selected_jobs") != expected_jobs:
             raise RuntimeError(
                 "release CI supplemental Playwright shard record is invalid"
             )
         if directory is not None:
             head = playwright["head_commit"]
-            parents = commit_parents(directory, commit)
-            if len(parents) != 2 or parents != [baseline, head]:
-                raise RuntimeError("release CI supplemental merge parents are invalid")
+            ensure_pr_head(directory, head, int(pull_number))
+            try:
+                require_pr_merge_shape(
+                    directory, merge_sha=commit, base_sha=baseline, head_sha=head
+                )
+            except RuntimeError as error:
+                raise RuntimeError(
+                    "release CI supplemental merge parents are invalid"
+                ) from error
             expected_tree = git_tree(directory, commit)
             if (
                 playwright["tree_sha"] != expected_tree
@@ -1603,6 +2074,35 @@ def validate_ci_acceptance_record(
             raise RuntimeError("release CI acceptance run IDs are duplicated")
         accepted_run_ids.add(run_id)
         supplemental = item.get("supplemental_pr_evidence")
+        commit_evidence = item.get("commit_playwright_evidence")
+        if supplemental is not None and commit_evidence is not None:
+            raise RuntimeError("release CI browser evidence has two sources")
+        if commit_evidence is not None:
+            if (
+                not isinstance(commit_evidence, dict)
+                or commit_evidence.get("source") != "github-actions-commit-playwright"
+                or commit_evidence.get("workflow_path")
+                != ".github/workflows/playwright-impact.yml"
+                or commit_evidence.get("commit") != commit
+                or type(commit_evidence.get("run_id")) is not int
+                or commit_evidence["run_id"] < 1
+                or commit_evidence.get("run_url")
+                != f"https://github.com/{GITHUB_REPOSITORY}/actions/runs/{commit_evidence['run_id']}"
+                or not isinstance(commit_evidence.get("review_reason"), str)
+                or not commit_evidence["review_reason"].strip()
+                or not SHA256.fullmatch(
+                    str(commit_evidence.get("playwright_plan_sha256", ""))
+                )
+                or not SHA256.fullmatch(str(commit_evidence.get("artifact_sha256", "")))
+                or not isinstance(commit_evidence.get("selected_entries"), list)
+                or not commit_evidence["selected_entries"]
+                or commit_evidence.get("selected_jobs")
+                != expected_matrix_job_record(commit_evidence["selected_entries"])
+            ):
+                raise RuntimeError("release exact-commit Playwright record is invalid")
+            if commit_evidence["run_id"] in accepted_run_ids:
+                raise RuntimeError("release CI acceptance run IDs are duplicated")
+            accepted_run_ids.add(commit_evidence["run_id"])
         if supplemental is not None:
             if not isinstance(supplemental, dict):
                 raise RuntimeError("release CI supplemental PR evidence is invalid")
@@ -1630,20 +2130,33 @@ def validate_ci_acceptance_record(
                     capture=True,
                 )
             )
-            if bool(selection.get("playwright")) != (supplemental is not None):
+            browser_proven = supplemental is not None or commit_evidence is not None
+            if bool(selection.get("playwright")) != browser_proven:
                 raise RuntimeError(
                     "release CI record does not cover its Playwright selection"
                 )
             expected_main_jobs = {
                 name: "success"
                 for name in selected_ci_jobs(
-                    selection,
-                    supplemental_playwright_verified=supplemental is not None,
+                    selection, supplemental_playwright_verified=browser_proven
                 )
             }
-            if item["selected_jobs"] != expected_main_jobs:
+            if not recorded_ci_jobs_match(item["selected_jobs"], expected_main_jobs):
                 raise RuntimeError("release CI selected-job record is incomplete")
             verify_ci_trust_inputs(directory, trusted_baseline=previous, sha=commit)
+            if commit_evidence is not None:
+                expected_plan, _ = expected_pr_playwright_plan(
+                    selection,
+                    head_sha=commit,
+                    base_sha=None,
+                    directory=directory,
+                    trusted_baseline=previous,
+                    review_reason=commit_evidence["review_reason"],
+                )
+                if commit_evidence["selected_entries"] != expected_plan.get("include"):
+                    raise RuntimeError(
+                        "release exact-commit Playwright entries differ from the trusted selector"
+                    )
             if supplemental is not None:
                 pr_ci = supplemental["pull_request_ci"]
                 playwright = supplemental["playwright"]
@@ -1655,7 +2168,7 @@ def validate_ci_acceptance_record(
                         selection, supplemental_playwright_verified=True
                     )
                 }
-                if pr_ci["selected_jobs"] != expected_pr_jobs:
+                if not recorded_ci_jobs_match(pr_ci["selected_jobs"], expected_pr_jobs):
                     raise RuntimeError("release PR CI job record is incomplete")
                 expected_plan, _ = expected_pr_playwright_plan(
                     selection,
@@ -1714,26 +2227,6 @@ def ci_acceptance_receipts(ci: dict[str, Any]) -> list[dict[str, Any]]:
     if ci.get("source") == "github-actions-ci-chain" and isinstance(receipts, list):
         return receipts
     raise RuntimeError("CI acceptance record has an unsupported source")
-
-
-def browser_args(entry: dict[str, Any]) -> list[str]:
-    test_match, project, shard = (
-        entry.get(key) for key in ("test_match", "project", "shard")
-    )
-    if not all(
-        isinstance(value, str) and value for value in (test_match, project, shard)
-    ):
-        raise RuntimeError("Playwright selection has an invalid entry")
-    if not test_match.startswith("tests/") or not test_match.endswith(
-        (".spec.ts", ".spec.tsx")
-    ):
-        raise RuntimeError("Playwright selection must name an individual spec")
-    args = [test_match, "--project", project, "--workers", "1", "--shard", shard]
-    if entry.get("grep"):
-        args += ["--grep", str(entry["grep"])]
-    if project == "real-core" and shard != "1/1":
-        args.append("--fully-parallel")
-    return args
 
 
 def write_runtime_manifest(directory: Path, version: str, **compatibility) -> str:
@@ -1803,17 +2296,98 @@ def prepare(
     ci_run_ids: list[str] | None = None,
     pr_ci_run_ids: list[str] | None = None,
     pr_playwright_run_ids: list[str] | None = None,
+    require_ci_evidence: bool = False,
+    commit: str | None = None,
 ) -> dict[str, Any]:
+    """Build and accept origin/main for this Core host.
+
+    ``commit`` selects an earlier commit on main's first-parent history
+    instead of its head. A release that adds stored-entity fields
+    (``storage.entity-field-additions/v1``) can start only once every running
+    version reads unknown fields, so such a rollout deploys the first
+    tolerant commit before main.
+
+    Every pull request merges only after its own CI passes, so by default the
+    candidate is not re-checked against CI runs here: main push runs share a
+    cancel-in-progress group, and back-to-back merges cancel each other's
+    evidence. ``require_ci_evidence`` (or named run IDs) restores the check
+    for every commit since the live release. Tests never run on this host; it
+    builds, lints and verifies the release. Each step's duration is reported
+    as it ends and kept in the receipt.
+    """
+    with StepTimings("prepare").run() as timings:
+        return _prepare(
+            ci_run_ids=ci_run_ids,
+            pr_ci_run_ids=pr_ci_run_ids,
+            pr_playwright_run_ids=pr_playwright_run_ids,
+            require_ci_evidence=require_ci_evidence,
+            commit=commit,
+            timings=timings,
+        )
+
+
+COMMIT_ARGUMENT = re.compile(r"[0-9a-f]{7,40}\Z")
+
+
+def main_commit(commit: str) -> str:
+    """Resolve ``commit`` to a full SHA on origin/main's first-parent history.
+
+    Only commits that main itself received are deployable: a merged pull
+    request's own branch commits, or anything off main, never are.
+    """
+    if not COMMIT_ARGUMENT.fullmatch(commit):
+        raise RuntimeError("--commit must be a hexadecimal commit ID")
+    sha = run(
+        "git",
+        "-C",
+        str(REPO),
+        "rev-parse",
+        "--verify",
+        f"{commit}^{{commit}}",
+        capture=True,
+    )
+    if not SHA.fullmatch(sha):
+        raise RuntimeError("--commit did not resolve to one exact commit")
+    history = run(
+        "git",
+        "-C",
+        str(REPO),
+        "rev-list",
+        "--first-parent",
+        "origin/main",
+        capture=True,
+    ).split()
+    if sha not in history:
+        raise RuntimeError(
+            f"{sha} is not on origin/main's first-parent history; only commits "
+            "main received can be deployed"
+        )
+    return sha
+
+
+def _prepare(
+    *,
+    ci_run_ids: list[str] | None,
+    pr_ci_run_ids: list[str] | None,
+    pr_playwright_run_ids: list[str] | None,
+    require_ci_evidence: bool = False,
+    commit: str | None = None,
+    timings: StepTimings,
+) -> dict[str, Any]:
+    check_ci = require_ci_evidence or ci_run_ids is not None
     if ci_run_ids is None and (
         pr_ci_run_ids is not None or pr_playwright_run_ids is not None
     ):
         raise RuntimeError(
             "Supplemental PR CI runs require the main CI acceptance chain"
         )
+    timings.begin("fetch")
     git_source()
     previous = baseline()
     run("git", "-C", str(REPO), "fetch", "--no-tags", "origin", "main")
     sha = run("git", "-C", str(REPO), "rev-parse", "origin/main", capture=True)
+    if commit is not None:
+        sha = main_commit(commit)
     if sha == previous:
         if (
             ci_run_ids is not None
@@ -1836,6 +2410,7 @@ def prepare(
             "A different deployment operation is still unresolved; reconcile it before replacing the pending candidate"
         )
     if (RELEASES / sha).is_dir():
+        timings.begin("verify_prebuilt_release")
         release = verified_release(sha)
         receipt = json.loads((release / "simulation-acceptance.json").read_text())
         if receipt.get("previous") != previous:
@@ -1859,20 +2434,30 @@ def prepare(
         current_state["pending"] = sha
         atomic_json(STATE, current_state)
         return receipt
+    timings.begin("checkout")
     directory = candidate(sha)
-    ci_acceptance = (
-        verify_ci_acceptance_chain(
+    ci_acceptance: dict[str, Any] | None = None
+    if check_ci:
+        timings.begin("ci_evidence")
+        if ci_run_ids is None:
+            ci_run_ids = discover_ci_run_ids(directory, previous=previous, sha=sha)
+            (
+                pr_ci_run_ids,
+                pr_playwright_run_ids,
+                commit_playwright_run_ids,
+            ) = discover_pr_supplement_run_ids(directory, previous=previous, sha=sha)
+        else:
+            commit_playwright_run_ids = {}
+        ci_acceptance = verify_ci_acceptance_chain(
             ci_run_ids,
             previous=previous,
             sha=sha,
             directory=directory,
             pr_ci_run_ids=pr_ci_run_ids,
             pr_playwright_run_ids=pr_playwright_run_ids,
+            commit_playwright_run_ids=commit_playwright_run_ids,
         )
-        if ci_run_ids is not None
-        else None
-    )
-    plan, entries = selected_plan(directory, previous)
+    plan = selected_plan(directory, previous)
     if ci_acceptance is not None:
         reviewed = plan.get("reviewed_commits", [])
         receipts = ci_acceptance_receipts(ci_acceptance)
@@ -1888,72 +2473,19 @@ def prepare(
             raise RuntimeError(
                 "deployer selection does not match the ordered CI receipt chain"
             )
+    timings.begin("python_dependencies")
     run(POETRY, "check", cwd=directory)
     run(POETRY, "install", "--with", "dev", "--no-interaction", cwd=directory)
+    timings.begin("ui_dependencies")
     run("npm", "--prefix", "ui", "ci", "--no-audit", "--no-fund", cwd=directory)
-    collected = 0
-    if ci_acceptance is None:
-        for target in plan["python"]:
-            listed = run(
-                POETRY,
-                "run",
-                "pytest",
-                "--collect-only",
-                "-q",
-                target,
-                cwd=directory,
-                capture=True,
-            )
-            match = re.search(r"(\d+) tests? collected", listed)
-            if match is None:
-                raise RuntimeError("selected Python target collected no tests")
-            collected += int(match.group(1))
-        if collected != plan["expected_tests"]["python"]:
-            raise RuntimeError(
-                "Python collection disagrees with the reviewed test count"
-            )
-        if plan["frontend"]:
-            listed_frontend = run(
-                str(directory / "ui/node_modules/.bin/vitest"),
-                "list",
-                *plan["frontend"],
-                cwd=directory,
-                capture=True,
-            )
-            frontend_count = sum(
-                line.startswith("ui/src/") for line in listed_frontend.splitlines()
-            )
-        else:
-            frontend_count = 0
-    else:
-        collected = plan["expected_tests"]["python"]
-        frontend_count = plan["expected_tests"]["frontend"]
-    if ci_acceptance is None:
-        if frontend_count != plan["expected_tests"]["frontend"]:
-            raise RuntimeError(
-                "frontend collection disagrees with the reviewed test count"
-            )
-        for target in plan["python"]:
-            run(POETRY, "run", "pytest", "-q", target, cwd=directory)
-        for target in plan["frontend"]:
-            run(
-                "npm",
-                "--prefix",
-                "ui",
-                "test",
-                "--",
-                target.removeprefix("ui/"),
-                cwd=directory,
-            )
-    # Native selections are exact Rust test names; a Linux host must not claim
-    # to have run macOS-only cases. Keep that candidate pending for review.
-    if plan["native"] and ci_acceptance is None:
-        raise RuntimeError("selected native tests need an approved macOS runner")
+    timings.begin("ui_lint_and_audit")
     run("npm", "--prefix", "ui", "run", "lint", "--if-present", cwd=directory)
     run("npm", "--prefix", "ui", "run", "audit:diagnostics", cwd=directory)
     timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     build_env = {"NEBULA_BUILD_TIMESTAMP": timestamp}
+    timings.begin("ui_build")
     run("npm", "--prefix", "ui", "run", "build", cwd=directory, env=build_env)
+    timings.begin("core_build")
     run(
         POETRY,
         "run",
@@ -1963,6 +2495,7 @@ def prepare(
         cwd=directory,
         env=build_env,
     )
+    timings.begin("verify_build")
     run(
         POETRY,
         "run",
@@ -1978,64 +2511,7 @@ def prepare(
         cwd=directory,
         capture=True,
     )
-    test_python = ""
-    if ci_acceptance is None and entries:
-        test_python = run(
-            POETRY, "env", "info", "--executable", cwd=directory, capture=True
-        )
-        if not Path(test_python).is_file() or not os.access(test_python, os.X_OK):
-            raise RuntimeError(
-                "selected browser tests require the candidate Python interpreter"
-            )
-    browser_env = {
-        "NEBULA_TEST_PYTHON": test_python,
-        "NEBULA_TEST_CORE_BIN": str(directory / "dist/nebula-core"),
-        # The production unit runs `serve` with the built static directory.
-        # Real-Core LAN tests must exercise that HTTPS path, not `ui` mode,
-        # which does not forward the fixture's TLS certificate options.
-        "NEBULA_TEST_CORE_EMBEDDED_UI": "0",
-        "NEBULA_UI_TEST_COMMAND": "npm run preview -- --host 0.0.0.0 --port 1420",
-    }
-    listed = 0
-    if ci_acceptance is None:
-        for entry in entries:
-            args = browser_args(entry)
-            result = run(
-                "npm",
-                "--prefix",
-                "ui",
-                "run",
-                "test:e2e",
-                "--",
-                *args,
-                "--list",
-                cwd=directory,
-                env=browser_env,
-                capture=True,
-            )
-            match = re.search(r"Total: (\d+) tests? in", result)
-            if match is None or int(match.group(1)) < 1:
-                raise RuntimeError("selected browser entry collected no tests")
-            listed += int(match.group(1))
-        if listed != plan["expected_tests"]["playwright"]:
-            raise RuntimeError(
-                "browser collection disagrees with the reviewed test count"
-            )
-        for entry in entries:
-            run(
-                "npm",
-                "--prefix",
-                "ui",
-                "run",
-                "test:e2e",
-                "--",
-                *browser_args(entry),
-                cwd=directory,
-                env=browser_env,
-                timeout=600,
-            )
-    else:
-        listed = plan["expected_tests"]["playwright"]
+    timings.begin("release_copy")
     if commit_at(directory) != sha:
         raise RuntimeError("candidate source changed during preparation")
     run("git", "-C", str(directory), "diff", "--quiet")
@@ -2076,10 +2552,6 @@ def prepare(
         directory / "build/simulation-test-selection.json",
         staging / "build/simulation-test-selection.json",
     )
-    shutil.copy2(
-        directory / "build/simulation-playwright-receipt.md",
-        staging / "build/simulation-playwright-receipt.md",
-    )
     compatibility = json.loads(
         run(
             POETRY,
@@ -2097,9 +2569,10 @@ def prepare(
         "commit": sha,
         "previous": previous,
         "built_at": timestamp,
+        # Counts of the tests CI ran for the reviewed selections.
         "python_tests": plan["expected_tests"]["python"],
-        "frontend_tests": frontend_count,
-        "browser_tests": listed,
+        "frontend_tests": plan["expected_tests"]["frontend"],
+        "browser_tests": plan["expected_tests"]["playwright"],
         "core_sha256": sha256(staging / "dist/nebula-core"),
         "web_manifest_sha256": sha256(staging / "ui/dist/web-build.json"),
         "test_selection_sha256": sha256(staging / ".github/test-selection.json"),
@@ -2109,8 +2582,13 @@ def prepare(
         "status": "accepted_candidate",
         "runtime_manifest_sha256": runtime_digest,
     }
-    if ci_acceptance is not None:
-        receipt["ci_acceptance"] = ci_acceptance
+    receipt["ci_acceptance"] = ci_acceptance
+    if ci_acceptance is None:
+        receipt["ci_acceptance_skipped"] = (
+            "Pull requests merge only after their CI passes; the deployer does "
+            "not re-check main CI runs unless --require-ci-evidence is given."
+        )
+    receipt["timings"] = timings.record()
     atomic_json(staging / "simulation-acceptance.json", receipt)
     os.replace(staging, release)
     for path in release.rglob("*"):
@@ -2585,7 +3063,11 @@ def reconcile_superseded_manual_deployment(
             or receipt.get("result") != saved.get("result")
         ):
             raise RuntimeError(f"Core {step} receipt differs from the saved journal")
-        if step in {"promote-api", "target"}:
+        if step in {"promote-api", "target"} and receipt.get("state") == "succeeded":
+            # Hosts that return a bounded operation summary confirm these
+            # effects directly; older hosts left them uncertain (below).
+            pass
+        elif step in {"promote-api", "target"}:
             settled = entry.get("settled")
             if (
                 receipt.get("state") != "uncertain"
@@ -2907,6 +3389,250 @@ def reconcile_superseded_manual_deployment(
     return {"status": "reconciled_superseded", "deployment": reconciliation}
 
 
+def reconcile_unactivated_supersession(
+    deployment_id: str, *, dry_run: bool = False
+) -> dict[str, Any]:
+    """Archive an unactivated rollback of a promotion superseded by a manual host.
+
+    Both recorded Core stages and the promotion migration remain real effects.
+    This path only clears deployer intent after exact receipts and the current
+    manual host/API/process inventory prove neither candidate was activated.
+    """
+    if not re.fullmatch(r"[0-9a-f]{32}", deployment_id):
+        raise ValueError("deployment ID must be a 32-character journal identity")
+    record = state()
+    history = record.get("runtime_deployment_history", [])
+    if not isinstance(history, list):
+        raise RuntimeError("Deployment history archive is malformed")
+    prior = next(
+        (
+            item
+            for item in history
+            if isinstance(item, dict) and item.get("id") == deployment_id
+        ),
+        None,
+    )
+    if prior is not None:
+        if prior.get("classification") != "superseded_unactivated_deployment":
+            raise RuntimeError("Archived deployment has another reconciliation outcome")
+        return {"status": "already_reconciled", "deployment": prior}
+
+    rollback = record.get("runtime_deployment")
+    if (
+        not isinstance(rollback, dict)
+        or rollback.get("id") != deployment_id
+        or rollback.get("action") != "rollback"
+        or rollback.get("state") != "running"
+    ):
+        raise RuntimeError("No matching unresolved rollback journal exists")
+    promotion = rollback.get("superseded")
+    active = record.get("active")
+    old = rollback.get("version")
+    candidate = promotion.get("version") if isinstance(promotion, dict) else None
+    if (
+        not all(
+            isinstance(value, str) and SHA.fullmatch(value)
+            for value in (active, old, candidate)
+        )
+        or len({active, old, candidate}) != 3
+        or rollback.get("previous") != active
+        or not isinstance(promotion, dict)
+        or promotion.get("action") != "promote"
+        or promotion.get("state") != "running"
+        or promotion.get("previous") != old
+        or not isinstance(promotion.get("id"), str)
+        or not re.fullmatch(r"[0-9a-f]{32}", promotion["id"])
+        or record.get("pending") != candidate
+        or record.get("promoting") is not None
+        or not isinstance(rollback.get("steps"), dict)
+        or not isinstance(promotion.get("steps"), dict)
+        or set(rollback.get("steps", {})) != {"stage"}
+        or set(promotion.get("steps", {})) != {"stage", "migrate"}
+    ):
+        raise RuntimeError(
+            "Deployment journals do not match an unactivated supersession"
+        )
+    # Accepted releases and reconciled manual releases have separate immutable
+    # identity checks; runtime_release verifies the applicable one.
+    runtime_release(active)
+
+    for journal in (promotion, rollback):
+        activation = journal.get("host_activation")
+        operation_id = journal["id"] + ":host-activation"
+        if not isinstance(activation, dict) or activation != {
+            "operation_id": operation_id,
+            "state": "requested",
+            "version": journal["version"],
+        }:
+            raise RuntimeError("Candidate host activation is not only requested")
+        top_level = record.get("host_activation")
+        if (
+            isinstance(top_level, dict)
+            and top_level.get("operation_id") == operation_id
+        ):
+            raise RuntimeError("Candidate has a host activation operation in progress")
+
+    receipts: dict[str, dict[str, Any]] = {}
+    for name, journal in (("promotion", promotion), ("rollback", rollback)):
+        version = journal["version"]
+        entry, receipt = _require_recorded_operation(
+            journal, step="stage", action="stage", expected_state="succeeded"
+        )
+        release, manifest_sha256 = runtime_release(version)
+        if (
+            entry["parameters"]
+            != {"source": str(release), "manifest_sha256": manifest_sha256}
+            or receipt["result"].get("version") != version
+            or receipt["result"].get("manifest_sha256") != manifest_sha256
+        ):
+            raise RuntimeError(f"{name} stage is not bound to its exact release")
+        receipts[name + ":stage"] = receipt
+    migration_entry, migration_receipt = _require_recorded_operation(
+        promotion, step="migrate", action="migrate", expected_state="succeeded"
+    )
+    migration = migration_status(candidate)
+    if (
+        migration_entry["parameters"].get("version") != candidate
+        or type(migration_entry["parameters"].get("expected_revision")) is not int
+        or migration_receipt["result"].get("version") != candidate
+        or migration_receipt["result"].get("target_head") != migration["target_head"]
+        or migration["current_head"] != migration["target_head"]
+    ):
+        raise RuntimeError("Promotion migration is not the exact current database head")
+    receipts["promotion:migrate"] = migration_receipt
+
+    if unit_state(SERVICE) != "active" or current_release_version() != active:
+        raise RuntimeError(
+            "Current supervisor host differs from the recorded active release"
+        )
+    identity = host_connection()
+    service_identity = supervisor_service_identity()
+    if identity is None or identity.get("package_version") != runtime_package_version(
+        active
+    ):
+        raise RuntimeError("Current supervisor process differs from the active release")
+    require_runtime_process_in_service(service_identity, identity, active)
+    health, status = read_supervisor_health()
+    forbidden = {
+        old,
+        candidate,
+        runtime_package_version(old),
+        runtime_package_version(candidate),
+    }
+    projects = status.get("projects") if isinstance(status, dict) else None
+    processes = status.get("processes") if isinstance(status, dict) else None
+    residents = status.get("resident_versions") if isinstance(status, dict) else None
+    if (
+        not isinstance(health, dict)
+        or health.get("status") != "ok"
+        or health.get("database") != "ok"
+        or health.get("commit") != active
+        or not isinstance(status, dict)
+        or status.get("protocol") != "nebula.runtime/v1"
+        or status.get("health") != "ready"
+        or status.get("api_version") != active
+        or not isinstance(status.get("target_execution_version"), str)
+        or status.get("target_execution_version") in forbidden
+        or not isinstance(residents, list)
+        or any(
+            not isinstance(version, str) or version in forbidden
+            for version in residents
+        )
+        or not isinstance(projects, list)
+        or any(
+            not isinstance(row, dict)
+            or "runtime_version" not in row
+            or row["runtime_version"] is not None
+            and not isinstance(row["runtime_version"], str)
+            or row.get("runtime_version") in forbidden
+            for row in projects
+        )
+        or not isinstance(processes, list)
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("version"), str)
+            or row.get("version") in forbidden
+            or row.get("runtime_version") is not None
+            and not isinstance(row["runtime_version"], str)
+            or row.get("runtime_version") in forbidden
+            for row in processes
+        )
+    ):
+        raise RuntimeError(
+            "Live Core still runs a candidate or does not match the active release"
+        )
+    if len(history) >= DEPLOYMENT_HISTORY_LIMIT:
+        raise RuntimeError("Deployment history archive is full")
+
+    archived = {
+        "id": deployment_id,
+        "state": "reconciled_superseded",
+        "classification": "superseded_unactivated_deployment",
+        "reconciled_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "journal": deepcopy(rollback),
+        "core_receipts": receipts,
+        "migration_status": migration,
+        "live_readback": {
+            "health": health,
+            "deployment_status": status,
+            "host_process": identity,
+            "supervisor_service": service_identity,
+        },
+    }
+    if dry_run:
+        return {
+            "status": "dry_run_validated",
+            "proposed": {
+                "classification": archived["classification"],
+                "rollback_id": deployment_id,
+                "promotion_id": promotion["id"],
+                "active": active,
+                "clear_pending": candidate,
+                "core_receipts": {
+                    key: {
+                        "operation_id": value["operation_id"],
+                        "state": value["state"],
+                    }
+                    for key, value in receipts.items()
+                },
+                "live_readback": {
+                    "host_commit": health["commit"],
+                    "api_version": status["api_version"],
+                    "deployment_health": status["health"],
+                    "revision": status.get("revision"),
+                    "target_execution_version": status["target_execution_version"],
+                    "resident_versions": residents,
+                    "owned_projects": sum(
+                        row.get("runtime_id") is not None for row in projects
+                    ),
+                    "migration_head": migration["current_head"],
+                },
+            },
+        }
+    # Re-read live identity before changing the journal; the CLI holds the
+    # deploy lock, and an external host switch must fail this final check.
+    latest_health, latest_status = read_supervisor_health()
+    if (
+        current_release_version() != active
+        or unit_state(SERVICE) != "active"
+        or not isinstance(latest_health, dict)
+        or not isinstance(latest_status, dict)
+        or latest_health.get("commit") != active
+        or latest_status.get("api_version") != active
+        or latest_status.get("revision") != status.get("revision")
+        or supervisor_service_identity() != service_identity
+    ):
+        raise RuntimeError("Live Core changed during reconciliation")
+    record["runtime_deployment_history"] = [*history, archived]
+    record.pop("runtime_deployment", None)
+    record["pending"] = None
+    record["host_active"] = active
+    record["runtime_api_version"] = active
+    record["canonical_runtime_version"] = status["target_execution_version"]
+    atomic_json(STATE, record)
+    return {"status": "reconciled_superseded", "deployment": archived}
+
+
 def verified_release(sha: str) -> Path:
     if not SHA.fullmatch(sha):
         raise RuntimeError("release commit is invalid")
@@ -2948,6 +3674,161 @@ def service(action: str) -> None:
     if action not in {"start", "stop", "reset-failed"}:
         raise ValueError("unsupported service action")
     run("systemctl", "--user", action, SERVICE, timeout=180)
+
+
+def socket_unit(action: str) -> None:
+    if action not in {"start", "reset-failed"}:
+        raise ValueError("unsupported socket action")
+    run("systemctl", "--user", action, SOCKET, timeout=60)
+
+
+def unit_property(unit: str, name: str) -> str:
+    return run("systemctl", "--user", "show", unit, "-p", name, "--value", capture=True)
+
+
+_SYSTEMD_SPAN = re.compile(r"(\d+(?:\.\d+)?)(us|ms|s|min|h|d|w|M|y)")
+_SYSTEMD_UNIT_SECONDS = {
+    "us": 1e-6,
+    "ms": 1e-3,
+    "s": 1.0,
+    "min": 60.0,
+    "h": 3600.0,
+    "d": 86400.0,
+    "w": 604800.0,
+    "M": 2629800.0,
+    "y": 31557600.0,
+}
+
+
+def systemd_seconds(value: str) -> float | None:
+    """Seconds in a `systemctl show` time span such as ``1min 30s``; None is infinity."""
+    text = value.strip()
+    if text == "infinity":
+        return None
+    if text == "0":
+        return 0.0
+    if not text:
+        raise RuntimeError("systemd reported no time span")
+    total = 0.0
+    for part in text.split():
+        match = _SYSTEMD_SPAN.fullmatch(part)
+        if match is None:
+            raise RuntimeError(f"Unrecognized systemd time span: {value!r}")
+        total += float(match[1]) * _SYSTEMD_UNIT_SECONDS[match[2]]
+    return total
+
+
+def socket_activation() -> dict[str, Any] | None:
+    """Describe the socket unit that holds Core's listener, or None without one.
+
+    With ``nebula-core.socket`` the kernel queues connections while one
+    supervisor generation exits and the next starts. A connection that arrives
+    while the service is stopped starts it from ``current``; host activation
+    therefore selects the release before it stops the old host. The service
+    must name the inherited descriptor explicitly, because ``mercury-run`` and
+    the onefile bootloader stand between systemd and Core.
+    """
+    triggered = unit_property(SERVICE, "TriggeredBy").split()
+    requires = unit_property(SERVICE, "Requires").split()
+    if SOCKET not in triggered and SOCKET not in requires:
+        return None
+    if SOCKET not in requires:
+        raise RuntimeError(f"{SERVICE} must declare Requires={SOCKET}")
+    listen = unit_property(SOCKET, "Listen").strip()
+    if listen != SOCKET_LISTEN:
+        raise RuntimeError(
+            f"{SOCKET} must listen only on {SOCKET_LISTEN}, not {listen or 'nothing'}"
+        )
+    accept = unit_property(SOCKET, "Accept").strip()
+    if accept != "no":
+        raise RuntimeError(f"{SOCKET} must use Accept=no")
+    # The deployer kills a supervisor that outlives its stop grace while the
+    # unit is still stopping. If systemd's own stop timeout fired first, it
+    # would kill only the bootloader, the unit would stop, and a queued
+    # connection would start a second supervisor beside the orphan.
+    stop_timeout = systemd_seconds(unit_property(SERVICE, "TimeoutStopUSec"))
+    if stop_timeout is not None and stop_timeout <= SUPERVISOR_STOP_GRACE_SECONDS + 10:
+        raise RuntimeError(
+            f"{SERVICE} needs TimeoutStopSec above {SUPERVISOR_STOP_GRACE_SECONDS + 10}s "
+            "so the deployer, not systemd, ends a supervisor that does not stop"
+        )
+    command = unit_property(SERVICE, "ExecStart")
+    if not LISTEN_FD_ARGUMENT.search(command):
+        raise RuntimeError(
+            f"{SERVICE} must pass --listen-fd 3 to serve so Core adopts the held listener"
+        )
+    return {"socket": SOCKET, "listen": listen}
+
+
+def ensure_socket_listening() -> dict[str, Any]:
+    """Keep the held listener up; restore it after a start-limit failure.
+
+    Repeated failed starts make systemd fail the socket too (``trigger-limit-hit``
+    or ``service-start-limit-hit``). Connections are then refused even though a
+    later start succeeds, so the socket is reset and started again.
+    """
+    state_name = unit_state(SOCKET)
+    if state_name == "active":
+        return {"state": "active", "restored": False}
+    result = unit_property(SOCKET, "Result").strip()
+    if state_name == "failed":
+        socket_unit("reset-failed")
+    socket_unit("start")
+    restored = unit_state(SOCKET)
+    if restored != "active":
+        raise RuntimeError(
+            f"{SOCKET} is {restored} after a restart (was {state_name}: {result})"
+        )
+    return {
+        "state": "active",
+        "restored": True,
+        "previous": state_name,
+        "result": result,
+    }
+
+
+def wait_no_running_operations() -> dict[str, Any]:
+    """Wait, bounded, until the live supervisor runs no deployment operation.
+
+    The supervisor joins its in-flight operations before it releases host
+    authority, so a stop that begins during one waits for it and can reach
+    the stop grace, which kills the host mid-operation and leaves the
+    operation uncertain. An older Core without the listing is not waited for.
+    """
+    started = time.monotonic()
+    deadline = started + HOST_OPERATION_WAIT_SECONDS
+    while True:
+        try:
+            listing = api().get("deployment/operations")
+        except HTTPError as error:
+            # A supervisor with the listing answers it itself, so only an
+            # authentication failure can refuse it. An older supervisor has
+            # no such route and relays the read to its API worker, which
+            # answers 404, 405 or 503 ("reconnecting"); its stop is not
+            # waited for, as before. Unreachable Cores raise (fail closed).
+            if error.code in {401, 403}:
+                raise
+            return {"supported": False, "status": error.code}
+        running = listing.get("running") if isinstance(listing, dict) else None
+        if not isinstance(running, list) or any(
+            not isinstance(item, dict) for item in running
+        ):
+            raise RuntimeError("Core returned an invalid deployment operation listing")
+        if not running:
+            return {
+                "supported": True,
+                "waited_seconds": round(time.monotonic() - started, 1),
+            }
+        if time.monotonic() >= deadline:
+            names = ", ".join(
+                f"{item.get('action')} {item.get('operation_id')}" for item in running
+            )
+            raise RuntimeError(
+                "Core is still running deployment operation(s) "
+                f"{names} after {HOST_OPERATION_WAIT_SECONDS}s; the host was not "
+                "stopped. Read each operation's receipt, then activate again."
+            )
+        time.sleep(HOST_OPERATION_POLL_SECONDS)
 
 
 def host_connection(*, allow_stale: bool = False) -> dict[str, Any] | None:
@@ -3398,11 +4279,163 @@ def host_status_snapshot(
     }
 
 
+class DeadOwnerRecoveryPending(RuntimeError):
+    """The exact accepted dead owner has moved but recovery is not verified yet."""
+
+
+def _exact_uuid(value: Any) -> bool:
+    from uuid import UUID
+
+    try:
+        return isinstance(value, str) and str(UUID(value)) == value
+    except ValueError:
+        return False
+
+
+def _readonly_postgres_rows(query: str) -> list[str]:
+    settings = configured_postgres(TOKEN_FILE)
+    if settings is None:
+        raise RuntimeError(
+            "Dead-worker acceptance requires the configured PostgreSQL deployment"
+        )
+    environment = {
+        key: value for key, value in os.environ.items() if not key.startswith("PG")
+    }
+    if "PGPASSFILE" in os.environ:
+        environment["PGPASSFILE"] = os.environ["PGPASSFILE"]
+    result = subprocess.run(
+        [
+            "psql",
+            "--no-psqlrc",
+            "--tuples-only",
+            "--no-align",
+            "--set=ON_ERROR_STOP=1",
+            "--command",
+            "BEGIN READ ONLY; " + query + "; COMMIT;",
+        ],
+        env={**environment, **settings},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Dead-worker readback failed; inspect PostgreSQL access")
+    return [
+        line
+        for line in result.stdout.splitlines()
+        if line not in {"", "BEGIN", "COMMIT"}
+    ]
+
+
+def load_dead_owner_acceptance(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise RuntimeError("Dead-worker acceptance must be a regular file")
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or set(value) != {
+        "project_id",
+        "runtime_id",
+        "fencing_token",
+        "turn_ids",
+        "failed_turn_ids",
+        "effect_call_ids",
+        "acceptance",
+    }:
+        raise RuntimeError("Dead-worker acceptance has an invalid shape")
+    turns, failed, effects = (
+        value["turn_ids"],
+        value["failed_turn_ids"],
+        value["effect_call_ids"],
+    )
+    if (
+        not _exact_uuid(value["project_id"])
+        or not _exact_uuid(value["runtime_id"])
+        or type(value["fencing_token"]) is not int
+        or value["fencing_token"] < 1
+        or not isinstance(turns, list)
+        or not turns
+        or not all(_exact_uuid(item) for item in turns)
+        or len(turns) != len(set(turns))
+        or not isinstance(failed, list)
+        or not failed
+        or not all(_exact_uuid(item) for item in failed)
+        or len(failed) != len(set(failed))
+        or not isinstance(effects, list)
+        or not effects
+        or not all(_exact_uuid(item) for item in effects)
+        or len(effects) != len(set(effects))
+        or value["acceptance"] != "accept unconfirmed effects without replay"
+    ):
+        raise RuntimeError("Dead-worker acceptance has invalid exact identities")
+    return value
+
+
+def prove_dead_owner(accepted: dict[str, Any]) -> dict[str, Any]:
+    runtime_id = accepted["runtime_id"]
+    rows = _readonly_postgres_rows(
+        "SELECT pid, process_birth, role, state FROM runtime_processes "
+        f"WHERE runtime_id = '{runtime_id}'"
+    )
+    if len(rows) != 1:
+        raise RuntimeError("The accepted worker has no exact process record")
+    fields = rows[0].split("|")
+    if len(fields) != 4 or fields[2] != "execution" or fields[3] == "retired":
+        raise RuntimeError("The accepted worker is not a resident execution process")
+    pid = int(fields[0])
+    birth = fields[1]
+    if not birth.startswith("linux:") or linux_process_birth(pid) == birth:
+        raise RuntimeError("The accepted worker process has not proven to exit")
+    failed = ",".join(f"'{item}'" for item in accepted["failed_turn_ids"])
+    failed_turns = _readonly_postgres_rows(
+        "SELECT id FROM entities "
+        f"WHERE engagement_id = '{accepted['project_id']}' AND kind = 'chat_turns' "
+        "AND payload->>'backend' = 'provider' AND payload->>'status' = 'failed' "
+        "AND payload->>'execution_claim_id' IS NOT NULL"
+    )
+    if set(failed_turns) != set(accepted["failed_turn_ids"]):
+        raise RuntimeError("The accepted failed turn claims changed")
+    effects = _readonly_postgres_rows(
+        "SELECT id, payload->>'status', payload->>'risk_class' FROM entities "
+        f"WHERE engagement_id = '{accepted['project_id']}' AND kind = 'tool_calls' "
+        f"AND payload->>'chat_turn_id' IN ({failed}) "
+        "AND payload->>'status' NOT IN ('complete','denied','cancelled') "
+        "AND NOT (payload->>'status' = 'failed' AND payload->>'risk_class' = 'local_read')"
+    )
+    observed = {
+        parts[0]
+        for row in effects
+        if len(parts := row.split("|")) == 3
+        and parts[1] == "failed"
+        and parts[2] == "workspace_write"
+    }
+    if observed != set(accepted["effect_call_ids"]):
+        raise RuntimeError("The accepted failed write-call identities changed")
+    return {"pid": pid, "process_birth": birth}
+
+
+def verified_dead_owner_recovery(
+    accepted: dict[str, Any], current: dict[str, Any]
+) -> bool:
+    if not _exact_uuid(current["runtime_id"]):
+        return False
+    rows = _readonly_postgres_rows(
+        "SELECT operation_id FROM runtime_recoveries WHERE "
+        f"project_id = '{accepted['project_id']}' AND "
+        f"source_runtime_id = '{accepted['runtime_id']}' AND "
+        f"source_fencing_token = {accepted['fencing_token']} AND "
+        f"target_runtime_id = '{current['runtime_id']}' AND "
+        f"target_fencing_token = {current['fencing_token']} AND phase = 'verified'"
+    )
+    return len(rows) == 1
+
+
 def require_preserved_workers(
     before: dict[str, Any],
     after: dict[str, Any],
     *,
     admitted_version: str | None = None,
+    accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous_projects = before["projects"]
     current_projects = after["projects"]
@@ -3433,6 +4466,20 @@ def require_preserved_workers(
             or current["runtime_version"] != previous["runtime_version"]
             or current["fencing_token"] != previous["fencing_token"]
         ):
+            accepted_transition = (
+                accepted_dead_owner is not None
+                and project_id == accepted_dead_owner["project_id"]
+                and previous["runtime_id"] == accepted_dead_owner["runtime_id"]
+                and previous["fencing_token"] == accepted_dead_owner["fencing_token"]
+                and current["fencing_token"] > previous["fencing_token"]
+                and current["runtime_version"] == admitted_version
+            )
+            if accepted_transition:
+                if verified_dead_owner_recovery(accepted_dead_owner, current):
+                    continue
+                raise DeadOwnerRecoveryPending(
+                    f"Accepted dead owner recovery is not verified for project {project_id}"
+                )
             raise RuntimeError(
                 f"Host restart changed the existing execution owner for project {project_id}"
             )
@@ -3560,6 +4607,8 @@ def wait_supervisor_host_ready(
     allow_degraded_workers: bool = False,
     degraded_baseline: bool = False,
     restart_exited: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
+    socket_activation: dict[str, Any] | None = None,
     timeout: int = 480,
 ) -> dict[str, Any]:
     expected_package_version = runtime_package_version(version)
@@ -3578,6 +4627,8 @@ def wait_supervisor_host_ready(
                     time.sleep(HOST_RESTART_DELAY_SECONDS)
                     if unit == "failed":
                         service("reset-failed")
+                    if socket_activation is not None:
+                        ensure_socket_listening()
                     service("start")
                     starts += 1
                     continue
@@ -3609,6 +4660,17 @@ def wait_supervisor_host_ready(
                 raise RuntimeError(
                     "Host health does not report the accepted Core and recovery identities"
                 )
+            if status.get("health") == "degraded" and not (
+                allow_degraded_workers and degraded_baseline
+            ):
+                # The replaced API worker reports degraded while it drains;
+                # wait for ready within this bound instead of failing the run.
+                last_problem = (
+                    "deployment status is degraded: "
+                    + str(status.get("detail", ""))[:300]
+                )
+                time.sleep(2)
+                continue
             snapshot = host_status_snapshot(
                 status,
                 allow_degraded=(allow_degraded_workers and degraded_baseline),
@@ -3619,12 +4681,18 @@ def wait_supervisor_host_ready(
                 )
             continuity = (
                 require_preserved_workers(
-                    prior_status, snapshot, admitted_version=version
+                    prior_status,
+                    snapshot,
+                    admitted_version=version,
+                    accepted_dead_owner=accepted_dead_owner,
                 )
                 if prior_status is not None
                 else {"retained": 0}
             )
+            if socket_activation is not None and unit_state(SOCKET) != "active":
+                ensure_socket_listening()
             return {
+                **({"socket_listening": True} if socket_activation is not None else {}),
                 "version": version,
                 "health_commit": health["commit"],
                 "recovery_version": health["recovery_version"],
@@ -3639,7 +4707,7 @@ def wait_supervisor_host_ready(
                 "runtime_process_birth": identity["process_birth"],
                 "host_starts": starts,
             }
-        except (OSError, ValueError, HTTPError) as error:
+        except (OSError, ValueError, HTTPError, DeadOwnerRecoveryPending) as error:
             last_problem = str(error)[:300]
             time.sleep(2)
     raise RuntimeError(
@@ -3694,6 +4762,13 @@ def _restart_boundary_activity(client: CoreClient) -> dict[str, dict[str, Any]]:
                         if isinstance(item, dict)
                         and isinstance(item.get("turn_id"), str)
                     }
+                ),
+                "unidentified_turns": sum(
+                    1
+                    for item in pending
+                    if not isinstance(item, dict)
+                    or not isinstance(item.get("turn_id"), str)
+                    or not item.get("turn_id")
                 ),
             }
     return busy
@@ -3781,14 +4856,288 @@ def _unavailable_owner_blocker(
     )
 
 
-def wait_quiet_restart_boundary() -> dict[str, Any]:
+def _includes_host_reconnect(version: str) -> bool:
+    try:
+        run(
+            "git",
+            "-C",
+            str(REPO),
+            "merge-base",
+            "--is-ancestor",
+            HOST_RECONNECT_COMMIT,
+            version,
+        )
+    except (RuntimeError, OSError, subprocess.SubprocessError):
+        return False
+    return True
+
+
+def _versions_reconnecting_to_host(client: CoreClient) -> list[str] | None:
+    """Every API and execution version, when each one reconnects to the host.
+
+    Returns None, so the caller waits for chat work to settle, when any
+    version is unknown, not an exact commit, or predates #1023.
+    """
+    status = client.get("deployment/status")
+    if not isinstance(status, dict):
+        return None
+    versions: set[Any] = {status.get("api_version")}
+    residents = status.get("resident_versions")
+    projects = status.get("projects")
+    if not isinstance(residents, list) or not isinstance(projects, list):
+        return None
+    versions.update(residents)
+    for project in projects:
+        if not isinstance(project, dict):
+            return None
+        if project.get("runtime_version") is not None:
+            versions.add(project.get("runtime_version"))
+    if not all(isinstance(item, str) and SHA.fullmatch(item) for item in versions):
+        return None
+    if not all(_includes_host_reconnect(item) for item in versions):
+        return None
+    return sorted(versions)
+
+
+def core_write(path: str, payload: dict, *, idempotency_key: str) -> Any:
+    """POST an ordinary Core write; the key makes a retried request exact."""
+    client = api()
+    request = Request(
+        f"{client.origin}/api/v1/{path}",
+        data=json.dumps(payload, separators=(",", ":")).encode(),
+        headers={
+            "Authorization": f"Bearer {client.token}",
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotency_key,
+        },
+        method="POST",
+    )
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def holds_state_path() -> Path:
+    # Separate from deployer-state.json: promotion saves its own copy of that
+    # record, which would overwrite a hold saved in between.
+    return STATE.with_name("project-holds.json")
+
+
+def _saved_holds() -> dict[str, Any]:
+    path = holds_state_path()
+    if not path.exists():
+        return {}
+    holds = json.loads(path.read_text())
+    if not isinstance(holds, dict):
+        raise RuntimeError(
+            "Saved project holds are malformed; inspect them before releasing"
+        )
+    return holds
+
+
+def _save_holds(holds: dict[str, Any]) -> None:
+    if holds:
+        atomic_json(holds_state_path(), holds)
+    else:
+        holds_state_path().unlink(missing_ok=True)
+
+
+def _unrouted(error: HTTPError) -> bool:
+    """Whether a 404 is the framework's unknown route, not an unknown project."""
+    try:
+        body = json.loads(error.read() or b"{}")
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("detail") == "Not Found"
+
+
+def place_project_hold(
+    project_id: str, *, deployment_id: str, reason: str, grace_seconds: int
+) -> str | None:
+    """Hold one project's chat work; None when Core predates project holds.
+
+    The hold is saved in deployer state before this returns, so a later
+    ``release-holds`` releases it even if this run stops.
+    """
+    try:
+        view = core_write(
+            f"engagements/{quote(project_id, safe='')}/hold",
+            {
+                "reason": reason,
+                "deployment_id": deployment_id,
+                "grace_seconds": grace_seconds,
+            },
+            idempotency_key=f"project-hold:{deployment_id}:{project_id}",
+        )
+    except HTTPError as error:
+        if error.code == 405 or (error.code == 404 and _unrouted(error)):
+            # The route itself is missing: this Core predates project holds.
+            return None
+        raise
+    hold = view.get("hold") if isinstance(view, dict) else None
+    if not isinstance(hold, dict) or not isinstance(hold.get("id"), str):
+        raise RuntimeError(f"Core returned no hold for project {project_id}")
+    saved = _saved_holds()
+    saved[project_id] = {
+        "hold_id": hold["id"],
+        "deployment_id": deployment_id,
+        "reason": reason,
+        "placed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _save_holds(saved)
+    return hold["id"]
+
+
+def release_project_holds(
+    *, reason: str, deployment_prefix: str | None = None
+) -> dict[str, Any]:
+    """Release the holds this deployer placed and saved; report each.
+
+    ``deployment_prefix`` limits release to holds whose deployment ID starts
+    with it, so a host restart never releases an operator's stop holds.
+    """
+    saved = _saved_holds()
+    released: dict[str, Any] = {}
+    failed: dict[str, str] = {}
+    for project_id, entry in sorted(saved.items()):
+        if deployment_prefix is not None and not (
+            isinstance(entry, dict)
+            and str(entry.get("deployment_id", "")).startswith(deployment_prefix)
+        ):
+            continue
+        hold_id = entry.get("hold_id") if isinstance(entry, dict) else None
+        if not isinstance(hold_id, str):
+            failed[project_id] = "saved hold has no ID"
+            continue
+        try:
+            view = core_write(
+                f"engagements/{quote(project_id, safe='')}/hold/"
+                f"{quote(hold_id, safe='')}/release",
+                {"reason": reason},
+                idempotency_key=f"project-hold-release:{hold_id}",
+            )
+        except (HTTPError, OSError, ValueError) as error:
+            failed[project_id] = str(error)[:300]
+            continue
+        hold = view.get("hold") if isinstance(view, dict) else {}
+        released[project_id] = {
+            "hold_id": hold_id,
+            "status": hold.get("status") if isinstance(hold, dict) else None,
+            "restored_goals": hold.get("restored_goals", [])
+            if isinstance(hold, dict)
+            else [],
+        }
+    _save_holds(
+        {
+            project_id: entry
+            for project_id, entry in _saved_holds().items()
+            if project_id not in released
+        }
+    )
+    return {"released": released, "failed": failed}
+
+
+def hold_projects_until_quiet(
+    *,
+    deployment_id: str,
+    reason: str,
+    project_ids: list[str] | None = None,
+    grace_seconds: int = PROJECT_HOLD_GRACE_SECONDS,
+) -> dict[str, Any] | None:
+    """Hold projects until none has chat work; None if Core has no holds.
+
+    ``project_ids`` holds exactly those projects; without it every project
+    with chat work is held, and any project that becomes busy while this
+    waits is held too. Core stops what is still running after the grace.
+    """
+    started = time.monotonic()
+    deadline = started + grace_seconds + PROJECT_HOLD_WAIT_SECONDS
+    held: dict[str, str] = {}
+    targets = list(project_ids or [])
+    while True:
+        busy = _restart_boundary_activity(api())
+        for project_id in [*targets, *busy]:
+            if project_id in held:
+                continue
+            hold_id = place_project_hold(
+                project_id,
+                deployment_id=deployment_id,
+                reason=reason,
+                grace_seconds=grace_seconds,
+            )
+            if hold_id is None:
+                if held:
+                    raise RuntimeError(
+                        "Core accepted some project holds and refused another; "
+                        "release them with release-holds"
+                    )
+                return None
+            held[project_id] = hold_id
+        if not busy:
+            return {
+                "quiet_after_seconds": round(time.monotonic() - started, 1),
+                "holds": held,
+            }
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Chat work in {len(busy)} held project(s) did not stop within "
+                f"{grace_seconds + PROJECT_HOLD_WAIT_SECONDS}s, so nothing was "
+                "stopped or restarted; the holds stay in place until release-holds: "
+                + ", ".join(list(busy)[:10])
+            )
+        time.sleep(PROJECT_HOLD_POLL_SECONDS)
+
+
+def hold_command(
+    project_ids: list[str] | None, reason: str, grace_seconds: int
+) -> dict[str, Any]:
+    """Hold the named projects, or every live project, until no chat work runs.
+
+    Without ``project_ids`` it holds each project that has an execution
+    worker; a project without one runs nothing, and a hold request would only
+    start a worker for it. Any project that becomes busy meanwhile is held too.
+    """
+    if project_ids:
+        projects = list(project_ids)
+    else:
+        status = api().get("deployment/status")
+        rows = status.get("projects") if isinstance(status, dict) else None
+        if not isinstance(rows, list):
+            raise RuntimeError("Core deployment status has an invalid shape")
+        projects = sorted(
+            row["project_id"]
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("project_id"), str)
+            and not row["project_id"].startswith("__")
+            and row.get("runtime_id")
+        )
+    held = hold_projects_until_quiet(
+        deployment_id=f"operator-stop-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}",
+        reason=reason,
+        project_ids=projects,
+        grace_seconds=grace_seconds,
+    )
+    if held is None:
+        raise RuntimeError(
+            "This Core predates project holds; coordinate the stop with Butler "
+            "as AGENTS.md describes for older releases"
+        )
+    return {"status": "held", **held}
+
+
+def wait_quiet_restart_boundary(
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Wait, bounded, until no chat turn would cross the host restart.
 
     Supervisor workers outlive the host, but a worker without #1023 fails a
     turn that reads the host (admission pressure, credentials, the browser
-    bridge) while no host is running. The operator gate runs before staging
-    and migration; this repeats its chat check at the moment of the stop.
-    Reads fail closed. Nothing is stopped when chat work does not settle.
+    bridge) while no host is running. When every API and execution version
+    includes #1023 there is nothing to protect, so this returns at once and
+    running turns cross the restart. Otherwise it waits: the operator gate
+    runs before staging and migration; this repeats its chat check at the
+    moment of the stop. Reads fail closed. Nothing is stopped when chat work
+    does not settle.
 
     A turn whose execution owner is unavailable does not settle while that
     owner stays unavailable. Once the same owner has stayed unavailable for
@@ -3796,14 +5145,75 @@ def wait_quiet_restart_boundary() -> dict[str, Any]:
     its turns, the worker and why the worker cannot advance them.
     """
     started = time.monotonic()
+    if accepted_dead_owner is None:
+        reconnecting = _versions_reconnecting_to_host(api())
+        if reconnecting is not None:
+            return {
+                "quiet_after_seconds": 0.0,
+                "waited": False,
+                "reason": (
+                    "every API and execution worker version waits out a "
+                    "supervisor replacement, so running turns cross it"
+                ),
+                "reconnecting_versions": reconnecting,
+            }
+        # Older workers need a quiet boundary. Core holds every busy project
+        # instead of waiting for it to settle on its own; the caller releases
+        # the holds once the new host is up. A Core without holds falls back
+        # to the bounded wait below.
+        pending = state().get("pending")
+        holds = hold_projects_until_quiet(
+            deployment_id=f"{HOST_RESTART_HOLD_PREFIX}{pending or 'unknown'}",
+            reason="Core supervisor restart for a deployment",
+        )
+        if holds is not None:
+            return {**holds, "waited": True}
     deadline = started + HOST_QUIET_WAIT_SECONDS
     unavailable_since: dict[tuple[str, str], float] = {}
     while True:
         client = api()
         busy = _restart_boundary_activity(client)
         if not busy:
-            return {"quiet_after_seconds": round(time.monotonic() - started, 1)}
+            quiet_after = round(time.monotonic() - started, 1)
+            print(
+                f"activate-host: chat turns were quiet after {quiet_after}s",
+                file=sys.stderr,
+                flush=True,
+            )
+            return {"quiet_after_seconds": quiet_after}
         stuck = _unavailable_turn_owners(client, busy)
+        if accepted_dead_owner is not None:
+            project_id = accepted_dead_owner["project_id"]
+            if (
+                set(busy) == {project_id}
+                and set(busy[project_id]["turns"])
+                == set(accepted_dead_owner["turn_ids"])
+                and busy[project_id].get("unidentified_turns", 0) == 0
+                and project_id in stuck
+                and stuck[project_id]["runtime_id"] == accepted_dead_owner["runtime_id"]
+            ):
+                status = client.get("deployment/status")
+                owner = next(
+                    (
+                        item
+                        for item in status["projects"]
+                        if item.get("project_id") == project_id
+                    ),
+                    None,
+                )
+                if (
+                    owner is not None
+                    and owner.get("fencing_token")
+                    == accepted_dead_owner["fencing_token"]
+                ):
+                    return {
+                        "quiet_after_seconds": round(time.monotonic() - started, 1),
+                        "accepted_dead_owner": accepted_dead_owner,
+                        "dead_process": prove_dead_owner(accepted_dead_owner),
+                    }
+            raise RuntimeError(
+                "Dead-worker acceptance no longer matches the exact busy turns and owner"
+            )
         now = time.monotonic()
         unavailable_since = {
             (project_id, owner["runtime_id"]): unavailable_since.get(
@@ -3948,15 +5358,32 @@ def _switch_supervisor_host(
 
     if release.parent != RELEASES or release.name != version or release.is_symlink():
         raise RuntimeError("Host activation target is not the exact immutable release")
+    activation = socket_activation()
+    journal["socket_activation"] = activation
     persist()
+    stop_started = time.monotonic()
+    if activation is not None:
+        # A connection may start the stopped service from `current` at once.
+        ensure_socket_listening()
+        if current_release_version() != version:
+            switch_to(release)
+        journal["state"] = "release_selected"
+        journal["current_release"] = str(release)
+        persist()
     journal["service_stop"] = stop_supervisor_service(host_connection(allow_stale=True))
-    require_stopped()
-    if current_release_version() != version:
-        switch_to(release)
+    if activation is None:
+        require_stopped()
+        if current_release_version() != version:
+            switch_to(release)
+    else:
+        # The service may already be running the selected release, started by
+        # a queued connection; stop_supervisor_service proved the old one exited.
+        journal["socket"] = ensure_socket_listening()
     journal["state"] = "service_stopped_release_selected"
     journal["current_release"] = str(release)
     persist()
     service("start")
+    start_issued = time.monotonic()
     journal["state"] = "service_started"
     persist()
     readback = wait_supervisor_host_ready(
@@ -3966,6 +5393,19 @@ def _switch_supervisor_host(
         allow_degraded_workers=allow_degraded_workers,
         degraded_baseline=prior_status.get("health") == "degraded",
         restart_exited=True,
+        accepted_dead_owner=journal.get("accepted_dead_owner"),
+        socket_activation=activation,
+    )
+    journal["timings"] = {
+        "stop_and_switch_seconds": round(start_issued - stop_started, 1),
+        "start_to_ready_seconds": round(time.monotonic() - start_issued, 1),
+    }
+    print(
+        "activate-host: stop and switch took "
+        f"{journal['timings']['stop_and_switch_seconds']}s, start to ready "
+        f"{journal['timings']['start_to_ready_seconds']}s",
+        file=sys.stderr,
+        flush=True,
     )
     journal["state"] = "complete"
     journal["readback"] = readback
@@ -4035,8 +5475,47 @@ def activate_supervisor_host(
     version: str,
     *,
     allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Restart only the foreground supervisor from an accepted staged release."""
+    """Restart only the foreground supervisor from an accepted staged release.
+
+    Projects held for the restart boundary are released afterwards, whether
+    the activation succeeded or rolled back; a release Core does not confirm
+    stays saved for ``release-holds``.
+    """
+    try:
+        result = _activate_supervisor_host(
+            record,
+            version,
+            allow_degraded_workers=allow_degraded_workers,
+            accepted_dead_owner=accepted_dead_owner,
+        )
+    except BaseException:
+        _release_restart_holds()
+        raise
+    released = _release_restart_holds()
+    if released["released"] or released["failed"]:
+        result = {**result, "restart_holds": released}
+    return result
+
+
+def _release_restart_holds() -> dict[str, Any]:
+    try:
+        return release_project_holds(
+            reason="Core supervisor restart finished",
+            deployment_prefix=HOST_RESTART_HOLD_PREFIX,
+        )
+    except Exception as error:  # the holds stay saved for release-holds
+        return {"released": {}, "failed": {"*": str(error)[:300]}}
+
+
+def _activate_supervisor_host(
+    record: dict[str, Any],
+    version: str,
+    *,
+    allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if record.get("deployment_mode") != "supervisor":
         raise RuntimeError("Host activation requires supervisor deployment mode")
     deployment = record.get("runtime_deployment")
@@ -4075,6 +5554,13 @@ def activate_supervisor_host(
     )
     existing = record.get("host_activation")
     if isinstance(existing, dict) and existing.get("version") == version:
+        recorded_dead_owner = existing.get("accepted_dead_owner")
+        if (
+            accepted_dead_owner is not None
+            and accepted_dead_owner != recorded_dead_owner
+        ):
+            raise RuntimeError("A retry cannot change the accepted dead owner")
+        accepted_dead_owner = recorded_dead_owner
         recorded_allow_degraded = existing.get("allow_degraded_workers") is True
         if allow_degraded_workers and not recorded_allow_degraded:
             raise RuntimeError(
@@ -4166,6 +5652,7 @@ def activate_supervisor_host(
             }
         if existing.get("state") in {
             "prepared",
+            "release_selected",
             "service_stopped_release_selected",
             "service_started",
         }:
@@ -4195,6 +5682,7 @@ def activate_supervisor_host(
                             prior_status=prior,
                             allow_degraded_workers=allow_degraded_workers,
                             degraded_baseline=prior.get("health") == "degraded",
+                            accepted_dead_owner=accepted_dead_owner,
                         )
                     except Exception as error:
                         existing["readback_error"] = str(error)[:1000]
@@ -4212,6 +5700,18 @@ def activate_supervisor_host(
                             **readback,
                         }
                 supervisor_service_configuration()
+                if (
+                    unit_state(SERVICE) == "active"
+                    and identity is not None
+                    and identity.get("package_version") == previous_package_version
+                ):
+                    # A socket-held swap selected the release before its stop
+                    # and was interrupted: the old host may still run turns.
+                    existing["running_operations"] = wait_no_running_operations()
+                    existing["restart_boundary"] = wait_quiet_restart_boundary(
+                        accepted_dead_owner
+                    )
+                    _save_host_activation(record, existing)
                 try:
                     readback = _switch_supervisor_host(
                         version,
@@ -4290,7 +5790,11 @@ def activate_supervisor_host(
                     raise RuntimeError(
                         "Previous supervisor does not match the interrupted activation journal"
                     )
-            existing["restart_boundary"] = wait_quiet_restart_boundary()
+            if unit_state(SERVICE) == "active":
+                existing["running_operations"] = wait_no_running_operations()
+            existing["restart_boundary"] = wait_quiet_restart_boundary(
+                accepted_dead_owner
+            )
             readback = _switch_supervisor_host(
                 version,
                 release=release,
@@ -4330,7 +5834,10 @@ def activate_supervisor_host(
             "already_active": True,
             **readback,
         }
-    restart_boundary = wait_quiet_restart_boundary()
+    # The supervisor's stop would wait for its in-flight deployment
+    # operations; wait for them first, then take the quiet boundary last.
+    running_operations = wait_no_running_operations()
+    restart_boundary = wait_quiet_restart_boundary(accepted_dead_owner)
     service_identity = supervisor_service_identity()
     prior_host = host_connection()
     if prior_host is None:
@@ -4388,7 +5895,9 @@ def activate_supervisor_host(
         },
         "prior_service": service_identity,
         "operations": operations,
+        "running_operations": running_operations,
         "restart_boundary": restart_boundary,
+        "accepted_dead_owner": accepted_dead_owner,
         "allow_degraded_workers": allow_degraded_workers,
         "degraded_baseline_reason": (
             "Accepted aggregate degraded status attributed by read-only diagnosis to stale old execution-worker leases; individual failed-worker equality is not asserted."
@@ -4473,7 +5982,11 @@ def activate_supervisor_host(
     }
 
 
-def activate_host(*, allow_degraded_workers: bool = False) -> dict[str, Any]:
+def activate_host(
+    *,
+    allow_degraded_workers: bool = False,
+    accepted_dead_owner: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     record = state()
     pending = record.get("pending")
     if not isinstance(pending, str):
@@ -4481,7 +5994,10 @@ def activate_host(*, allow_degraded_workers: bool = False) -> dict[str, Any]:
             "No accepted pending candidate is available for host activation"
         )
     return activate_supervisor_host(
-        record, pending, allow_degraded_workers=allow_degraded_workers
+        record,
+        pending,
+        allow_degraded_workers=allow_degraded_workers,
+        accepted_dead_owner=accepted_dead_owner,
     )
 
 
@@ -4514,7 +6030,12 @@ def rollback_host() -> dict[str, Any]:
     if (
         isinstance(restore_operation, dict)
         and restore_operation.get("state")
-        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        in {
+            "rolling_back",
+            "release_selected",
+            "service_stopped_release_selected",
+            "service_started",
+        }
         and restore_operation.get("code_only") is True
         and restore_operation.get("version") == journal.get("version")
         and isinstance(restore_operation.get("operation_id"), str)
@@ -4564,7 +6085,12 @@ def rollback_host() -> dict[str, Any]:
     if (
         isinstance(prior_rollback, dict)
         and prior_rollback.get("state")
-        in {"rolling_back", "service_stopped_release_selected", "service_started"}
+        in {
+            "rolling_back",
+            "release_selected",
+            "service_stopped_release_selected",
+            "service_started",
+        }
         and prior_rollback.get("code_only") is True
         and prior_rollback.get("version") == journal.get("previous_version")
         and isinstance(prior_rollback.get("operation_id"), str)
@@ -4969,7 +6495,48 @@ def wait_ready(commit: str) -> None:
     raise RuntimeError("Core did not serve its accepted build within 480 seconds")
 
 
-def legacy_promote() -> dict[str, Any]:
+def operator_database_backup(label: str) -> Path:
+    """An operator-requested online PostgreSQL dump before a rolling promotion.
+
+    Supervisor deployments keep live data in place and never restore it, so
+    this is a recovery copy only; it is taken only when explicitly requested.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label):
+        raise ValueError("backup label must be a single safe path component")
+    postgres = configured_postgres(TOKEN_FILE)
+    if postgres is None:
+        raise RuntimeError("an online backup needs the configured PostgreSQL database")
+    backup = BACKUPS / label
+    if backup.exists() or backup.is_symlink():
+        raise RuntimeError("operator backup already exists")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    staging = BACKUPS / f".{label}.{os.getpid()}.partial"
+    staging.mkdir(mode=0o700)
+    try:
+        snapshot_postgres(staging, postgres)
+        os.replace(staging, backup)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return backup
+
+
+def _restore_previous_code(previous: str) -> None:
+    """Code-only legacy rollback: no snapshot was requested, data stays as is."""
+
+    old_release = RELEASES / previous
+    if not old_release.is_dir():
+        raise RuntimeError("previous immutable release is missing")
+    if unit_state(SERVICE) != "inactive":
+        service("stop")
+        require_stopped()
+    switch_to(old_release)
+    service("start")
+    wait_ready(previous)
+    edge("start")
+
+
+def legacy_promote(*, backup: bool = False) -> dict[str, Any]:
     record = state()
     new = record.get("pending")
     if not isinstance(new, str):
@@ -5033,17 +6600,22 @@ def legacy_promote() -> dict[str, Any]:
         wait_ready(previous)
         edge("start")
         raise
-    label = f"pre-{new}-{int(time.time())}"
-    try:
-        backup = snapshot(label)
-    except Exception:
-        service("start")
-        wait_ready(previous)
-        edge("start")
-        raise
-    record.update(
-        {"previous": previous, "rollback_backup": str(backup), "promoting": new}
-    )
+    snapshot_path: Path | None = None
+    if backup:
+        label = f"pre-{new}-{int(time.time())}"
+        try:
+            snapshot_path = snapshot(label)
+        except Exception:
+            service("start")
+            wait_ready(previous)
+            edge("start")
+            raise
+        record.update({"rollback_backup": str(snapshot_path)})
+    else:
+        # Without a requested snapshot, an older one must never be restored
+        # over newer data, so it is no longer this promotion's rollback target.
+        record.pop("rollback_backup", None)
+    record.update({"previous": previous, "promoting": new})
     atomic_json(STATE, record)
     try:
         switch_to(release)
@@ -5052,7 +6624,12 @@ def legacy_promote() -> dict[str, Any]:
         edge("start")
     except Exception:
         try:
-            rollback(_legacy_attempt=attempt)
+            if snapshot_path is not None:
+                rollback(_legacy_attempt=attempt)
+            else:
+                _restore_previous_code(previous)
+                record.update({"promoting": None})
+                atomic_json(STATE, record)
         except Exception as recovery:
             raise RuntimeError(
                 f"candidate failed; automatic rollback also failed: {recovery}"
@@ -5060,14 +6637,22 @@ def legacy_promote() -> dict[str, Any]:
         raise
     record.update({"active": new, "pending": None, "promoting": None})
     atomic_json(STATE, record)
-    retention = finish_rollback_retention(record, backup)
+    if snapshot_path is None:
+        return {
+            "status": "promoted",
+            "commit": new,
+            "previous": previous,
+            "rollback_backup": None,
+            "rollback_retention": {"status": "not_requested"},
+        }
+    retention = finish_rollback_retention(record, snapshot_path)
     return {
         "status": "promoted"
         if retention["status"] == "complete"
         else "promoted_cleanup_incomplete",
         "commit": new,
         "previous": previous,
-        "rollback_backup": str(backup),
+        "rollback_backup": str(snapshot_path),
         "rollback_retention": retention,
     }
 
@@ -5166,7 +6751,62 @@ def deployment_post(path: str, payload: dict) -> dict:
     A stopping or busy supervisor answers 503 or 429 with Retry-After while
     the operation continues under its ID. Submitting the same operation ID
     again is idempotent and returns its saved receipt once one exists.
+
+    A new operation (``deployment/operations`` with its journaled
+    ``operation_id``) whose reply is lost, by a 500, 502, 503 or 504, a
+    timeout, or a reset or refused connection, is re-sent under the same ID
+    with bounded backoff. Core never dispatches a saved ID twice; it answers
+    with that operation's receipt, so a lost reply is read back, not applied
+    again. If that receipt still says ``running``, it is read until it
+    settles, within the same bound. Other POSTs, such as reconciliation, are
+    not re-sent.
     """
+    operation_id = payload.get("operation_id")
+    if path != "deployment/operations" or not isinstance(operation_id, str):
+        return _deployment_post_once(path, payload)
+    description = f"Deployment operation {operation_id} ({payload.get('action')})"
+    lost = False
+
+    def send() -> dict:
+        nonlocal lost
+        try:
+            return _deployment_post_once(path, payload)
+        except (OSError, HTTPException) as error:
+            if transient_reason(error) is not None:
+                lost = True
+            raise
+
+    receipt = tolerate_transient(send, description)
+    if lost and isinstance(receipt, dict) and receipt.get("state") == "running":
+        # The original request is still executing in Core; read its receipt
+        # until it settles. A receipt still running past the bound is
+        # returned as is, and the next run reads it again.
+        receipt = _settled_receipt(operation_id, receipt)
+    return receipt
+
+
+def _settled_receipt(operation_id: str, receipt: dict) -> dict:
+    started = time.monotonic()
+    delay = TRANSIENT_FIRST_DELAY_SECONDS
+    client = api()
+    while receipt.get("state") == "running":
+        if time.monotonic() - started + delay > TRANSIENT_BUDGET_SECONDS:
+            break
+        time.sleep(delay)
+        delay = min(delay * 2, TRANSIENT_MAX_DELAY_SECONDS)
+        observed = client.read("deployment/operations/" + operation_id)
+        if not isinstance(observed, dict) or observed.get("operation_id") != (
+            operation_id
+        ):
+            raise RuntimeError(
+                "Deployment operation readback identifies another request"
+            )
+        receipt = observed
+    return receipt
+
+
+def _deployment_post_once(path: str, payload: dict) -> dict:
+    """One submission, waiting out only answers that carry Retry-After."""
     client = api()
     body = json.dumps(payload, separators=(",", ":")).encode()
     for attempt in range(DEPLOYMENT_RETRY_ATTEMPTS):
@@ -5376,6 +7016,20 @@ def reconcile_operation(operation_id: str) -> dict[str, Any]:
             "deployment/operations/" + operation_id + "/reconcile", {}
         )
     except HTTPError as error:
+        if error.code == 409:
+            # Core refuses to settle an operation it cannot prove either way
+            # (a target change has no durable outcome record, for example).
+            # Its unchanged receipt lets the caller settle the step from
+            # deployment status, or keep holding it; nothing is replayed.
+            receipt = api().read("deployment/operations/" + operation_id)
+            if (
+                not isinstance(receipt, dict)
+                or receipt.get("operation_id") != operation_id
+            ):
+                raise RuntimeError(
+                    "Deployment operation readback identifies another request"
+                ) from error
+            return receipt
         if error.code not in {404, 405}:
             raise
         raise RuntimeError(
@@ -5385,15 +7039,19 @@ def reconcile_operation(operation_id: str) -> dict[str, Any]:
 
 
 def staged_deployer(record: dict) -> StagedDeployer:
+    # Promotion reads ride out a busy or restarting Core (``CoreClient.read``);
+    # a read failing past its bound stops the run, which resumes from its journal.
     return StagedDeployer(
         record,
-        get=api().get,
+        get=api().read,
         post=deployment_post,
         save=lambda value: atomic_json(STATE, value),
         verify=runtime_release,
         activate_host=lambda version: activate_supervisor_host(record, version),
         migration_status=migration_status,
         reconcile_operation=reconcile_operation,
+        handoff_grace_seconds=HANDOFF_GRACE_SECONDS,
+        recovery_wait_seconds=HANDOFF_RECOVERY_WAIT_SECONDS,
     )
 
 
@@ -5409,17 +7067,26 @@ def adopt_supervisor() -> dict:
     return {"status": "supervisor_adopted", "commit": status["api_version"]}
 
 
-def promote() -> dict[str, Any]:
+def promote(*, backup: bool = False) -> dict[str, Any]:
+    """Promote the pending candidate; take a backup only when the operator asks."""
     record = state()
     if record.get("deployment_mode") != "supervisor":
-        return legacy_promote()
+        return legacy_promote(backup=backup)
     pending = record.get("pending")
     if not isinstance(pending, str):
         return {
             "status": "no_pending_candidate",
             "deployment": api().get("deployment/status"),
         }
-    return staged_deployer(record).promote(pending)
+    operator_backup = None
+    if backup:
+        operator_backup = str(
+            operator_database_backup(f"operator-pre-{pending}-{int(time.time())}")
+        )
+    result = staged_deployer(record).promote(pending)
+    if operator_backup is not None:
+        result = {**result, "operator_backup": operator_backup}
+    return result
 
 
 def rollback(*, _legacy_attempt: _LegacyAttempt | None = None) -> dict[str, Any]:
@@ -5473,9 +7140,98 @@ def bootstrap() -> dict[str, Any]:
     return {"status": "bootstrapped", "commit": INITIAL_COMMIT}
 
 
-def cycle() -> dict[str, Any]:
+def prebuild() -> dict[str, Any]:
+    """Build and accept the newest main release before anyone promotes it.
+
+    Meant for a timer: it does what ``prepare`` does, so a later ``promote``
+    or ``cycle`` finds the immutable release already built and only verifies
+    it. Waiting states are results, not failures: an unfinished deployment,
+    or main CI evidence that is still running, missing or failed, is reported
+    and retried on the next run. It never promotes, never runs local tests,
+    and leaves Core untouched.
+    """
+    record = state()
+    journal = record.get("runtime_deployment")
+    if isinstance(journal, dict) and journal.get("state") != "complete":
+        return {
+            "status": "skipped",
+            "reason": "deployment_in_progress",
+            "deployment_state": journal.get("state"),
+            "version": journal.get("version"),
+        }
+    if record.get("promoting") is not None:
+        return {"status": "skipped", "reason": "promotion_in_progress"}
+    try:
+        prepared = prepare()
+    except CiEvidenceUnavailable as error:
+        return {"status": "waiting_for_ci", "reason": str(error)}
+    if prepared.get("status") == "current":
+        return {"status": "current", "commit": prepared.get("commit")}
+    return {
+        "status": "prebuilt",
+        "commit": prepared.get("commit"),
+        "previous": prepared.get("previous"),
+        "timings": prepared.get("timings"),
+    }
+
+
+def _lock_holder(path: Path) -> str | None:
+    try:
+        holder = json.loads(path.read_text() or "null")
+    except (OSError, ValueError):
+        return None
+    action = holder.get("action") if isinstance(holder, dict) else None
+    return action if isinstance(action, str) else None
+
+
+def acquire_deploy_lock(
+    lock,
+    path: Path,
+    action: str,
+    *,
+    clock=time.monotonic,
+    sleep=time.sleep,
+) -> str | None:
+    """Take the exclusive deploy lock for ``action``.
+
+    Returns None once held. A prebuild returns the busy holder's action
+    instead of waiting. A promote or cycle waits, bounded, for a prebuild,
+    since that run is building the release it will promote; any other busy
+    holder is refused at once, as before.
+    """
+    deadline = None
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            holder = _lock_holder(path)
+            if action == "prebuild":
+                return holder or "unknown"
+            if action in {"promote", "cycle"} and holder == "prebuild":
+                if deadline is None:
+                    deadline = clock() + PREBUILD_LOCK_WAIT_SECONDS
+                    print(
+                        f"{action}: waiting for the running prebuild to finish",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                if clock() < deadline:
+                    sleep(LOCK_POLL_SECONDS)
+                    continue
+            raise RuntimeError(
+                f"Another deployer run ({holder or 'unknown action'}) holds the deploy lock"
+            )
+    lock.seek(0)
+    lock.truncate()
+    lock.write(json.dumps({"action": action, "pid": os.getpid()}))
+    lock.flush()
+    return None
+
+
+def cycle(*, backup: bool = False) -> dict[str, Any]:
     prepared = prepare()
-    return {"prepared": prepared, "promotion": promote()}
+    return {"prepared": prepared, "promotion": promote(backup=backup)}
 
 
 def main() -> int:
@@ -5488,13 +7244,17 @@ def main() -> int:
             "rollback",
             "reconcile-runtime-deployment",
             "reconcile-superseded-manual-deployment",
+            "reconcile-unactivated-supersession",
             "activate-host",
             "rollback-host",
             "offline-rollback",
             "adopt-supervisor",
             "bootstrap",
             "cycle",
+            "prebuild",
             "status",
+            "hold",
+            "release-holds",
         ),
     )
     parser.add_argument(
@@ -5503,6 +7263,22 @@ def main() -> int:
         help=(
             "accept selected checks from a successful exact-main CI push run; "
             "repeat once per first-parent commit from the live baseline to the candidate"
+        ),
+    )
+    parser.add_argument(
+        "--commit",
+        help=(
+            "prepare this commit on origin/main's first-parent history instead "
+            "of its head (for a release that must roll out in two steps)"
+        ),
+    )
+    parser.add_argument(
+        "--require-ci-evidence",
+        action="store_true",
+        help=(
+            "prepare: also require a successful main CI run for every commit "
+            "since the live release (off by default: pull requests merge only "
+            "after their CI passes)"
         ),
     )
     parser.add_argument(
@@ -5522,12 +7298,26 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--backup",
+        action="store_true",
+        help=(
+            "operator request: take a backup before promoting (a coherent rollback "
+            "snapshot in legacy mode, an online PostgreSQL dump in supervisor mode); "
+            "without it no backup is taken"
+        ),
+    )
+    parser.add_argument(
         "--allow-degraded-workers",
         action="store_true",
         help=(
             "allow activate-host to proceed from a degraded aggregate worker baseline; "
             "API/database health and exact owner continuity remain required"
         ),
+    )
+    parser.add_argument(
+        "--accepted-dead-owner-file",
+        type=Path,
+        help="exact operator acceptance of one proven-dead worker and its unfinished turns",
     )
     parser.add_argument(
         "--deployment-id",
@@ -5545,14 +7335,38 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--project",
+        action="append",
+        help=(
+            "hold: hold this project (repeat); without it every project is held, "
+            "as a whole-Core stop needs"
+        ),
+    )
+    parser.add_argument(
+        "--reason",
+        help="hold or release-holds: operator-facing reason recorded on each hold",
+    )
+    parser.add_argument(
+        "--grace-seconds",
+        type=int,
+        default=PROJECT_HOLD_GRACE_SECONDS,
+        help="hold: seconds running turns may finish before Core stops them",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="validate a manual supersession reconciliation without changing deployer state",
+        help="validate a supported supersession reconciliation without changing deployer state",
     )
     args = parser.parse_args()
     checked_host()
     if args.ci_run_id is not None and args.action != "prepare":
         raise RuntimeError("--ci-run-id is supported only with prepare")
+    if args.require_ci_evidence and args.action != "prepare":
+        raise RuntimeError("--require-ci-evidence is supported only with prepare")
+    if args.commit is not None and args.action != "prepare":
+        raise RuntimeError("--commit is supported only with prepare")
+    if args.backup and args.action not in {"promote", "cycle"}:
+        raise RuntimeError("--backup is supported only with promote or cycle")
     if (
         args.ci_pr_run_id is not None or args.ci_playwright_run_id is not None
     ) and args.action != "prepare":
@@ -5561,9 +7375,14 @@ def main() -> int:
         raise RuntimeError(
             "--allow-degraded-workers is supported only with activate-host"
         )
+    if args.accepted_dead_owner_file is not None and args.action != "activate-host":
+        raise RuntimeError(
+            "--accepted-dead-owner-file is supported only with activate-host"
+        )
     if args.deployment_id is not None and args.action not in {
         "reconcile-runtime-deployment",
         "reconcile-superseded-manual-deployment",
+        "reconcile-unactivated-supersession",
     }:
         raise RuntimeError("--deployment-id is supported only with reconciliation")
     if (
@@ -5571,6 +7390,7 @@ def main() -> int:
         in {
             "reconcile-runtime-deployment",
             "reconcile-superseded-manual-deployment",
+            "reconcile-unactivated-supersession",
         }
         and args.deployment_id is None
     ):
@@ -5596,19 +7416,44 @@ def main() -> int:
         raise RuntimeError(
             "--allow-degraded-baseline is supported only for manual supersession reconciliation"
         )
-    if args.dry_run and args.action != "reconcile-superseded-manual-deployment":
+    if args.dry_run and args.action not in {
+        "reconcile-superseded-manual-deployment",
+        "reconcile-unactivated-supersession",
+    }:
         raise RuntimeError(
             "--dry-run is supported only for manual supersession reconciliation"
         )
-    with (ROOT / ".deploy.lock").open("a+") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if (args.project is not None or args.reason is not None) and args.action not in {
+        "hold",
+        "release-holds",
+    }:
+        raise RuntimeError("--project and --reason are supported only with hold")
+    if args.action == "hold" and not args.reason:
+        raise RuntimeError("hold requires --reason")
+    if not 0 <= args.grace_seconds <= 3600:
+        raise RuntimeError("--grace-seconds must be between 0 and 3600")
+    lock_path = ROOT / ".deploy.lock"
+    with lock_path.open("a+") as lock:
+        busy = acquire_deploy_lock(lock, lock_path, args.action)
         result = (
-            {"status": "state", **state()}
+            {"status": "skipped", "reason": "deploy_lock_busy", "holder": busy}
+            if busy is not None
+            else {
+                "status": "state",
+                **state(),
+                "project_holds": _saved_holds(),
+            }
             if args.action == "status"
+            else hold_command(args.project, args.reason, args.grace_seconds)
+            if args.action == "hold"
+            else release_project_holds(reason=args.reason or "Released by the operator")
+            if args.action == "release-holds"
             else prepare(
                 ci_run_ids=args.ci_run_id,
                 pr_ci_run_ids=args.ci_pr_run_id,
                 pr_playwright_run_ids=args.ci_playwright_run_id,
+                require_ci_evidence=args.require_ci_evidence,
+                commit=args.commit,
             )
             if args.action == "prepare"
             else reconcile_runtime_deployment(args.deployment_id)
@@ -5620,8 +7465,23 @@ def main() -> int:
                 dry_run=args.dry_run,
             )
             if args.action == "reconcile-superseded-manual-deployment"
-            else activate_host(allow_degraded_workers=args.allow_degraded_workers)
+            else reconcile_unactivated_supersession(
+                args.deployment_id, dry_run=args.dry_run
+            )
+            if args.action == "reconcile-unactivated-supersession"
+            else activate_host(
+                allow_degraded_workers=args.allow_degraded_workers,
+                accepted_dead_owner=(
+                    load_dead_owner_acceptance(args.accepted_dead_owner_file)
+                    if args.accepted_dead_owner_file is not None
+                    else None
+                ),
+            )
             if args.action == "activate-host"
+            else promote(backup=args.backup)
+            if args.action == "promote"
+            else cycle(backup=args.backup)
+            if args.action == "cycle"
             else globals()[args.action.replace("-", "_")]()
         )
     print(json.dumps(result, sort_keys=True))

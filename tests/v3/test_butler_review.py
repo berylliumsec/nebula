@@ -23,7 +23,6 @@ from nebula.v3.butler_oversight import (
     butler_router,
     ingest_agent_report,
     project_stream_id,
-    watch_id,
 )
 from nebula.v3.butler_review import (
     MEANINGFUL_EVENTS,
@@ -43,7 +42,6 @@ from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWr
 from nebula.v3.domain import (
     ButlerAuthorityPolicy,
     ButlerDecision,
-    ButlerGoalWatch,
     ButlerIncident,
     ButlerProjectState,
     ButlerRecoveryCase,
@@ -184,7 +182,6 @@ def test_meaningful_event_filter_is_narrow():
         "agent.attention_reported",
         "agent.plan_changed",
         "agent.turn_completed",
-        "goal.progress_overdue",
         "goal.plan_changed",
         "goal.blocked",
         "goal.read_only_tool_failures_repeated",
@@ -271,7 +268,7 @@ async def test_precedent_packet_is_bounded_and_excludes_foreign_project_memory(
         verification_state="verified",
     )
     assert preference is not None
-    snapshot = await read_precedents(memory, "project", "goal.progress_overdue")
+    snapshot = await read_precedents(memory, "project", "goal.blocked")
     assert [item.id for item in snapshot.items] == [preference.id]
     assert foreign.id not in [item.id for item in snapshot.items]
     assert "other-project-private-source" not in snapshot.model_dump_json()
@@ -681,67 +678,6 @@ async def test_invalid_model_citation_becomes_unavailable_without_foreign_eviden
     assert saved.reason == "invalid_evidence_citation"
     assert all(ref["project_id"] == "project" for ref in saved.evidence_refs)
     assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 0
-
-
-async def test_model_failure_cannot_suppress_deterministic_overdue_incident(tmp_path):
-    _, store, _, goal, worker = await _setup(tmp_path)
-    (
-        await store.update(
-            ButlerGoalWatch,
-            watch_id(goal.id),
-            {"progress_due_at": utc_now() - timedelta(seconds=1)},
-        )
-    )
-    assert (await worker.fire_due_deadlines("project")) == 1
-    assert (
-        await store.count_entities(
-            ButlerIncident, {"source": "goal_checkpoint"}, engagement_id="project"
-        )
-    ) == 1
-    assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 1
-
-    class FailingReviewer:
-        async def review(self, _packet):
-            raise RuntimeError("provider failed")
-
-    saved = await review_pending(store, "project", worker.worker_id, FailingReviewer())
-    assert saved is not None
-    assert saved.status == "unavailable"
-    assert saved.reason == "model_unavailable"
-    assert (
-        await store.count_entities(
-            ButlerIncident, {"source": "goal_checkpoint"}, engagement_id="project"
-        )
-    ) == 1
-    assert (await store.count_entities(ButlerIncident, engagement_id="project")) == 1
-
-
-async def test_escalation_joins_guaranteed_overdue_incident(tmp_path):
-    _, store, _, goal, worker = await _setup(tmp_path)
-    (
-        await store.update(
-            ButlerGoalWatch,
-            watch_id(goal.id),
-            {"progress_due_at": utc_now() - timedelta(seconds=1)},
-        )
-    )
-    assert (await worker.fire_due_deadlines("project")) == 1
-    prior = (await store.find_entities(ButlerIncident, {}, engagement_id="project"))[0]
-    reviewer = CitingReviewer(choice="escalate")
-    saved = await review_pending(store, "project", worker.worker_id, reviewer)
-
-    assert saved is not None and saved.choice == "escalate"
-    incidents = await store.find_entities(ButlerIncident, {}, engagement_id="project")
-    assert len(incidents) == 1
-    assert incidents[0].id == prior.id
-    assert incidents[0].source == "goal_checkpoint"
-    assert incidents[0].verification_state == "core_observed"
-    assert {
-        ref["id"] for ref in incidents[0].evidence_refs if ref["kind"] == "decision"
-    } == {saved.id}
-    event_types = [item.event_type for item in (await _events(store))]
-    assert event_types.count("incident.opened") == 1
-    assert event_types.count("incident.updated") == 1
 
 
 async def test_provider_reviewer_uses_goal_runtime_without_chat_mutation(tmp_path):

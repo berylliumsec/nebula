@@ -17,6 +17,16 @@ from nebula.v3.settings_assistant_api import SettingsAssistantApi
 from nebula.v3.storage import NebulaStore
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture(autouse=True)
+def _no_host_memory_runner(tmp_path, monkeypatch):
+    """Keep a runner installed on the developer's host out of these results."""
+    monkeypatch.setenv(
+        "NEBULA_HOST_MEMORY_RUNNER_SOCKET", str(tmp_path / "absent-runner.sock")
+    )
+
+
 TOKEN = "synthetic-memory-budget"
 PATH = "/api/v1/memory-budgets"
 
@@ -209,3 +219,76 @@ async def test_public_actor_header_does_not_impersonate_butler(core):
             )
         )
         assert audit.actor_id == "operator"
+
+
+async def test_butler_reads_sets_and_cancels_host_commands(core, tmp_path):
+    from nebula.v3.memory_policy import MemoryRunnerCapabilities
+
+    store, service, app, client = core
+    butler = await ButlerCapabilities.create(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        "project",
+        settings_api=SettingsAssistantApi(app, TOKEN),
+    )
+    matches = await butler.search({"query": "host commands running at once queue"})
+    assert any(
+        item["operation"] == "nebula.settings.host_commands"
+        for item in matches["matches"]
+    )
+    current = await butler.invoke(
+        {"operation": "nebula.settings.host_commands", "arguments": {}}, change=False
+    )
+    settings = current["result"]["settings"]
+    assert settings == {"revision": 1, "running_at_once": 8}
+    saved = await butler.invoke(
+        {
+            "operation": "nebula.settings.set_host_command_limit",
+            "arguments": {"expected_revision": 1, "running_at_once": 3},
+        },
+        change=True,
+    )
+    assert saved["result"]["running_at_once"] == 3
+    view = (await client.get(PATH + "/host-commands")).json()
+    assert view["settings"] == {"revision": 2, "running_at_once": 3}
+
+    capability = MemoryRunnerCapabilities(
+        environment="local",
+        profile_id="host-memory-runner",
+        kernel_enforced=True,
+        protected_process_tree=True,
+        explicit_swap=True,
+        pressure_threshold=True,
+        live_update=True,
+        capacity_bytes=16 * GIB,
+        detail="synthetic",
+    )
+    await service.create_job(
+        "command-q",
+        project_id="project",
+        resource_kind="host_command",
+        resource_id="q",
+        capabilities=capability,
+        labels={"command": "make -j8 all", "tool_call_id": "tool-1"},
+    )
+    queued = (await client.get(PATH + "/host-commands?tool_call_id=tool-1")).json()
+    assert [(item["job_id"], item["position"]) for item in queued["queued"]] == [
+        ("command-q", 1)
+    ]
+    cancelled = await butler.invoke(
+        {
+            "operation": "nebula.settings.cancel_host_command",
+            "arguments": {"job_id": "command-q"},
+        },
+        change=True,
+    )
+    assert cancelled["result"]["state"] == "finished"
+    job = await service.get_job("command-q")
+    assert job.outcome == "cancelled" and job.labels["cancel_requested"] is True
+    async with store.database.session() as session:
+        actions = {
+            row.action: row.actor_id
+            for row in await session.scalars(select(MemoryBudgetAuditRow))
+        }
+    assert actions["host_commands.save"] == "butler:project"
+    assert actions["host_command.cancel"] == "butler:project"

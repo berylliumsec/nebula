@@ -74,7 +74,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["usage-settings", "runtime-usage"].includes(hash)) return "usage-settings";
-  if (["automation-settings", "memory-budget-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
+  if (["automation-settings", "memory-budget-settings", "host-command-settings", "butler-check-interval-settings", "butler-instructions-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "storage-integration-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
@@ -129,6 +129,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setupStatus,
     workspaceState,
     engagement,
+    engagements,
   } = useWorkspace();
   // Settings shows the selected project's sections (policy, tooling, skills,
   // follow-up, setup): while open, that project is in use, so Core starts its
@@ -987,7 +988,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
-      <MemoryBudgetSettings api={api} previewMode={previewMode} />
+      <MemoryBudgetSettings api={api} previewMode={previewMode} projects={engagements} />
       </SettingsGroup>
       <SettingsGroup id="environments-settings" title="Environments" summary="SSH hosts from ~/.ssh/config" open={openAdvancedGroup === "environments-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "environments-settings"}>
       <EnvironmentSettings />

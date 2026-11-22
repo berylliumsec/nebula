@@ -8,6 +8,7 @@ from sqlalchemy import select
 from nebula.v3.database import (
     DeploymentHostRow,
     DeploymentOperationRow,
+    DeploymentReceiptRow,
     ProjectAdmissionHoldRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
@@ -17,6 +18,7 @@ from nebula.v3.database import (
     RuntimeResourceRow,
 )
 from nebula.v3.domain import ChatSession, Engagement
+from nebula.v3.process_identity import process_origin
 from nebula.v3.runtime_auto_admission import RuntimeAutoAdmission
 from nebula.v3.runtime_operations import DeploymentOperations, OperationRejected
 from tests.v3.test_deployment_lifecycle import host as host
@@ -73,22 +75,22 @@ class Management:
             lost, self.lose_reconciliation = self.lose_reconciliation, None
             if lost == "before_commit":
                 raise OSError("connection reset before the commit")
-            if lost == "after_commit":
-                from nebula.v3.database import DeploymentReceiptRow
-                from nebula.v3.runtime_coordination import ProjectLease
-                from nebula.v3.runtime_orphan_recovery import orphan_receipt_key
+            from nebula.v3.database import DeploymentReceiptRow
+            from nebula.v3.runtime_coordination import ProjectLease
+            from nebula.v3.runtime_orphan_recovery import orphan_receipt_key
 
-                async with self.coordinator.coordination._write() as session:
+            async with self.coordinator.coordination._write() as session:
+                key = orphan_receipt_key(ProjectLease(**values["expected_owner"]))
+                if await session.get(DeploymentReceiptRow, key) is None:
                     session.add(
                         DeploymentReceiptRow(
-                            id=orphan_receipt_key(
-                                ProjectLease(**values["expected_owner"])
-                            ),
+                            id=key,
                             action="project.orphans_reconciled",
                             result={"reconciled": True},
                             occurred_at_ms=1,
                         )
                     )
+            if lost == "after_commit":
                 raise OSError("connection reset after the commit")
             return {"reconciled": True}
         if action == "prepare_execution":
@@ -189,7 +191,7 @@ async def recovery(host, monkeypatch):
     supervisor = SimpleNamespace(
         coordinator=coordinator,
         store=store,
-        host=SimpleNamespace(rediscover=rediscover),
+        host=SimpleNamespace(rediscover=rediscover, launch_origin=process_origin()),
         management=management,
     )
     diagnostics = []
@@ -276,7 +278,31 @@ async def test_expired_positive_dead_owner_initiates_promoted_target_version(rec
         assert owner.lease_expires_at_ms == recovery.clock[0] - 1
 
 
-async def test_expired_owner_with_only_archived_chat_is_not_recovered(recovery):
+async def assert_released(recovery):
+    """The dead owner was settled and cleared; no worker was started for it."""
+    assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
+    async with recovery.coordinator.database.session() as session:
+        owner = await session.get(ProjectOwnershipRow, "one")
+        assert owner.runtime_id is None
+        assert owner.lease_expires_at_ms == 0
+        # The counter is kept: the next grant takes a strictly higher token.
+        assert owner.fencing_token == recovery.lease.fencing_token
+        assert not list(await session.scalars(select(RuntimeRecoveryRow)))
+        (receipt,) = await session.scalars(
+            select(DeploymentReceiptRow).where(
+                DeploymentReceiptRow.action == "project.dead_owner_released"
+            )
+        )
+        assert receipt.result == {
+            **expected_owner(recovery),
+            "reason": "dead_owner_without_demand",
+            "effects_replayed": False,
+        }
+
+
+async def test_expired_owner_with_only_archived_chat_is_released(recovery):
+    # An idle project needs no worker: its dead owner is reconciled and
+    # cleared instead of recovered, so it starts on demand like any other.
     (chat,) = await recovery.store.find_entities(
         ChatSession, {}, engagement_id="one", limit=1
     )
@@ -289,11 +315,51 @@ async def test_expired_owner_with_only_archived_chat_is_not_recovered(recovery):
 
     await recovery.automatic._recover_expired()
 
+    await assert_released(recovery)
+    # A later pass finds no expired owner and does nothing more.
+    await recovery.automatic._recover_expired()
+    assert [call[0] for call in recovery.management.calls] == ["reconcile_project"]
+
+
+async def test_idle_project_with_a_resource_to_restore_is_recovered(recovery):
+    # A release would strand what a worker must restore; recover it instead.
+    await archive_open_chat(recovery)
+    async with recovery.coordinator.database.session() as session:
+        session.add(
+            RuntimeResourceRow(
+                id="notebook-one",
+                project_id="one",
+                runtime_id="source",
+                fencing_token=recovery.lease.fencing_token,
+                kind="notebook",
+                state="restorable",
+                restoration="durable",
+                detail="A notebook the next worker restores",
+                checkpoint={},
+                updated_at_ms=1_000_000,
+            )
+        )
+    await recovery.automatic.reconcile()
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
+
+
+async def test_idle_project_release_needs_the_reconciliation_receipt(recovery):
+    from nebula.v3.runtime_coordination import CoordinationConflict, ProjectLease
+    from nebula.v3.runtime_orphan_recovery import release_dead_owner
+
+    with pytest.raises(CoordinationConflict, match="Reconcile"):
+        await release_dead_owner(
+            recovery.coordinator,
+            ProjectLease(**expected_owner(recovery)),
+            launch_origin=process_origin(),
+        )
     async with recovery.coordinator.database.session() as session:
         owner = await session.get(ProjectOwnershipRow, "one")
-        assert owner.runtime_id == recovery.lease.runtime_id
-        assert owner.fencing_token == recovery.lease.fencing_token
-    assert recovery.management.calls == []
+        assert owner.runtime_id == "source"
 
 
 async def archive_open_chat(recovery):
@@ -350,16 +416,28 @@ async def test_expired_owner_with_only_project_work_is_recovered(
     assert recovery.management.calls[2][1]["expected_owner"] == expected_owner(recovery)
 
 
-@pytest.mark.parametrize("state", ["uncertain", "succeeded"])
-async def test_expired_owner_without_unfinished_project_work_is_not_recovered(
-    recovery, state
-):
+async def test_expired_owner_without_unfinished_project_work_is_released(recovery):
     await archive_open_chat(recovery)
-    await project_command(recovery, state)
+    await project_command(recovery, "succeeded")
 
     await recovery.automatic.reconcile()
 
-    assert recovery.management.calls == []
+    await assert_released(recovery)
+
+
+async def test_unsettled_uncertain_command_recovers_instead_of_releasing(recovery):
+    # Reconciliation normally settles it; one it left needs an explicit
+    # outcome, so the project is recovered rather than left without a worker.
+    await archive_open_chat(recovery)
+    await project_command(recovery, "uncertain")
+
+    await recovery.automatic.reconcile()
+
+    assert [call[0] for call in recovery.management.calls] == [
+        "reconcile_project",
+        "prepare_execution",
+        "recover_project",
+    ]
 
 
 async def test_recovery_keeps_source_version_without_a_promoted_target(recovery):
@@ -569,16 +647,18 @@ async def test_another_projects_leftover_does_not_block_recovery(recovery):
     ]
 
 
-@pytest.mark.parametrize("held", ["shutdown", "archived"])
-async def test_shutdown_and_archived_projects_do_not_initiate_recovery(recovery, held):
-    if held == "shutdown":
-        async with recovery.coordinator.database.session() as session:
-            (await session.get(DeploymentHostRow, "host")).shutdown_requested = True
-    else:
-        await recovery.store.update(Engagement, "one", {"status": "archived"})
+async def test_shutdown_does_not_initiate_recovery(recovery):
+    async with recovery.coordinator.database.session() as session:
+        (await session.get(DeploymentHostRow, "host")).shutdown_requested = True
     await recovery.automatic.reconcile()
     assert not recovery.management.calls
     assert not await operations(recovery)
+
+
+async def test_archived_project_dead_owner_is_released_not_recovered(recovery):
+    await recovery.store.update(Engagement, "one", {"status": "archived"})
+    await recovery.automatic.reconcile()
+    await assert_released(recovery)
 
 
 @pytest.mark.parametrize("phase", ["held", "prepared", "verified"])

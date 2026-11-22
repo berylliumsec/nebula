@@ -511,6 +511,17 @@ async def serve(
             ),
         ),
     ] = None,
+    host_services_fd: Annotated[
+        int | None,
+        typer.Option(
+            min=3,
+            help=(
+                "Serve workers' private host services on this inherited listening "
+                "Unix socket, held by a socket unit across Core restarts "
+                "(SocketMode=0600), instead of binding one per supervisor."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run the versioned REST/WebSocket API."""
 
@@ -529,6 +540,7 @@ async def serve(
     ):
         raise typer.BadParameter("TLS certificate and key must be readable files")
     from .runtime_launcher import retain_bundle
+    from .runtime_host_services import inherited_host_services
     from .runtime_service import inherited_listener, serve_runtime
 
     root = _data_dir(data_dir)
@@ -544,8 +556,15 @@ async def serve(
         raise typer.BadParameter(
             "independent Core requires authentication; use normal device pairing"
         )
+    if host_services_fd is not None and host_services_fd == listen_fd:
+        raise typer.BadParameter("--host-services-fd must differ from --listen-fd")
     try:
         listener = inherited_listener(host, port, descriptor=listen_fd)
+        services_listener = (
+            inherited_host_services(host_services_fd)
+            if host_services_fd is not None
+            else None
+        )
     except (OSError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     if listener is None:
@@ -572,6 +591,7 @@ async def serve(
         print_ready=True,
         diagnostics_level=diagnostics_level,
         listener=listener,
+        host_services_listener=services_listener,
     )
 
 

@@ -95,6 +95,7 @@ Differences from the full design, to close in later releases:
 | 2026-11-14 | Tool-usage lessons are a card kind in linked memory, not a separate service. They are learned only from a failure the model fixed later in the same turn, keyed to the tool and its schema digest, and shown only inside tool definitions. |
 | 2026-11-16 | The curator runs only when a Core goal completes. Plain chats and goals that are cancelled, paused or blocked are not curated. Reading memory (entry cards and pull tools) stays available in every chat. This replaces curation after every turn and the planned `chat.turn.settled` event. |
 | 2026-11-17 | Linked memory must not make live work slower. Project workers keep only I/O (database reads, fenced writes, provider and MCP calls) and do it only while the project is quiet. All computation runs in one helper process per Core host at the lowest CPU and I/O priority, with a memory limit and no database access. Curation calls a provider only when no live turn is using it, and stops itself if live latency rises. This replaces running the curator as a task inside each project worker. |
+| 2026-11-19 | After the first production audit: only the operator's own messages carry operator authority (Core goal prompts, resume instructions, Butler recovery cases and subagent tasks are agent text; Core's fixed prompts and its failed-turn notes are never evidence). A call denied by a hook, approval or access rule is not evidence, and a card pairing a refusal with a way around it is quarantined. Background-lane turns no longer hold curation back; only an operator's turn does. Entry matching ignores Nebula's own words, the project ID and words most cards share, and counts a word once. Saved cards are re-checked against these rules when a project's curation starts. |
 
 ## Goals and non-goals
 
@@ -205,8 +206,11 @@ service that live turns use.
 
 Before every chunk, curation pauses at the chunk boundary if any of these hold:
 
-- the project had a live turn queued or running within a quiet period (30
-  seconds to start);
+- an operator's (direct-lane) turn in the project was queued or running
+  within a quiet period (30 seconds to start). Goal, subagent, Butler and
+  queued turns run in the background lane and can occupy a busy project for
+  days; they share provider slots and host pressure with curation instead of
+  holding it back (production stalled 16 hours on them, 2026-11-19);
 - host CPU, memory, load or I/O pressure is above a curation threshold set well
   below the live-turn gate (start below 50%, pause above 65% to start);
 - the project is handing off, its worker is retiring, or a deployment is in

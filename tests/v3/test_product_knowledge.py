@@ -48,6 +48,15 @@ def test_product_help_discovers_next_turn_mcp_context_choices(monkeypatch):
     assert "next turn" in text
 
 
+def test_product_help_explains_adding_a_claude_harness(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("Add Claude harness login API key")
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "add claude" in text
+    assert "/login" in text
+    assert "managed approvals" in text
+
+
 def test_product_help_explains_never_permission_bypass(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
@@ -445,6 +454,24 @@ def test_product_search_finds_butler_work_agent_access_and_history(monkeypatch):
         "How does Butler read older Work check-in history?"
     )
     assert any("nebula.work.work_updates" in str(item["text"]) for item in history)
+
+
+def test_product_search_finds_work_stages_and_their_butler_tools(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    define = search_product_knowledge("How do I define Work stages for a project?")
+    assert any("nebula.work.set_work_stages" in str(item["text"]) for item in define)
+    gaps = search_product_knowledge(
+        "Which projects are missing a stage on All projects?"
+    )
+    assert any("Missing a stage" in str(item["text"]) for item in gaps)
+    inherited = search_product_knowledge(
+        "Do subprojects use their parent project's Work stages?"
+    )
+    assert any("nearest parent's" in str(item["text"]) for item in inherited)
+    rollup = search_product_knowledge(
+        "How many subprojects reached each stage on a parent project?"
+    )
+    assert any("Subprojects by stage" in str(item["text"]) for item in rollup)
 
 
 def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):
@@ -1182,3 +1209,105 @@ def test_product_help_explains_queueing_messages_for_butler(monkeypatch):
     text = "\n".join(str(item["text"]) for item in matches).lower()
     assert "butler queue" in text and "follow-up queue" in text
     assert "needs review" in text
+
+
+def test_product_help_finds_butler_mode_board_and_parallel_threads(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    for question in (
+        "How do I see every running chat across projects and what needs me?",
+        "Can I ask Butler several things at once in parallel threads?",
+    ):
+        matches = search_product_knowledge(question)
+        assert any(item["heading"] == "Butler mode" for item in matches), question
+    text = "\n".join(
+        str(item["text"])
+        for item in search_product_knowledge("Butler mode status board threads")
+    ).lower()
+    assert "/butler" in text
+    assert "reply in this thread" in text
+    stages = search_product_knowledge(
+        "How do I get from Butler mode to every project's stages?"
+    )
+    assert any(
+        "All projects" in str(item["text"]) and "/projects" in str(item["text"])
+        for item in stages
+    )
+
+
+def test_product_help_explains_butler_board_goal_sections(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Where are paused and completed goal chats on the Butler mode board?"
+    )
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Active**" in text and "**Idle**" in text and "**Completed**" in text
+    assert "chats without a goal are not listed" in text
+
+
+def test_product_help_explains_resuming_idle_goals_from_butler_board(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I resume all idle goals, or select several to resume, in Butler mode?"
+    )
+    assert any(
+        item["heading"] == "Resuming idle goals from the Butler board"
+        for item in matches
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Resume all idle**" in text and "**Select all**" in text
+    assert "**Resume N**" in text and "Proposed" in text
+
+
+def test_product_help_explains_holding_chats_when_priorities_shift(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "My priorities changed: how do I hold the current research chats and start new goals?"
+    )
+    assert any(
+        item["heading"] == "Holding chats when priorities shift" for item in matches
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**Hold all active**" in text and "**Release and send**" in text
+    assert "nebula.work.hold_chats" in text
+
+
+def test_product_help_explains_high_priority_chats_and_projects(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I mark a chat or project high priority so its work goes first?"
+    )
+    assert any(
+        item["heading"] == "High-priority chats and projects" for item in matches
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "**High priority**" in text and "nebula.work.set_priority" in text
+
+
+def test_product_help_explains_archiving_and_deleting_butler_threads(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge("How do I archive or delete a Butler thread?")
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "archive" in text and "archived chats" in text
+    assert "delete this thread and its messages" in text
+
+
+def test_product_help_explains_butler_thread_activity(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How can I see what Butler is doing in a thread while it works?"
+    )
+    assert any(item["heading"] == "Butler mode" for item in matches)
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "activity" in text and "queue position" in text
+
+
+def test_product_help_explains_butler_proposed_goal_chats(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler propose goal chat spin up work operator presses Start delegate"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "nebula.work.propose_goal_chat" in text
+    assert "nothing runs until the operator" in " ".join(text.split())

@@ -5,27 +5,45 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import Field, model_validator
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
+from .stored_entities import decode_stored
 from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
 from .database import EntityRow
+from .deployment_protocol import BUTLER_HOME_PROJECT, RESERVED_PROJECT_IDS
 from .domain import (
     ChatBackend,
     ChatSession,
     Engagement,
+    EngagementStatus,
     HarnessProfile,
     NebulaModel,
     ProviderProfile,
     ScopePolicy,
 )
+from .execution_scope import observer_reads
 from .harnesses import HarnessRuntimeService
 from .mcp import resolve_mcp_profiles
 from .storage import NebulaStore
 
 
+class ButlerFocus(NebulaModel):
+    """The project a Butler home session is about.
+
+    The field is ``project``, not ``project_id``: request routing treats every
+    ``*_id`` field as a project reference, and a reservation that named both
+    Butler's home and the focus project would be refused as ambiguous.
+    """
+
+    project: str = Field(min_length=1, max_length=200)
+
+
 class ButlerSessionReservation(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
+    # Only with engagement_id == BUTLER_HOME_PROJECT; omitted for a
+    # Nebula-wide thread.
+    focus: ButlerFocus | None = None
     backend: ChatBackend
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -37,6 +55,10 @@ class ButlerSessionReservation(NebulaModel):
         Literal["automatic", "standard", "daybreakBlue", "daybreakRed"] | None
     ) = None
     allow_cloud_tool_results: bool = False
+    # Butler mode: start a separate Butler conversation that runs alongside
+    # the project's current one instead of returning it.
+    thread: bool = False
+    title: str | None = Field(default=None, min_length=1, max_length=200)
 
     @model_validator(mode="after")
     def runtime_is_coherent(self) -> "ButlerSessionReservation":
@@ -56,6 +78,12 @@ class ButlerSessionReservation(NebulaModel):
                 )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError("harness Butler sessions require only harness_profile_id")
+        if self.title is not None and not self.thread:
+            raise ValueError("only a Butler thread takes a title")
+        if self.focus is not None and self.engagement_id != BUTLER_HOME_PROJECT:
+            raise ValueError("only a Butler home session takes a focus project")
+        if self.focus is not None and self.focus.project in RESERVED_PROJECT_IDS:
+            raise ValueError("Butler cannot focus on a Core project")
         return self
 
 
@@ -72,6 +100,13 @@ async def reserve_butler_session(
     """
 
     project = await store.get(Engagement, request.engagement_id)
+    focus = request.focus.project if request.focus is not None else None
+    if focus is not None:
+        # The focus project belongs to another worker: read, never lock.
+        with observer_reads():
+            focused = await store.get(Engagement, focus)
+        if focused.status == EngagementStatus.ARCHIVED:
+            raise ChatConfigurationError("Restore the project before asking Butler")
     scope = (
         (await store.get(ScopePolicy, project.scope_policy_id))
         if project.scope_policy_id
@@ -96,14 +131,20 @@ async def reserve_butler_session(
             (
                 await transaction.session.execute(
                     text(f"SELECT pg_advisory_xact_lock({per_id_key('project_id')})"),
-                    {"project_id": f"butler-active-session:{request.engagement_id}"},
+                    {
+                        "project_id": f"butler-active-session:{request.engagement_id}"
+                        + (f":{focus}" if focus is not None else "")
+                    },
                 )
             )
+        focus_column = EntityRow.payload["metadata"]["butler_focus_project"].as_string()
         row = await transaction.session.scalar(
             select(EntityRow)
             .where(
                 EntityRow.kind == ChatSession.entity_kind,
                 EntityRow.engagement_id == request.engagement_id,
+                # Butler's home holds one current session per focus project.
+                focus_column.is_(None) if focus is None else focus_column == focus,
                 EntityRow.payload["metadata"]["control_assistant"]
                 .as_boolean()
                 .is_(True),
@@ -113,12 +154,26 @@ async def reserve_butler_session(
                 .is_(None),
                 # Butler's own subagents run in Butler mode in child chats.
                 EntityRow.payload["metadata"]["subagent_id"].as_string().is_(None),
+                # Butler mode threads run beside the current conversation.
+                func.coalesce(
+                    EntityRow.payload["metadata"]["butler_thread"].as_boolean(),
+                    False,
+                ).is_(False),
             )
             .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
             .limit(1)
         )
-        if row is not None:
-            return ChatSession.model_validate(row.payload)
+        if row is not None and not request.thread:
+            return decode_stored(ChatSession, row.payload)
+        title = (request.title or "Butler thread") if request.thread else "Butler"
+        # A thread keeps the operator's question as its name.
+        thread_metadata = (
+            {"butler_thread": True, "initial_title_state": "operator"}
+            if request.thread
+            else {}
+        )
+        if focus is not None:
+            thread_metadata["butler_focus_project"] = focus
 
         if request.backend == ChatBackend.PROVIDER:
             assert request.provider_id is not None
@@ -145,13 +200,14 @@ async def reserve_butler_session(
                 )
             chat = ChatSession(
                 engagement_id=request.engagement_id,
-                title="Butler",
+                title=title,
                 backend=ChatBackend.PROVIDER,
                 provider_profile_id=provider_profile.id,
                 model=model,
                 metadata={
                     "control_assistant": True,
                     "mcp_server_ids": list(request.mcp_server_ids),
+                    **thread_metadata,
                 },
             )
         else:
@@ -167,6 +223,21 @@ async def reserve_butler_session(
                     allow_remote_mcp=request.allow_cloud_tool_results,
                 )
             )
+            home = request.engagement_id == BUTLER_HOME_PROJECT
+            if focus is not None and not harness_profile.privacy.local_only:
+                # The session's scope is Butler's project; the focus project's
+                # local-only boundary is checked here and on every turn.
+                with observer_reads():
+                    scope = (
+                        await store.get(ScopePolicy, focused.scope_policy_id)
+                        if focused.scope_policy_id
+                        else None
+                    )
+                if scope is not None and scope.local_only:
+                    raise ChatConfigurationError(
+                        f"{focused.name} keeps its data on local models; "
+                        "choose a local harness for Butler."
+                    )
             session = await harness_runtime.create_session(
                 engagement_id=request.engagement_id,
                 profile_id=harness_profile.id,
@@ -180,11 +251,15 @@ async def reserve_butler_session(
                     else request.harness_cyber_access_program
                 ),
                 control_assistant=True,
+                # Butler's own project gives the vendor CLI no shell, files or
+                # command runtime: Butler reaches projects only through Core's
+                # gateway, where reads and changes are checked.
+                tools_enabled=not home,
                 transaction=transaction,
             )
             chat = ChatSession(
                 engagement_id=request.engagement_id,
-                title="Butler",
+                title=title,
                 backend=ChatBackend.HARNESS,
                 harness_profile_id=harness_profile.id,
                 harness_session_id=session.id,
@@ -197,6 +272,7 @@ async def reserve_butler_session(
                     "harness_runtime_options": session.metadata.get(
                         "runtime_options", {}
                     ),
+                    **thread_metadata,
                 },
             )
         (await transaction.add(chat))

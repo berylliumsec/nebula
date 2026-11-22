@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+
 import hashlib
+import time
 from typing import Callable
 from uuid import uuid4
 
@@ -11,6 +14,12 @@ from uuid import uuid4
 _DEPLOYMENT_CHANGED = "DeploymentChanged"
 _CHANGED_RETRIES = 5
 _ATTEMPT_HISTORY = 8
+
+
+# Core's handoff blocker for an idle harness session it cannot restore.
+IDLE_UNRESTORABLE_SESSION = re.compile(
+    r"harness_sessions \S+ remains idle; its restoration is unavailable"
+)
 
 
 class StagedDeployer:
@@ -25,6 +34,11 @@ class StagedDeployer:
         activate_host: Callable[[str], dict] | None = None,
         migration_status: Callable[[str], dict] | None = None,
         reconcile_operation: Callable[[str], dict] | None = None,
+        handoff_grace_seconds: float | None = None,
+        recovery_wait_seconds: float = 300,
+        poll_seconds: float = 5,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self.record, self.get, self.post, self.save, self.verify = (
             record,
@@ -36,6 +50,14 @@ class StagedDeployer:
         self.activate_host = activate_host
         self.migration_status = migration_status
         self.reconcile_operation = reconcile_operation
+        # With a grace period, a deployment never stops on a project: a source
+        # that has not handed off in time is stopped, Core recovers its
+        # projects the way it recovers a crashed worker, and the deployer
+        # adopts that recovery. None keeps the older wait-and-report run.
+        self.handoff_grace_seconds = handoff_grace_seconds
+        self.recovery_wait_seconds = recovery_wait_seconds
+        self.poll_seconds = poll_seconds
+        self.clock, self.sleep = clock, sleep
         # Steps sent during this run. A refusal or an unknown outcome is
         # reported once; the operator's next run moves it forward.
         self._sent: set[str] = set()
@@ -300,6 +322,27 @@ class StagedDeployer:
             return {"runtime_id": runtime_id, "state": "retired"}
 
         return effect
+
+    @staticmethod
+    def _unowned_old_workers(status: dict, version: str) -> list[str]:
+        """Execution workers of another version that own no project."""
+        processes = status.get("processes")
+        if not isinstance(processes, list):
+            return []
+        owners = {
+            row.get("runtime_id")
+            for row in status.get("projects", [])
+            if isinstance(row, dict) and row.get("runtime_id")
+        }
+        return sorted(
+            row["runtime_id"]
+            for row in processes
+            if isinstance(row, dict)
+            and row.get("role") == "execution"
+            and isinstance(row.get("runtime_id"), str)
+            and row.get("version") != version
+            and row["runtime_id"] not in owners
+        )
 
     @staticmethod
     def _no_unowned_worker(status: dict, version: str, journaled: set) -> bool:
@@ -640,11 +683,30 @@ class StagedDeployer:
         ]
 
     def promote(self, version: str) -> dict:
+        """Promote ``version``; the result reports each phase's seconds."""
+        started = self.clock()
+        timings: list[dict] = []
+
+        def lap(name: str, since: float) -> float:
+            now = self.clock()
+            timings.append({"step": name, "seconds": round(now - since, 1)})
+            return now
+
+        def timed(result: dict) -> dict:
+            return {
+                **result,
+                "timings": {
+                    "steps": timings,
+                    "total_seconds": round(self.clock() - started, 1),
+                },
+            }
+
         journal = self._journal("promote", version)
         self._stage_and_promote_api(journal, version)
+        mark = lap("stage_migrate_host_and_api", started)
         staged = self._execution_staged(self._status(), version)
         if staged is not None:
-            return staged
+            return timed(staged)
         self._operation(
             journal,
             "target",
@@ -652,7 +714,10 @@ class StagedDeployer:
             {"version": version},
             effect=self._targeted(version),
         )
-        return self._move_projects(journal, version)
+        mark = lap("target_execution", mark)
+        result = self._settle_projects(journal, version)
+        lap("project_handoffs", mark)
+        return timed(result)
 
     def rollback(self, version: str) -> dict:
         """Move host, API, target, and projects back to ``version``.
@@ -678,7 +743,34 @@ class StagedDeployer:
                 rolled_back(status) if status.get("api_version") == version else None
             ),
         )
-        return self._move_projects(journal, version)
+        return self._settle_projects(journal, version)
+
+    def _settle_projects(self, journal: dict, version: str) -> dict:
+        """Keep moving projects in this run until none is left waiting.
+
+        Without a grace period this is one pass, as before. With one, the
+        deployer polls: each project gets the grace period to hand off, its
+        source is then stopped, and Core's recovery is adopted. The run ends
+        only when the remaining wait has made no progress for longer than a
+        grace period plus the recovery bound.
+        """
+        result = self._move_projects(journal, version)
+        if self.handoff_grace_seconds is None:
+            return result
+        bound = self.handoff_grace_seconds + self.recovery_wait_seconds
+        deadline = self.clock() + bound
+        previous = None
+        while result.get("status") == "waiting_for_handoffs":
+            observed = repr((result.get("pending"), result.get("pinned")))
+            if observed != previous:
+                previous, deadline = observed, self.clock() + bound
+            if self.clock() >= deadline:
+                break
+            self.sleep(self.poll_seconds)
+            # Each pass reads every saved receipt again, like a new run.
+            self._sent.clear()
+            result = self._move_projects(journal, version)
+        return result
 
     def _move_projects(self, journal: dict, version: str) -> dict:
         status = self._status()
@@ -809,6 +901,138 @@ class StagedDeployer:
             self.save(self.record)
             return True
 
+        def step_key(project_id):
+            # A project re-journaled after recovery onto an older version
+            # starts a new generation: saved operation IDs are never reused.
+            key = hashlib.sha256(project_id.encode()).hexdigest()
+            generation = journal.get("handoff_generation", {}).get(project_id, 0)
+            return key if not generation else f"{key}:g{generation}"
+
+        def verified_recovery(value, project, source_id, source_fence):
+            """Accept Core's own verified recovery past the journaled source.
+
+            When a handoff stalls and its source worker stops, expired-owner
+            recovery grants the project to a fresh worker this deployer never
+            prepared. Core reports the recovery that granted the current owner;
+            it is proof only if it started at or after the exact source grant
+            this deployment journaled and has fully verified its restoration.
+            """
+            recovery = project.get("recovery")
+            processes = value.get("processes")
+            successor_id = project.get("runtime_id")
+            if (
+                not isinstance(recovery, dict)
+                or not isinstance(processes, list)
+                or not successor_id
+                or recovery.get("phase") != "verified"
+                or recovery.get("target_runtime_id") != successor_id
+                or recovery.get("target_fencing_token") != project.get("fencing_token")
+                or not isinstance(recovery.get("source_fencing_token"), int)
+                or recovery["source_fencing_token"] < source_fence
+                or (
+                    recovery["source_fencing_token"] == source_fence
+                    and recovery.get("source_runtime_id") != source_id
+                )
+                or project.get("fencing_token", 0) <= source_fence
+                or source_id in owner_ids(value)
+                or project.get("phase") != "verified"
+                or project.get("admission_held") is not False
+                or project.get("blockers") != []
+            ):
+                return False
+            if not any(
+                row.get("runtime_id") == successor_id
+                and row.get("role") == "execution"
+                and row.get("version") == project.get("runtime_version")
+                and row.get("state") == "ready"
+                and row.get("ready_verified") is True
+                for row in processes
+            ):
+                return False
+            journal.setdefault("reconciled_recoveries", {})[project["project_id"]] = {
+                "runtime_id": successor_id,
+                "runtime_version": project.get("runtime_version"),
+                "fencing_token": project["fencing_token"],
+                "source_runtime_id": source_id,
+                "source_fencing_token": source_fence,
+                "recovery_operation_id": recovery.get("operation_id"),
+                "recovery_source_runtime_id": recovery.get("source_runtime_id"),
+                "recovery_source_fencing_token": recovery["source_fencing_token"],
+                "deployment_revision": value.get("revision"),
+            }
+            self.save(self.record)
+            return True
+
+        def only_idle_unrestorable_sessions(project):
+            # Idle harness sessions that cannot be restored never hand off
+            # by themselves; waiting out the grace only delays the stop.
+            blockers = project.get("blockers") or []
+            return bool(blockers) and all(
+                isinstance(item, str) and IDLE_UNRESTORABLE_SESSION.fullmatch(item)
+                for item in blockers
+            )
+
+        def evict_overdue(value, project):
+            """Stop a journaled source that has not handed off within grace."""
+            project_id = project["project_id"]
+            source_id = source_by_project.get(project_id)
+            fence = source_fence_by_project.get(project_id)
+            if (
+                self.handoff_grace_seconds is None
+                or source_id is None
+                or fence is None
+                or project.get("runtime_id") != source_id
+                or project.get("fencing_token") != fence
+                or project.get("runtime_version") == version
+            ):
+                return False
+            started = journal.setdefault("handoff_started_at", {})
+            if project_id not in started:
+                started[project_id] = self.clock()
+                self.save(self.record)
+            if (
+                self.clock() - started[project_id] < self.handoff_grace_seconds
+                and not only_idle_unrestorable_sessions(project)
+            ):
+                return False
+            owner = {
+                "project_id": project_id,
+                "runtime_id": source_id,
+                "fencing_token": fence,
+            }
+
+            def moved(fresh):
+                row = next(
+                    (
+                        item
+                        for item in project_rows(fresh)
+                        if item.get("project_id") == project_id
+                    ),
+                    None,
+                )
+                if row is None or (row.get("runtime_id"), row.get("fencing_token")) == (
+                    source_id,
+                    fence,
+                ):
+                    return None
+                return {**owner, "observed_owner": row.get("runtime_id")}
+
+            result = self._operation(
+                journal,
+                "evict/" + step_key(project_id),
+                "evict_execution",
+                {"expected_owner": owner},
+                effect=moved,
+            )
+            journal.setdefault("evicted_sources", {})[project_id] = {
+                **owner,
+                "blockers": project.get("blockers", []),
+                "phase": project.get("phase"),
+                "affected_project_ids": result.get("affected_project_ids"),
+            }
+            self.save(self.record)
+            return True
+
         def waiting(value, pending, pinned_rows):
             self.record["active"] = version
             journal["waiting_for_handoffs"] = {
@@ -858,7 +1082,11 @@ class StagedDeployer:
                 None,
             )
             target_id = target_by_project.get(project_id)
-            if project is None or target_id is None:
+            # Without a prepared target only a recovery can have moved it.
+            if project is None or (
+                target_id is None
+                and project.get("runtime_id") in (source_by_project[project_id], None)
+            ):
                 continue
             expected_fence = source_fence_by_project.get(project_id)
             if expected_fence is None:
@@ -874,6 +1102,38 @@ class StagedDeployer:
                 )
             source_id = source_by_project[project_id]
             if project.get("runtime_id") == source_id:
+                continue
+            if project.get("runtime_id") not in (
+                target_id,
+                None,
+            ) and verified_recovery(status, project, source_id, expected_fence):
+                # Core recovered the project itself. Retire what this
+                # deployment left without work: the old source and the target
+                # it prepared, which never received the project.
+                try:
+                    for leftover in (source_id, target_id):
+                        if leftover and any(
+                            row.get("runtime_id") == leftover
+                            for row in status.get("processes") or []
+                        ):
+                            _, status = retire_ownerless(leftover, status)
+                except (RuntimeError, OSError) as error:
+                    return waiting(
+                        status,
+                        [{"project_id": project_id, "detail": str(error)[:1000]}],
+                        pinned,
+                    )
+                if project.get("runtime_version") != version:
+                    # Recovered onto an older version: hand the project off
+                    # again from its new owner, under a new generation.
+                    generations = journal.setdefault("handoff_generation", {})
+                    generations[project_id] = generations.get(project_id, 0) + 1
+                    source_by_project[project_id] = project["runtime_id"]
+                    source_fence_by_project[project_id] = project["fencing_token"]
+                    if project["runtime_id"] not in sources:
+                        sources.append(project["runtime_id"])
+                    target_by_project.pop(project_id, None)
+                    self.save(self.record)
                 continue
             successor_verified = False
             if project.get("runtime_id") not in (target_id, None):
@@ -925,7 +1185,9 @@ class StagedDeployer:
                     [
                         {
                             **project,
-                            "detail": "Project owner changed during handoff reconciliation",
+                            "detail": "Core is recovering the project onto a new worker"
+                            if isinstance(project.get("recovery"), dict)
+                            else "Project owner changed during handoff reconciliation",
                         }
                     ],
                     pinned,
@@ -967,12 +1229,17 @@ class StagedDeployer:
 
         # Move one project at a time. The next target is not prepared until the
         # current source has become ownerless, retired, and disappeared from
-        # fresh ownership status.
+        # fresh ownership status. A pass that only skips projects changes
+        # nothing, so it reuses one status read: deployment status lists every
+        # project, and reading it once per project made a pass over a thousand
+        # projects take minutes.
+        fresh: dict | None = None
         for original in projects:
             project_id = original.get("project_id")
             if not project_id:
                 continue
-            status = self._status()
+            status = fresh if fresh is not None else self._status()
+            fresh = status
             project = next(
                 (
                     row
@@ -983,6 +1250,25 @@ class StagedDeployer:
             )
             if project is None or not project.get("runtime_id"):
                 continue
+            try:
+                evicted = evict_overdue(status, project)
+            except (RuntimeError, OSError) as error:
+                return waiting(
+                    status,
+                    [{"project_id": project_id, "detail": str(error)[:1000]}],
+                    pinned,
+                )
+            if evicted:
+                return waiting(
+                    self._status(),
+                    [
+                        {
+                            "project_id": project_id,
+                            "detail": "The source did not hand off within its grace period and was stopped; waiting for Core to recover the project",
+                        }
+                    ],
+                    pinned,
+                )
             if project.get("runtime_version") == version:
                 if project.get("phase") not in (None, "verified"):
                     return waiting(
@@ -997,7 +1283,11 @@ class StagedDeployer:
                     )
                 continue
 
-            if project.get("blockers") and not project.get("admission_held", True):
+            if (
+                self.handoff_grace_seconds is None
+                and project.get("blockers")
+                and not project.get("admission_held", True)
+            ):
                 pinned.append(project)
                 continue
             # Another in-flight handoff owns the project's transition. Do not
@@ -1013,6 +1303,8 @@ class StagedDeployer:
                     ],
                     pinned,
                 )
+            # From here this iteration acts on Core; the next one reads it again.
+            fresh = None
 
             source_id = project["runtime_id"]
             source_projects = [
@@ -1021,6 +1313,23 @@ class StagedDeployer:
                 if row.get("runtime_id") == source_id
             ]
             if len(source_projects) > 1:
+                if (
+                    self.handoff_grace_seconds is not None
+                    and project_id not in source_by_project
+                ):
+                    # One handoff cannot retire a shared source. Journal it
+                    # so that, after the grace period, stopping the source
+                    # lets Core recover all of its projects onto the target.
+                    source_by_project[project_id] = source_id
+                    source_fence_by_project[project_id] = project.get(
+                        "fencing_token", 0
+                    )
+                    journal.setdefault("handoff_started_at", {})[project_id] = (
+                        self.clock()
+                    )
+                    if source_id not in sources:
+                        sources.append(source_id)
+                    self.save(self.record)
                 pinned.append(
                     {
                         **project,
@@ -1043,11 +1352,12 @@ class StagedDeployer:
             if not saved_source:
                 source_by_project[project_id] = source_id
                 source_fence_by_project[project_id] = project.get("fencing_token", 0)
+                journal.setdefault("handoff_started_at", {})[project_id] = self.clock()
                 if source_id not in sources:
                     sources.append(source_id)
                 self.save(self.record)
 
-            project_key = hashlib.sha256(project_id.encode()).hexdigest()
+            project_key = step_key(project_id)
             target_id = target_by_project.get(project_id)
             try:
                 if target_id is None:
@@ -1248,6 +1558,19 @@ class StagedDeployer:
         self.record["active"] = version
         if remaining or pinned:
             return waiting(status, remaining, pinned)
+
+        # Every project now runs the target. An unowned execution worker of
+        # another version serves nothing, but it stays resident and would hold
+        # the next release at "execution staged"; retire it now.
+        for runtime_id in self._unowned_old_workers(status, version):
+            try:
+                _, status = retire_ownerless(runtime_id, status)
+            except (RuntimeError, OSError) as error:
+                return waiting(
+                    status,
+                    [{"runtime_id": runtime_id, "detail": str(error)[:1000]}],
+                    pinned,
+                )
 
         journal["state"] = "complete"
         journal.pop("waiting_for_handoffs", None)

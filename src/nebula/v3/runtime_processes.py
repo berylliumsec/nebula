@@ -1238,6 +1238,15 @@ class RuntimeProcessHost:
                         )
                 except CoordinationConflict as error:
                     # diagnostic-expected: a retirement conflict is retained as an explicit reconciliation blocker.
+                    if (
+                        worker.process_state == "gone"
+                        and worker.identity is not None
+                        and worker.identity.role == "execution"
+                    ):
+                        # Its project still names it until expired-owner
+                        # recovery recovers or releases that project; until
+                        # then it is retained, but never reported ready.
+                        await self.coordinator.mark_process_absent(worker.identity)
                     retained.append(
                         {
                             "runtime_id": worker.runtime_id,
@@ -1429,6 +1438,74 @@ class RuntimeProcessHost:
                 return True
             await asyncio.sleep(0.05)
         return False
+
+    async def stop_overdue_source(self, runtime_id: str, *, timeout: float = 10) -> int:
+        """Kill a live execution worker whose deployment handoff ran out of time.
+
+        The deployment already waited its grace period for the worker to reach
+        a safe boundary. Ending it now is the same as a worker crash: its
+        lease lapses, and dead-owner recovery settles what it left (claims
+        released, unfinished work marked interrupted, nothing replayed) and
+        restores its projects on a fresh worker. Only an execution incarnation
+        this host launched, whose kernel birth still matches, is signalled;
+        the API worker and this supervisor never are. Returns the number of
+        processes signalled once the original process is gone.
+        """
+        if self.closed or self.lock.descriptor is None:
+            raise RuntimeError("stopping a worker requires the active supervisor lock")
+        if self.launch_origin is None or self.launch_origin != process_origin():
+            raise RuntimeIpcError(
+                "The original process namespace cannot verify this worker"
+            )
+        async with self.coordinator.database.session() as session:
+            process = await session.get(RuntimeProcessRow, runtime_id)
+            host = await session.get(DeploymentHostRow, "host")
+        if (
+            process is None
+            or process.state == "retired"
+            or process.role != "execution"
+            or not process.pid
+            or process.pid in (os.getpid(), os.getppid())
+            or (host is not None and host.api_runtime_id == runtime_id)
+        ):
+            raise RuntimeIpcError("Only a recorded execution worker can be stopped")
+        signalled = 0
+        try:
+            if same_process(process.pid, process.process_birth):
+                signalled = kill_process_session(process.pid, process.process_birth)
+        except ProcessIdentityUnavailable as error:
+            # An unverifiable process is never signalled.
+            raise RuntimeIpcError(
+                "The worker's process identity cannot be verified"
+            ) from error
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while same_process(process.pid, process.process_birth):
+            if loop.time() >= deadline:
+                # Signalled already: not a no-effect refusal. The operation's
+                # outcome stays uncertain until status shows the owner gone.
+                raise RuntimeError("The stopped worker has not exited yet")
+            await asyncio.sleep(0.05)
+        child = self.children.get(runtime_id)
+        if child is not None:
+            try:
+                await asyncio.to_thread(child.wait, timeout=5)
+            except subprocess.TimeoutExpired:
+                # diagnostic-expected: a later rediscovery reaps it; the original process is already gone.
+                pass
+        self.reap_exited_children()
+        record_diagnostic(
+            "warning",
+            "runtime",
+            "runtime.worker.deployment_stopped",
+            "A project worker did not finish its deployment handoff in time; "
+            "Core stopped it so its projects recover on the new release.",
+            outcome="recovering",
+            stage="deployment",
+            retryable=True,
+            metadata={"entity_id": runtime_id, "entity_type": "execution_worker"},
+        )
+        return signalled
 
     async def rediscover(self) -> list[ObservedWorker]:
         if self.lock.descriptor is None or self.closed:

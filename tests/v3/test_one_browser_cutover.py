@@ -87,7 +87,8 @@ async def test_project_approval_is_durable_and_separate_from_command_approvals(
         policy = (
             await store.list_entities(AutomationProjectPolicy, engagement_id=project.id)
         )[0]
-        assert policy.approval_policy.value == "on_boundary"
+        # The browser approval leaves the command policy at its default.
+        assert policy.approval_policy.value == "never"
         stale = await client.put(
             url,
             headers=_auth(),

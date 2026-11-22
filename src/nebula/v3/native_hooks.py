@@ -9,6 +9,7 @@ import functools
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Literal, TypedDict
@@ -43,6 +44,7 @@ HOOK_EVENTS = {
 }
 MAX_HOOK_OUTPUT_BYTES = 64 * 1024
 MAX_INHERITED_ANCESTORS = 12  # Enough for the shared-root/projects/workspace layout.
+_ROUTED_TOOL_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_.:-]{0,119}")
 
 
 class NativeHookError(RuntimeError):
@@ -54,6 +56,14 @@ class NativeHookBlocked(NativeHookError):
 
     def __init__(self, execution: NativeHookExecution) -> None:
         self.execution = execution
+        manifest = execution.hook_snapshot.get("manifest")
+        routes = manifest.get("route_to") if isinstance(manifest, dict) else None
+        # Operator configuration from the frozen snapshot, not hook output.
+        self.route_to: tuple[str, ...] = tuple(
+            item
+            for item in (routes if isinstance(routes, list) else [])
+            if isinstance(item, str) and _ROUTED_TOOL_NAME.fullmatch(item)
+        )
         super().__init__(
             f"required project hook {execution.hook_id!r} did not complete: "
             f"{execution.error or execution.status}"
@@ -126,6 +136,17 @@ class NativeHookManifest(NebulaModel):
     side_effects: Literal["none", "workspace", "external"] = "none"
     failure_policy: Literal["continue", "block"] = "continue"
     inherit_to_descendants: bool = False
+    # The tools a blocking `tool.before` hook sends a denied command to, such
+    # as a search-routing hook naming workspace.search. A denial names them so
+    # the model calls the routed tool instead of rewording the command.
+    route_to: list[str] = Field(default_factory=list, max_length=8)
+
+    @field_validator("route_to")
+    @classmethod
+    def routed_tool_names(cls, value: list[str]) -> list[str]:
+        if any(not _ROUTED_TOOL_NAME.fullmatch(item) for item in value):
+            raise ValueError("route_to entries must be tool names")
+        return list(dict.fromkeys(value))
 
     @field_validator("events")
     @classmethod
@@ -514,7 +535,13 @@ async def run_project_tool_hooks(
         for item in catalog
         if event_name in item.manifest.events
     ]
-    if not snapshots:
+    # The tool.before baseline exists only for a tool.after hook to compare
+    # against. Without one, nothing ever finishes it, so hashing the dirty
+    # checkout would delay every call for an observation no hook can use.
+    takes_baseline = event_name == "tool.before" and any(
+        "tool.after" in item.manifest.events for item in catalog
+    )
+    if not snapshots and not takes_baseline:
         return []
     actor_id = await actor_id_for(
         store,
@@ -530,6 +557,13 @@ async def run_project_tool_hooks(
                 "schema": PROVENANCE_SCHEMA,
                 "supported": False,
                 "unsupported_reason": "tool_call_id_is_missing",
+                "actor_id": actor_id,
+            }
+        elif event_name == "tool.before" and not takes_baseline:
+            workspace_receipt = {
+                "schema": PROVENANCE_SCHEMA,
+                "supported": False,
+                "unsupported_reason": "no_tool_after_hook",
                 "actor_id": actor_id,
             }
         elif event_name == "tool.before":
@@ -598,7 +632,7 @@ async def run_project_tool_hooks(
             and snapshot.manifest.failure_policy == "block"
             and outcome.status != "complete"
         ):
-            if event_name == "tool.before" and scope_id:
+            if takes_baseline and scope_id:
                 try:
                     await provenance.finish(
                         workspace,

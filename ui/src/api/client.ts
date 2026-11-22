@@ -1,5 +1,6 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import { pairedCsrfToken } from "./pairedCsrf";
+import { ProjectHoldWatch } from "./projectHold";
 import { ProjectRuntimeRecovery, isProjectRuntimeUnavailable, parseRetryAfter, projectRuntimeDetail, projectRuntimeReason, type ProjectRuntimeProbeResult } from "./projectRuntime";
 import { PendingRequestError, PendingRequestStore, encodedBytes, ephemeralScope, identityScope,
   receiptId, receiptPending, requestIntent, waitForReceipt, type ContinuityScope, type PendingRequest, type RuntimeIdentity,
@@ -477,6 +478,7 @@ interface WireEngagement extends WireEntity {
   status: EngagementSummary["status"];
   tags?: string[];
   work_enabled?: boolean;
+  work_stages?: Array<{ key: string; label: string; flag_when_empty?: boolean }>;
   parent_engagement_id?: string | null;
   workspace_path?: string | null;
   metadata?: JsonObject;
@@ -2147,12 +2149,15 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     status: value.status,
     tags: value.tags ?? [],
     workEnabled: value.work_enabled === true,
+    workStages: (value.work_stages ?? []).map((stage) => ({ key: stage.key, label: stage.label, flagWhenEmpty: stage.flag_when_empty === true })),
+    revision: typeof value.revision === "number" ? value.revision : undefined,
     parentEngagementId: value.parent_engagement_id ?? undefined,
     workspacePath: value.workspace_path ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
     assistantDefaults: value.assistant_defaults ? mapAssistantDefaults(value.assistant_defaults) : undefined,
+    priority: value.metadata?.priority === "high" ? "high" : undefined,
   };
 }
 
@@ -3546,6 +3551,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
     isControlAssistant: value.metadata?.control_assistant === true,
+    isButlerThread: value.metadata?.butler_thread === true,
     isButlerInitiated: value.metadata?.butler_initiated === true,
     assistantConfig,
     pendingRuntimeSwitch: mapPendingRuntimeSwitch(value.metadata?.pending_runtime_switch),
@@ -3566,6 +3572,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     pinned: value.metadata?.pinned === true,
     flagColor: ["red", "orange", "yellow", "green", "blue", "purple"].includes(String(value.metadata?.flag_color))
       ? value.metadata?.flag_color as ChatSessionSummary["flagColor"] : undefined,
+    priority: value.metadata?.priority === "high" ? "high" : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
@@ -3636,6 +3643,7 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     handoffSourceSessionId: typeof value.metadata?.handoff_source_session_id === "string" ? value.metadata.handoff_source_session_id : undefined,
     handoffTargetSessionId: typeof value.metadata?.handoff_target_session_id === "string" ? value.metadata.handoff_target_session_id : undefined,
     handoffReason: typeof value.metadata?.handoff_reason === "string" ? value.metadata.handoff_reason : undefined,
+    heldByProject: typeof value.metadata?.project_hold_id === "string",
     executionWaiting: value.execution && typeof value.execution.detail === "string" && ["starting", "held", "closing"].includes(value.execution.reason)
       ? { reason: value.execution.reason, detail: value.execution.detail }
       : undefined,
@@ -5081,6 +5089,8 @@ export class ApiClient {
   private readonly responseAttempts = new WeakMap<Response, PendingRequest>();
   /** Project reads waiting for a retired or starting project worker. */
   readonly projectRuntime = new ProjectRuntimeRecovery((path, signal) => this.probeProjectRuntime(path, signal));
+  /** Core project holds for the projects a view is showing (#1232). */
+  readonly projectHolds = new ProjectHoldWatch((path, init) => this.request(path, init));
 
   /** When Core last answered any request; see lastReachableAt(). */
   private lastReachable = 0;
@@ -5494,6 +5504,8 @@ export class ApiClient {
       }
       // An idle project's worker has retired, or a readmitted one is starting.
       // The read is repeated when it is back; it is not an operation failure.
+      // Core refused work because a project is held: show the hold now.
+      if (error.code === "project_held") this.projectHolds.refreshAll();
       const runtimeAway = read && isProjectRuntimeUnavailable(error);
       if (runtimeAway) this.projectRuntime.unavailable(path, error.retryAfterMs, projectRuntimeReason(error), projectRuntimeDetail(error));
       else if (read) this.projectRuntime.answered(path);
@@ -6143,6 +6155,14 @@ export class ApiClient {
     return mapEngagement(await this.request<WireEngagement>(path, {
       method: "PATCH",
       body: JSON.stringify({ changes: { status: archived ? "archived" : "active" }, expected_revision: current.revision }),
+    }));
+  }
+
+  /** Mark a whole project high or normal priority; every chat in it inherits it. */
+  async setEngagementPriority(id: string, priority: "high" | "normal"): Promise<EngagementSummary> {
+    return mapEngagement(await this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}/priority`, {
+      method: "PUT",
+      body: JSON.stringify({ priority }),
     }));
   }
 
@@ -9628,6 +9648,9 @@ export class ApiClient {
     harnessServiceTier?: string;
     harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
     allowCloudToolResults?: boolean;
+    /** Butler mode: start a separate Butler conversation instead of reusing the current one. */
+    thread?: boolean;
+    title?: string;
   }, signal?: AbortSignal): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>("chat/control-assistant/session", {
       method: "POST", signal,
@@ -9642,6 +9665,7 @@ export class ApiClient {
         harness_service_tier: body.harnessServiceTier,
         harness_cyber_access_program: body.harnessCyberAccessProgram,
         allow_cloud_tool_results: body.allowCloudToolResults,
+        ...(body.thread ? { thread: true, title: body.title } : {}),
       }),
     }).then(mapChatSession);
   }
@@ -9792,8 +9816,8 @@ export class ApiClient {
 
   setChatSessionPriority(
     sessionId: string,
-    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null },
-    expectedRevision: number,
+    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null; priority?: "high" | "normal" },
+    expectedRevision?: number,
   ): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>(
       `chat-sessions/${encodeURIComponent(sessionId)}`,
@@ -9802,6 +9826,7 @@ export class ApiClient {
         body: JSON.stringify({
           ...(changes.pinned !== undefined ? { pinned: changes.pinned } : {}),
           ...(changes.flagColor !== undefined ? { flag_color: changes.flagColor } : {}),
+          ...(changes.priority !== undefined ? { priority: changes.priority } : {}),
           expected_revision: expectedRevision,
         }),
       },

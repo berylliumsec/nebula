@@ -7,5 +7,6 @@
   "timeout_seconds": 5,
   "side_effects": "none",
   "failure_policy": "block",
-  "inherit_to_descendants": true
+  "inherit_to_descendants": true,
+  "route_to": ["capability_search"]
 }

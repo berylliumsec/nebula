@@ -92,7 +92,7 @@ export function HostPressureSettings({api, previewMode = false}: {api?: ApiClien
     <form onSubmit={event => void save(event)} className="host-cpu-form">
       {metrics.map(([key, label]) => <label key={key}><span>{label} threshold (%)</span>
         <input type="number" inputMode="decimal" min="0.01" max="100" step="any" aria-label={`${label} threshold (%)`} value={draft[key]} disabled={!saved || saving || previewMode} onChange={event => setDraft(value => ({...value, [key]: event.target.value}))} />
-        {saved && <small>Current: {percent(saved.readings[key])} · Saved: {threshold(saved.saved_thresholds[key])} · Effective: {threshold(saved.effective_thresholds[key])}</small>}
+        {saved && <small>Current: {percent(saved.readings[key])} · Saved: {threshold(saved.saved_thresholds[key])}{threshold(saved.effective_thresholds[key]) === threshold(saved.saved_thresholds[key]) ? "" : ` · Effective: ${threshold(saved.effective_thresholds[key])}`}</small>}
       </label>)}
       <div className="host-cpu-actions"><button type="submit" className="button primary" disabled={!saved || !valid || !dirty || saving || conflict || previewMode}>{saving ? "Saving…" : "Save pressure thresholds"}</button>
         <button type="button" className="button quiet" aria-label="Reload host pressure" title="Reload host pressure" disabled={saving} onClick={() => setReload(value => value + 1)}><RefreshCw size={16} /></button></div>

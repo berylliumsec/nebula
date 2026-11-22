@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +11,7 @@ import { WorkbenchDraftProvider } from "../state/WorkbenchDraftContext";
 import { DialogProvider } from "./DialogSystem";
 import { NebulaControlAssistant } from "./NebulaControlAssistant";
 import { NebulaAssistantLauncherButton } from "./NebulaAssistantLauncher";
+import { useButlerPanelBridge } from "../state/ButlerPanelBridge";
 import { startingProject } from "../test/projectRuntimeStarting";
 
 vi.mock("../state/WorkspaceContext", () => ({
@@ -51,6 +53,18 @@ describe("NebulaControlAssistant", () => {
     }
   });
 
+  it("opens Butler mode from the panel header and hides the panel", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const open = screen.getByRole("button", { name: "Open Butler mode" });
+    expect(open).toHaveAttribute("title", expect.stringContaining("parallel threads"));
+    await user.click(open);
+    expect(onNavigate).toHaveBeenCalledWith(expect.stringMatching(/^\/butler(?:\?project=.+)?$/));
+    expect(screen.getByRole("button", { name: "Show Butler" })).toBeVisible();
+  });
+
   it("starts in Chat and keeps the draft while Work and More reveal secondary controls", async () => {
     const user = userEvent.setup();
     render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
@@ -62,6 +76,8 @@ describe("NebulaControlAssistant", () => {
     const hide = screen.getByRole("button", { name: "Hide Butler" });
     const close = screen.getByRole("button", { name: "Close Butler" });
     expect(voice.parentElement).toBe(settings.parentElement);
+    const butlerMode = screen.getByRole("button", { name: "Open Butler mode" });
+    expect(butlerMode.nextElementSibling).toBe(voice);
     expect(voice.nextElementSibling).toBe(settings);
     expect(settings.nextElementSibling).toBe(hide);
     expect(hide.nextElementSibling).toBe(close);
@@ -719,9 +735,20 @@ describe("NebulaControlAssistant", () => {
     let workspace = {api: undefined as typeof api | undefined, engagement: undefined as {id: string; name: string} | undefined,
       providers: [], harnesses: [] as unknown[]};
     vi.mocked(useWorkspace).mockImplementation(() => workspace as unknown as ReturnType<typeof useWorkspace>);
-    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>;
+    const onNavigate = vi.fn();
+    // Butler mode's Settings tab lends the panel a place to show Butler's settings.
+    const host = document.createElement("div");
+    document.body.append(host);
+    function SettingsTab() {
+      const bridge = useButlerPanelBridge();
+      useLayoutEffect(() => { bridge?.embed({host, view: "more"}); }, [bridge?.embed]);
+      return null;
+    }
+    const assistant = () => <DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}><SettingsTab /></NebulaControlAssistant></ThemeProvider></DialogProvider>;
     const view = render(assistant());
     act(() => {window.dispatchEvent(new Event("nebula:open-butler-settings"));});
+    expect(onNavigate).toHaveBeenCalledWith("/butler?section=settings");
+    expect(within(host).getByRole("region", {name: "Butler settings"})).toBeInTheDocument();
     expect(screen.getByRole("button", {name: "Save"})).toBeDisabled();
     expect(screen.getByText("Connect to Core to load Butler settings.")).toBeVisible();
 
@@ -870,19 +897,33 @@ describe("NebulaControlAssistant", () => {
     expect(await screen.findByRole("link", { name: "Open chat" })).toHaveAttribute("href", url);
   });
 
-  it("keeps one conversation behind the shell launcher without a floating overlay", async () => {
+  it("opens Butler mode from the launcher instead of a floating panel", async () => {
     const user = userEvent.setup();
-    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()}>
+    const onNavigate = vi.fn();
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}>
       <header><NebulaAssistantLauncherButton /></header>
     </NebulaControlAssistant></ThemeProvider></DialogProvider>);
     const launcher = screen.getByRole("button", { name: "Open Butler" });
     expect(launcher.closest("header")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Open Butler" })).toHaveLength(1);
     await user.click(launcher);
-    await user.type(screen.getByRole("textbox", { name: "Ask Butler a question" }), "Help me find a setting");
-    await user.click(screen.getByRole("button", { name: "Hide Butler" }));
-    await user.click(screen.getByRole("button", { name: "Show Butler" }));
-    expect(screen.getByRole("textbox", { name: "Ask Butler a question" })).toHaveValue("Help me find a setting");
+    expect(onNavigate).toHaveBeenCalledWith("/butler");
+    expect(screen.queryByRole("dialog", { name: "Butler" })).not.toBeInTheDocument();
+  });
+
+  it("opens Butler mode for the project in the URL before the workspace selects it", async () => {
+    window.history.replaceState(null, "", "/projects/project-from-url/workbench?view=chat");
+    try {
+      const user = userEvent.setup();
+      const onNavigate = vi.fn();
+      render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={onNavigate} onOpenSetting={vi.fn()}>
+        <header><NebulaAssistantLauncherButton /></header>
+      </NebulaControlAssistant></ThemeProvider></DialogProvider>);
+      await user.click(screen.getByRole("button", { name: "Open Butler" }));
+      expect(onNavigate).toHaveBeenCalledWith("/butler?project=project-from-url");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 
   it("checks the selected project's incidents before Butler opens and clears its cue on project switch", async () => {

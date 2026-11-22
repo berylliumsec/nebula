@@ -6,6 +6,7 @@ but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
+from .stored_entities import decode_stored
 from .recovery_markers import OPERATOR_RECOVERY_PAUSE, OPERATOR_RECOVERY_STOP
 from .async_utils import MaybeAsync
 
@@ -136,9 +137,11 @@ from .application_model.workflow import (
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
 from .butler_memory import BUTLER_MEMORY_INSTRUCTION
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .domain import BrowserSession
 
 from .domain import (
+    GOAL_CONTINUE_INSTRUCTION,
     AgentRun,
     Approval,
     ApprovalStatus,
@@ -280,6 +283,8 @@ from .chat_turn_outcomes import (
     turn_outcome_metadata,
     turn_outcome_text,
 )
+from .work_priority import is_high
+from .project_hold_gate import active_hold, held_detail, is_held
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -338,6 +343,7 @@ from .provider_tool_manifest import (
     ToolManifest,
     absent_candidates,
     apply_tools_context,
+    with_tool_hints,
     catalog_load_receipt,
     initialize_tools_instruction_base,
     legacy_present_names,
@@ -526,6 +532,16 @@ _CallbackWait = tuple[ChatTurn, dict[str, Any], CommandExecution | None]
 
 class ChatHistoryConflict(ChatError):
     """Client history diverged from the durable session transcript."""
+
+
+class ProjectHeld(ChatHistoryConflict):
+    """The project is held (``ProjectHold``); no chat turn starts until release.
+
+    A ``ChatHistoryConflict`` so goal dispatchers defer instead of pausing the
+    goal, and the API answers 409 with code ``project_held``.
+    """
+
+    code = "project_held"
 
 
 class ChatPrivacyError(ChatError):
@@ -1148,6 +1164,9 @@ class _ActiveProviderTurn:
     done: bool = False
     error: BaseException | None = None
     admission: ProviderAdmission | None = None
+    # Who is waiting on the turn: "direct" for an operator, "background" for
+    # goal, subagent, Butler and queued work. Readable before admission.
+    capacity_lane: str = "direct"
     journal_closed: bool = False
     journal_prior_history: bool = False
     journal_start_sequence: int = 0
@@ -1167,6 +1186,8 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "side_chat",
         "butler_initiated",
         "control_assistant",
+        # A fork starts at normal priority; the operator marks it if wanted.
+        "priority",
     }
 )
 
@@ -1194,6 +1215,21 @@ def _unresumed_goal_turn_reason(goal: ChatGoal) -> str | None:
     ):
         return "Core did not resume this interrupted response because its goal's time budget is spent."
     return None
+
+
+def butler_focus_project(session: ChatSession | None) -> str | None:
+    """The project a Butler session in ``BUTLER_HOME_PROJECT`` is about.
+
+    Butler's home sessions live in Core's own project so they run on their own
+    worker; ``metadata.butler_focus_project`` names the project they read. The
+    key deliberately does not end in ``_id``: request routing treats such
+    fields as project references, and two would be refused.
+    """
+
+    if session is None or session.engagement_id != BUTLER_HOME_PROJECT:
+        return None
+    focus = session.metadata.get("butler_focus_project")
+    return focus if isinstance(focus, str) and focus else None
 
 
 def _content_with_selected_context(
@@ -1809,9 +1845,11 @@ _CHAT_TOOL_INSTRUCTIONS = (
 are needed, and include helpful prose when appropriate. Request several
 independent functions in the same response; keep a call that needs an earlier
 result for a later response. Nebula runs a batch one call at a time and replays
-every result. A response without tool calls ends the turn. A complete, redacted
-small command output may already be in output_preview; use it directly. Inspect
-larger or missing output with tool_output.search and tool_output.read."""
+every result. A response without tool calls ends the turn. A command's redacted
+output may already be in output_preview; use it directly. A partial preview
+shows only the head and tail; read its omitted lines with tool_output.read only
+when you need them. Inspect missing output with tool_output.search and
+tool_output.read."""
     + BROWSER_MODEL_WORKFLOW
 )
 
@@ -2087,10 +2125,55 @@ def _next_final_answer_recovery_state(
     return state
 
 
+# Schema keywords that carry no guidance the model needs: pydantic's derived
+# titles, defaults Core applies itself, and duplicate-item rules Core enforces.
+_MODEL_SCHEMA_NOISE = frozenset({"title", "default", "uniqueItems"})
+# Text limits this large are never what keeps a call valid; smaller ones still
+# tell the model how much a field takes.
+_MODEL_SCHEMA_MAX_LENGTH_SHOWN = 1_000
+_SCHEMA_NAME_MAPPINGS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties"}
+)
+_SCHEMA_DATA_KEYWORDS = frozenset({"enum", "const", "examples", "required"})
+
+
+def _model_facing_schema(schema: Any) -> Any:
+    """``schema`` without keywords that cost tokens and guide nothing.
+
+    Only what the model reads is trimmed: Core validates every call against
+    the tool's full schema. Property names and data values (``enum``,
+    ``const``) are kept as written, so a property named ``title`` survives.
+    """
+
+    if isinstance(schema, list):
+        return [_model_facing_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    trimmed: dict[str, Any] = {}
+    for key, value in schema.items():
+        if key in _MODEL_SCHEMA_NOISE:
+            continue
+        if (
+            key == "maxLength"
+            and isinstance(value, int)
+            and value >= _MODEL_SCHEMA_MAX_LENGTH_SHOWN
+        ):
+            continue
+        if key in _SCHEMA_NAME_MAPPINGS and isinstance(value, dict):
+            trimmed[key] = {
+                name: _model_facing_schema(item) for name, item in value.items()
+            }
+        elif key in _SCHEMA_DATA_KEYWORDS:
+            trimmed[key] = deepcopy(value)
+        else:
+            trimmed[key] = _model_facing_schema(value)
+    return trimmed
+
+
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
     """Constrain Core-owned routing arguments instead of asking the model to guess."""
 
-    schema = deepcopy(spec.input_schema)
+    schema = _model_facing_schema(spec.input_schema)
     properties = schema.get("properties")
     if "cwd" in spec.path_arguments and isinstance(properties, dict):
         properties["cwd"] = {
@@ -2205,28 +2288,41 @@ def _normalize_routing_arguments(
 # How many routing responses in a row may end with Core answering their calls
 # itself (an unavailable tool, or a cut-off, unreadable or replayed call) before
 # the turn stops routing and answers from the results it has, like Cline's
-# mistake counter. Any call that runs resets the count.
+# mistake counter. Any call that runs resets the count, except a denial by a
+# project hook: the same hook denying this many calls in one turn stops routing
+# too, even with other calls running in between (see _repeated_hook_denial).
 _ROUTING_DEVIATION_LIMIT = 3
-# Restart recovery is background work. A Core restart can surface many durable
-# provider turns at once, and each routing step validates and serializes the
-# turn's full tool history on the API event loop. Keep a small amount of
-# provider/network overlap without letting a recovery backlog monopolize the
-# process that serves operator requests. Turns started by the operator do not
-# use this gate.
-_AUTOMATIC_RECOVERY_CONCURRENCY = 2
+
+
+def _repeated_hook_denial(
+    denials: dict[str, int], provider_result: object
+) -> str | None:
+    """Count a project hook's denial; return its ID once it reaches the limit.
+
+    A hook denial is a call that ran, so it resets the deviation count, and a
+    model that rewords a blocked command between other calls would otherwise
+    never stop. Only completed hook denials count: a command the hook allowed,
+    or a hook that failed to run, does not, and each hook counts on its own.
+    """
+
+    result = _decoded_result(provider_result)
+    if result is None or result.get("policy_rule") != "project_native_hook":
+        return None
+    hook = result.get("hook_output")
+    hook_id = hook.get("hook_id") if isinstance(hook, dict) else None
+    if not isinstance(hook_id, str) or not hook_id:
+        return None
+    denials[hook_id] = denials.get(hook_id, 0) + 1
+    return hook_id if denials[hook_id] >= _ROUTING_DEVIATION_LIMIT else None
+
+
 # A call Core answered without running it spends no budget.
 _REFUSED_BUDGET_CLASS = "refused"
 # An approved chat tool call whose turn ended is settled only after this long
 # without a change, so a late start report from its runtime still wins.
 _STALE_APPROVED_CALL_AGE = timedelta(minutes=10)
 # What Core asks when a running goal continues without an operator message.
-_GOAL_CONTINUE_INSTRUCTION = (
-    "Review the active conversation goal and its completion criteria. Is the "
-    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
-    "and concrete evidence, then give the operator a concise handoff. If it is "
-    "not complete, continue making concrete progress toward the goal now. Do "
-    "not stop merely to report status."
-)
+_GOAL_CONTINUE_INSTRUCTION = GOAL_CONTINUE_INSTRUCTION
 
 
 _GOAL_TIME_FIVE_MINUTE_REMINDER = (
@@ -2244,6 +2340,81 @@ _GOAL_TIME_TEN_MINUTE_REMINDER = (
     "Wind down over the next few turns, clean up in-progress work, "
     "and prepare a concise handoff before Core pauses the goal."
 )
+
+
+_GOAL_PROGRESS_HEADING = (
+    "CORE GOAL PROGRESS FOR THIS TURN (status from Nebula Core, not written by "
+    "the operator)"
+)
+
+
+def _goal_instructions(goal: ChatGoal) -> str:
+    """The goal's standing context for the instructions.
+
+    Only what stays fixed while the goal runs: its step count and remaining
+    budgets change every turn and ride on the turn's message instead
+    (``_goal_progress_block``), so a goal's turns share one cached prefix.
+    """
+
+    return (
+        "\n\nCore-owned goal context:\n"
+        + json.dumps(
+            {
+                "objective": goal.objective,
+                "completion_criteria": goal.completion_criteria,
+                "plan": goal.plan,
+            },
+            ensure_ascii=False,
+        )
+        + "\nCore reports the goal's current step and remaining budgets with "
+        "the latest message."
+    )
+
+
+def _goal_progress_block(goal: ChatGoal) -> str:
+    """The goal's per-turn progress, attached to the turn's message."""
+
+    return (
+        _GOAL_PROGRESS_HEADING
+        + "\n"
+        + json.dumps(
+            {
+                "current_step": goal.current_step,
+                "remaining_steps": (
+                    goal.step_budget - goal.current_step
+                    if goal.step_budget is not None
+                    else None
+                ),
+                "remaining_tokens": (
+                    goal.token_budget - goal.usage.total_tokens
+                    if goal.token_budget is not None
+                    else None
+                ),
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+def _with_turn_state(
+    reference: str, *, butler_recall: str = "", goal_progress: str = ""
+) -> str:
+    """``reference`` joined by the turn's recalled memory and goal progress.
+
+    Both change from turn to turn. ``_with_reference_material`` puts the
+    result on the operator's message, after which only that message's end
+    changes and the provider's prompt cache holds for the conversation before
+    it.
+    """
+
+    blocks = [reference] if reference else []
+    if butler_recall:
+        if not blocks:
+            blocks.append(_REFERENCE_MATERIAL_HEADING)
+        blocks.append(butler_recall)
+    if goal_progress:
+        blocks.append(goal_progress)
+    return "\n\n".join(blocks)
 
 
 def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
@@ -2442,6 +2613,61 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
         and entry.get("arguments") == call.arguments
         for entry in history
     )
+
+
+def _intent_only_restart_entry(
+    intent: Mapping[str, Any],
+) -> tuple[dict[str, Any], str]:
+    """Settle a step recorded as started whose ToolCall was never created.
+
+    Core restarted between the ledger intent and the broker's record, so
+    nothing says whether the call ran. A read changed nothing and can run
+    again; anything else is an unknown effect that must not be repeated.
+    Returns the settled entry and its ledger event type.
+    """
+
+    call_id = str(intent["tool_call_id"])
+    name = str(intent.get("name") or "unknown")
+    if name in RETRIEVAL_TOOL_NAMES:
+        observation = {
+            "schema": "nebula.restart-interrupted/v1",
+            "status": "interrupted",
+            "tool_call_id": call_id,
+            "tool_name": name,
+            "side_effects": "none",
+            "retry_safe": True,
+            "detail": (
+                "Core restarted before this read returned its result. It changed "
+                "nothing; call it again if you still need the result."
+            ),
+        }
+        return {
+            **intent,
+            "status": "failed",
+            "provider_result": serialize_model_result(observation),
+            "trusted_result": False,
+            "result_summary": "Interrupted by a Core restart; the read can run again.",
+            "recovered_from_restart_rerunnable": True,
+        }, "restart_rerunnable"
+    observation = {
+        "schema": "nebula.restart-uncertain/v1",
+        "status": "unknown",
+        "tool_call_id": call_id,
+        "tool_name": name,
+        "detail": (
+            "Core restarted after this invocation may have started, but no "
+            "trustworthy terminal receipt was recorded. Do not repeat the "
+            "same invocation. Inspect current state before any follow-up."
+        ),
+    }
+    return {
+        **intent,
+        "status": "failed",
+        "provider_result": serialize_model_result(observation),
+        "trusted_result": False,
+        "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+        "recovered_from_restart_unknown": True,
+    }, "restart_unknown"
 
 
 def _projected_result_entry(
@@ -2866,9 +3092,6 @@ class ChatService:
             self.provider_scheduler.config.global_tool_limit
         )
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
-        self._automatic_recovery_slots = asyncio.Semaphore(
-            _AUTOMATIC_RECOVERY_CONCURRENCY
-        )
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self._naming_sessions: set[str] = set()
         # Background compactions by conversation id (see _schedule_precompaction).
@@ -3261,6 +3484,10 @@ class ChatService:
                 continue
             if self.has_active_provider_turn(waiting_turn.id):
                 continue
+            if await is_held(self.store, latest.engagement_id, latest.session_id):
+                # Materializing would leave the turn neither waiting nor
+                # resumable; it stays waiting until the hold is released.
+                continue
             try:
                 (
                     await self._materialize_callback_result(
@@ -3493,6 +3720,9 @@ class ChatService:
             or saved.status != ChatTurnStatus.INTERRUPTED
         ):
             return False
+        if await is_held(self.store, saved.engagement_id, saved.session_id):
+            # Left interrupted and untouched; a pass after release resumes it.
+            return False
         recovery_subagent: ChatSubagent | None = None
         if saved.request_snapshot.get("subagent_child"):
             records = await self.store.find_entities(
@@ -3532,11 +3762,29 @@ class ChatService:
             # The operator stopped or paused this work while recovery was
             # held. It stays interrupted until the operator continues it.
             return False
-        if goal is not None and (
-            goal.status != ChatGoalStatus.PAUSED
-            or (
-                goal.time_budget_seconds is not None
-                and goal.elapsed_seconds >= goal.time_budget_seconds
+        # A goal left running past this turn's pending automatic retry was
+        # resumed by an earlier attempt (or from outside) whose turn then
+        # failed to start. Skipping it here deadlocked with the idle-goal
+        # reconciler, which skips goals that still have a pending turn: the
+        # conversation stayed interrupted while its goal read running.
+        retry_running_goal = (
+            goal is not None
+            and goal.status == ChatGoalStatus.RUNNING
+            and bool(recovery.get("automatic_retry_pending"))
+            and (
+                goal.time_budget_seconds is None
+                or goal.elapsed_seconds < goal.time_budget_seconds
+            )
+        )
+        if (
+            goal is not None
+            and not retry_running_goal
+            and (
+                goal.status != ChatGoalStatus.PAUSED
+                or (
+                    goal.time_budget_seconds is not None
+                    and goal.elapsed_seconds >= goal.time_budget_seconds
+                )
             )
         ):
             reason = _unresumed_goal_turn_reason(goal)
@@ -3572,7 +3820,7 @@ class ChatService:
                         recovery_subagent.id, prepared.turn
                     )
                 )
-            if goal is not None:
+            if goal is not None and not retry_running_goal:
                 # Resumed child goals keep charging the parent while it is
                 # resumed, so the resume is decided on its newest revision.
                 (
@@ -3590,7 +3838,7 @@ class ChatService:
                 exc,
                 stage="startup-recovery",
             )
-            (await self._retry_recovery_next_pass(saved.id))
+            (await self._retry_recovery_next_pass(saved.id, cause=exc))
             if goal is not None:
                 (
                     await self._pause_running_session_goal(
@@ -3600,7 +3848,9 @@ class ChatService:
                 )
         return False
 
-    async def _retry_recovery_next_pass(self, turn_id: str) -> ChatTurn | None:
+    async def _retry_recovery_next_pass(
+        self, turn_id: str, *, cause: BaseException | None = None
+    ) -> ChatTurn | None:
         """Leave a restart-recovery resume that could not start for the next pass.
 
         The turn is interrupted again with its automatic retry pending, unless
@@ -3633,8 +3883,13 @@ class ChatService:
             {
                 "status": ChatTurnStatus.INTERRUPTED,
                 "error": (
-                    "Automatic recovery could not start; Core will retry "
-                    "on the next recovery pass."
+                    "Automatic recovery could not start"
+                    + (
+                        f" ({type(cause).__name__}: {str(cause)[:300]})"
+                        if cause is not None
+                        else ""
+                    )
+                    + "; Core will retry on the next recovery pass."
                 ),
                 "request_snapshot": {
                     **current.request_snapshot,
@@ -3856,6 +4111,50 @@ class ChatService:
             unknown_tools = [
                 item for item in unknown_tools if item not in projected_tools
             ]
+            # A step whose started intent reached the ledger before the broker
+            # created its ToolCall has no record the interruption scan could
+            # classify. Settle it here too, or it stays "running" in provider
+            # history for the rest of the turn.
+            for item in list(history):
+                intent_call_id = item.get("tool_call_id")
+                if item.get("status") != "running" or not isinstance(
+                    intent_call_id, str
+                ):
+                    continue
+                try:
+                    await self.store.get(ToolCall, intent_call_id)
+                except NotFoundError:  # diagnostic-expected: intent before ToolCall
+                    pass
+                else:
+                    continue
+                entry, event_type = _intent_only_restart_entry(item)
+                history = [
+                    other
+                    for other in history
+                    if other.get("tool_call_id") != intent_call_id
+                ]
+                history.append(entry)
+                ledger_sequence = max(
+                    ledger_sequence,
+                    (
+                        await self.turn_ledger.append(
+                            turn.id,
+                            entry,
+                            idempotency_key=(
+                                f"{event_type.replace('_', '-')}:{intent_call_id}"
+                            ),
+                            event_type=event_type,
+                        )
+                    ),
+                )
+                step = item.get("step")
+                if isinstance(step, int) and not isinstance(step, bool):
+                    next_step = max(next_step, step + 1)
+                if event_type == "restart_rerunnable":
+                    rerun_tools.append(intent_call_id)
+                else:
+                    unknown_tools.append(intent_call_id)
+                    recorded_unknown.append(intent_call_id)
             # Missing ledger rows still cannot be replayed. Their IDs and every
             # uncertain hook remain in the durable audit metadata sent as an
             # instruction on resume.
@@ -4053,9 +4352,10 @@ class ChatService:
                     # The hook may have committed its result after the scan.
                     # Keep the old unknown ID; read repair uses its new state.
                     pass
-        requires_review = cause == "Project runtime stopped" and bool(
-            unknown or unknown_hooks
-        )
+        # A stopped or crashed project worker is recovered like a Core restart:
+        # unknown effects are carried forward as outcome-unknown and the turn
+        # resumes without replaying them. Only an existing goal hold waits for
+        # the operator (and an unmatched callback, which its caller marks).
         goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
         preserve_hold = (
             cause == "Project runtime stopped"
@@ -4063,10 +4363,7 @@ class ChatService:
             and goal.status != ChatGoalStatus.RUNNING
         )
         detail = (
-            f"{cause} while an effect outcome was unknown. Review and reconcile "
-            "the interrupted response before resuming; no effect has been retried."
-            if requires_review
-            else f"{cause} before this response completed. The existing goal hold "
+            f"{cause} before this response completed. The existing goal hold "
             "is preserved; review the interrupted response before resuming."
             if preserve_hold
             else f"{cause} while an effect outcome was unknown. Core will carry the "
@@ -4088,7 +4385,7 @@ class ChatService:
                 "required": True,
                 "cause": (
                     "runtime_loss"
-                    if requires_review or preserve_hold
+                    if preserve_hold
                     else "core_shutdown"
                     if cause == "Core stopped"
                     else "core_restart"
@@ -4416,7 +4713,7 @@ class ChatService:
         (await self.provider_scheduler.enqueue(turn))
         if existing is not None and existing.cleanup_task is not None:
             existing.cleanup_task.cancel()
-        runtime = _ActiveProviderTurn()
+        runtime = _ActiveProviderTurn(capacity_lane=turn.capacity_lane)
         if self.stream_journal is not None:
             runtime.journal_prior_history = await self.stream_journal.has_history(
                 turn.id
@@ -4490,7 +4787,7 @@ class ChatService:
                 if turn is None or queue is None or queue.state != "queued":
                     continue
                 if await turn_admission_allowed(
-                    session, ChatTurn.model_validate(turn.payload)
+                    session, decode_stored(ChatTurn, turn.payload)
                 ):
                     continue
                 runtime.handoff_parked = True
@@ -4512,6 +4809,10 @@ class ChatService:
                 queue = await session.get(ProviderTurnQueueRow, turn_id)
                 if queue is None or queue.state != "queued":
                     continue
+            parked = await self.store.get(ChatTurn, turn_id)
+            if await is_held(self.store, parked.engagement_id, parked.session_id):
+                # Parked turns stay parked while the project or chat is held.
+                continue
             await self.start_provider_turn(await self.prepare_resume(turn_id))
 
     async def _run_provider_turn(
@@ -4523,18 +4824,18 @@ class ChatService:
     ) -> None:
         admission: ProviderAdmission | None = None
         admission_task: asyncio.Task[ProviderAdmission] | None = None
-        recovery_slot = False
         producing = False
         cancelled = False
         try:
             assert prepared.turn is not None
-            if automatic_recovery:
-                # Before provider admission, so recovered turns waiting for this
-                # gate never hold provider slots an operator turn could use.
-                await self._automatic_recovery_slots.acquire()
-                recovery_slot = True
+            # Turns resumed after a restart were already running together, so
+            # they share ordinary provider admission. Holding a separate slot
+            # for a whole turn let two long recovered subagents serialize every
+            # other recovered turn for hours.
             admission_task = create_diagnostic_task(
-                self.provider_scheduler.admit(prepared.turn.id),
+                self.provider_scheduler.admit(
+                    prepared.turn.id, automatic_recovery=automatic_recovery
+                ),
                 feature="chat",
                 event_code="chat.provider_admission",
                 failure_message="A queued provider turn could not be admitted.",
@@ -4652,8 +4953,6 @@ class ChatService:
                     runtime.error = runtime.error or exc
                     raise
                 finally:
-                    if recovery_slot:
-                        self._automatic_recovery_slots.release()
                     if prepared.turn is not None:
                         await self._close_provider_journal(prepared.turn.id, runtime)
                     if not runtime.done:
@@ -4697,7 +4996,7 @@ class ChatService:
             ) or (not holds_admission and self.provider_scheduler.admitted(turn_id)):
                 return error
             if automatic_recovery:
-                retried = await self._retry_recovery_next_pass(turn_id)
+                retried = await self._retry_recovery_next_pass(turn_id, cause=error)
                 if retried is None:
                     return error
                 (await self.provider_scheduler.withdraw(turn_id))
@@ -5255,6 +5554,10 @@ class ChatService:
     ) -> None:
         from .storage import NotFoundError
 
+        if await is_held(self.store, schedule.engagement_id, schedule.session_id):
+            # The occurrence stays due and fires on the first pass after the
+            # hold is released, instead of being skipped as a paused goal.
+            return
         reconciled = await schedules.reconcile(schedule)
         if reconciled is None or not reconciled.enabled:
             return
@@ -5639,6 +5942,7 @@ class ChatService:
         is created.
         """
 
+        from .chat_goals import ChatGoalService
         from .chat_schedules import ChatScheduleService
 
         turn = prepared.turn
@@ -5658,6 +5962,14 @@ class ChatService:
             or goal.execution_claim_id is not None
             or (await self.pending_turn(turn.session_id)) is not None
         ):
+            return None
+        goals = ChatGoalService(self.store)
+        if await goals.has_working_subagents(turn.session_id):
+            # Working subagents report back and continue the goal, as they do
+            # for harness goals and the idle reconciler. Another turn now would
+            # only poll them with the whole context. Active time stays open
+            # while a subagent works; settle it like the other ends of a turn.
+            await goals.settle_active_time(turn.session_id)
             return None
         # The operator may have picked another model, effort or subagent
         # choice while the turn ran; the conversation holds that choice, the
@@ -6028,6 +6340,10 @@ class ChatService:
                     "chat session does not belong to the requested engagement"
                 )
             engagement_id = session.engagement_id
+        # Refused before any goal, skill or session write below. A new chat has
+        # no session yet, so only a project-wide hold refuses it.
+        await self.require_project_open(engagement_id, request.session_id)
+        if session is not None:
             if (await self.pending_turn(session.id)) is not None:
                 raise ChatHistoryConflict(
                     "chat session already has an active response; resume or resolve it before sending another message"
@@ -6297,6 +6613,12 @@ class ChatService:
                 and request.allow_cloud_tool_results
             )
         )
+        if session is not None and session.engagement_id == BUTLER_HOME_PROJECT:
+            # Butler's own project has no work board, roster or agents of its
+            # own; Butler works on its focus project through nebula.work.*.
+            work_enabled = False
+            work_roster_enabled = False
+            agent_messaging_enabled = False
         # Every subagent turn can message the assistant that delegated to it,
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
@@ -6395,6 +6717,10 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
+        # Per-turn state that joins the turn's reference material on the
+        # operator's message, so the instructions stay byte-stable across turns.
+        butler_recall = ""
+        goal_progress = ""
         if request.control_assistant or (
             session and session.metadata.get("control_assistant") is True
         ):
@@ -6429,9 +6755,18 @@ class ChatService:
                 instructions += " " + BUTLER_TERMINAL_SURFACE_INSTRUCTION
             if self.butler_memory is not None and engagement_id is not None:
                 instructions += "\n\n" + BUTLER_MEMORY_INSTRUCTION
-                instructions += await self.butler_memory.turn_context(
-                    engagement_id, request.messages[-1].content
-                )
+                # Recalled for the latest message, so it rides on that message
+                # (``_with_reference_material``): in the instructions it changed
+                # the request's first bytes every turn and the provider's prompt
+                # cache missed for the whole conversation.
+                # A Butler session in Butler's own project recalls the
+                # memories of the project it is about.
+                butler_recall = (
+                    await self.butler_memory.turn_context(
+                        butler_focus_project(session) or engagement_id,
+                        request.messages[-1].content,
+                    )
+                ).strip()
         else:
             instructions += (
                 "\n\nNebula settings changes belong to the dedicated Nebula settings assistant. "
@@ -6439,6 +6774,7 @@ class ChatService:
             )
         if request._butler_recovery_instructions:
             instructions = request._butler_recovery_instructions
+            butler_recall = ""
         if request._butler_recovery_case_id:
             work_enabled = False
             work_roster_enabled = False
@@ -6450,25 +6786,8 @@ class ChatService:
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
-            instructions += "\n\nCore-owned goal context:\n" + json.dumps(
-                {
-                    "objective": goal.objective,
-                    "completion_criteria": goal.completion_criteria,
-                    "plan": goal.plan,
-                    "current_step": goal.current_step,
-                    "remaining_steps": (
-                        goal.step_budget - goal.current_step
-                        if goal.step_budget is not None
-                        else None
-                    ),
-                    "remaining_tokens": (
-                        goal.token_budget - goal.usage.total_tokens
-                        if goal.token_budget is not None
-                        else None
-                    ),
-                },
-                ensure_ascii=False,
-            )
+            instructions += _goal_instructions(goal)
+            goal_progress = _goal_progress_block(goal)
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
             None if side_chat else (await self._project_instructions(engagement_id))
@@ -6658,6 +6977,7 @@ class ChatService:
                         settings_assistant=settings_only,
                         background_case_id=request._butler_recovery_case_id,
                         client_surface=request.client_surface,
+                        butler_focus_project=butler_focus_project(session),
                         operator_message=(
                             request.messages[-1].content if settings_only else ""
                         ),
@@ -6938,6 +7258,13 @@ class ChatService:
                     )
                 except InvalidToolArguments as exc:
                     raise ChatConfigurationError(str(exc)) from exc
+            focus = butler_focus_project(session)
+            if focus is not None and self.tool_platform is not None:
+                # Workspace reads serve the project this Butler session is
+                # about; everything else stays in Butler's own project.
+                tool_components = await self.tool_platform.focus_components(
+                    tool_components, focus
+                )
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
             tool_components = dataclass_replace(
@@ -7103,6 +7430,9 @@ class ChatService:
                 reference = "\n\n".join(
                     [reference or _REFERENCE_MATERIAL_HEADING, linked_memory_block]
                 )
+            reference = _with_turn_state(
+                reference, butler_recall=butler_recall, goal_progress=goal_progress
+            )
             if request.planning_enabled:
                 instructions += (
                     "\n\nPlanning preference: Make a concise plan before substantial "
@@ -7391,8 +7721,10 @@ class ChatService:
                 introduce=(tool_catalog or {}).get("preloaded", []),
                 forget_deferred_schemas=request.mcp_context_mode == "on_demand",
             )
-            model_request = apply_tools_context(
-                model_request, tool_manifest, receipt=tool_catalog
+            model_request = with_tool_hints(
+                apply_tools_context(model_request, tool_manifest),
+                tool_catalog,
+                tool_manifest,
             )
             self._ensure_request_capacity(profile, model_request, calibration)
             session_id = (
@@ -9548,6 +9880,9 @@ class ChatService:
             # Routing responses in a row whose calls Core answered itself.
             deviations = 0
             route_deviated = False
+            # Denials per project hook in this turn; they outlast calls that run.
+            hook_denials: dict[str, int] = {}
+            repeated_hook: str | None = None
             while (
                 turn.status != ChatTurnStatus.FINALIZING
                 and (await self._accepted_goal_completion(turn)) is None
@@ -9640,6 +9975,7 @@ class ChatService:
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
                                 "deviations": deviations,
+                                "repeated_hook_denial": repeated_hook,
                             },
                         )
                         break
@@ -10012,7 +10348,18 @@ class ChatService:
                     del batched_calls[: len(parallel_wave)]
                     for parallel_event in parallel_events:
                         yield parallel_event
+                        if parallel_event[0] == "tool_completed":
+                            repeated_hook = (
+                                _repeated_hook_denial(
+                                    hook_denials, parallel_event[1].get("receipt")
+                                )
+                                or repeated_hook
+                            )
                     prepared.turn = turn
+                    if repeated_hook is not None:
+                        # The queue never ran, so abandoning it is safe.
+                        deviations = _ROUTING_DEVIATION_LIMIT
+                        batched_calls = []
                     continue
                 routed = batched_calls.pop(0)
                 call, provider_call = routed.call, routed.provider_call
@@ -10338,6 +10685,16 @@ class ChatService:
                     # A completion proposal ends tool routing. The final
                     # answer and goal transition commit in one transaction.
                     break
+                denied_hook = _repeated_hook_denial(
+                    hook_denials, entry.get("provider_result")
+                )
+                if denied_hook is not None:
+                    # The model keeps rewording a command the same hook routes
+                    # elsewhere. Stop as at the deviation limit; the queued
+                    # calls never ran, so abandoning them is safe.
+                    repeated_hook = denied_hook
+                    deviations = _ROUTING_DEVIATION_LIMIT
+                    batched_calls = []
 
             turn = await self.store.update(
                 ChatTurn,
@@ -12134,9 +12491,7 @@ class ChatService:
             owner = prepared.session
             if owner is None:
                 raise ChatError("provider tool context is missing its durable session")
-            base = apply_tools_context(
-                prepared.model_request, candidate, receipt=receipt
-            )
+            base = apply_tools_context(prepared.model_request, candidate)
             async with self.store.transaction(immediate=True) as transaction:
                 latest = await self.store.get(ChatTurn, current_turn.id)
                 if (
@@ -12179,7 +12534,7 @@ class ChatService:
                 current_turn.request_snapshot.get("max_active_subagents"),
                 manifest=candidate,
             )
-        result = apply_tools_context(request, manifest, receipt=receipt)
+        result = apply_tools_context(request, manifest)
         result = result.model_copy(
             update={
                 "tools": [tool for tool in result.tools if tool.name in specs],
@@ -12362,7 +12717,12 @@ class ChatService:
                     "Tool capacity requires the exact project execution context"
                 )
             async with self.runtime_capacity.slot(
-                lease, "tool:" + invocation.id, {"tool": 1}
+                lease,
+                "tool:" + invocation.id,
+                {"tool": 1},
+                high=await is_high(
+                    self.store, invocation.engagement_id, invocation.chat_session_id
+                ),
             ):
                 return await invoke()
 
@@ -13058,47 +13418,58 @@ class ChatService:
         """Debit ``usage`` from the goal, pausing a running goal at its budget.
 
         With ``transaction`` the charge commits with the caller's writes.
+
+        The goal is shared bookkeeping: the turn's subagents debit it after
+        each of their responses, and Core settles its active time, so its
+        revision moves while this turn runs. The debit is planned on the
+        newest saved goal, never on an earlier read, so losing that race
+        neither fails the turn nor drops or repeats a charge.
         """
 
-        write = transaction.update if transaction is not None else self.store.update
-        goal = await self.store.get(ChatGoal, goal_id)
-        combined = _added_usage(goal.usage, usage)
-        # Usage is always recorded, but only a running goal pauses on the
-        # budget: a goal the operator cancelled, completed, paused or blocked
-        # while the response was in flight keeps that state and its timestamps.
-        if (
-            goal.status == ChatGoalStatus.RUNNING
-            and goal.token_budget is not None
-            and combined.total_tokens >= goal.token_budget
-        ):
-            paused_at = utc_now()
-            paused = await write(
-                ChatGoal,
-                goal.id,
-                {
-                    "status": ChatGoalStatus.PAUSED,
-                    "paused_at": paused_at,
-                    "active_since": None,
-                    "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                    "blocked_reason": exhausted_reason,
-                    "usage": combined,
-                },
-                expected_revision=goal.revision,
+        paused = False
+
+        def plan(goal: ChatGoal) -> dict[str, Any]:
+            nonlocal paused
+            combined = _added_usage(goal.usage, usage)
+            # Usage is always recorded, but only a running goal pauses on the
+            # budget: a goal the operator cancelled, completed, paused or
+            # blocked while the response was in flight keeps that state and
+            # its timestamps.
+            paused = (
+                goal.status == ChatGoalStatus.RUNNING
+                and goal.token_budget is not None
+                and combined.total_tokens >= goal.token_budget
             )
+            if not paused:
+                return {"usage": combined}
+            paused_at = utc_now()
+            return {
+                "status": ChatGoalStatus.PAUSED,
+                "paused_at": paused_at,
+                "active_since": None,
+                "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                "blocked_reason": exhausted_reason,
+                "usage": combined,
+            }
+
+        if transaction is None:
+            charged = await revise_latest(self.store, ChatGoal, goal_id, plan)
+        else:
+            # A caller's unit of work retries as a whole on a conflict, and
+            # this read is repeated with it.
+            current = await self.store.get(ChatGoal, goal_id)
+            charged = await transaction.update(
+                ChatGoal, goal_id, plan(current), expected_revision=current.revision
+            )
+        if paused:
             # Its subagents spend the same budget, so they stop with it. The
             # stop runs as a task, after a caller's transaction has committed.
             (
                 await self.subagents.stop_goal_subagents_soon(
-                    paused, GOAL_BUDGET_STOP_NOTE
+                    charged, GOAL_BUDGET_STOP_NOTE
                 )
             )
-            return paused
-        return await write(
-            ChatGoal,
-            goal.id,
-            {"usage": combined},
-            expected_revision=goal.revision,
-        )
+        return charged
 
     async def _subagent_delivery_step(
         self,
@@ -14138,7 +14509,19 @@ class ChatService:
             CommandExecutionStatus.INTERRUPTED,
         }
 
+    async def require_project_open(
+        self, engagement_id: str | None, session_id: str | None = None
+    ) -> None:
+        """Refuse new or resumed chat work while the project or chat is held."""
+
+        hold = await active_hold(self.store, engagement_id, session_id)
+        if hold is not None:
+            raise ProjectHeld(held_detail(hold))
+
     async def prepare_resume(self, turn_id: str) -> PreparedChat:
+        # Refused before reconciling effects or reactivating the turn.
+        held_turn = await self.store.get(ChatTurn, turn_id)
+        await self.require_project_open(held_turn.engagement_id, held_turn.session_id)
         turn = await self.reconcile_recorded_effects(turn_id)
         final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
         final_answer_recovery: dict[str, Any] | None = (
@@ -14322,12 +14705,12 @@ class ChatService:
             raise ChatConfigurationError("automation command runtime is unavailable")
         try:
             mcp_profiles = tuple(
-                McpServerProfile.model_validate(item)
+                decode_stored(McpServerProfile, item)
                 for key in ("mcp_snapshot", "mcp_catalog_snapshot")
                 for item in snapshot.get(key, [])
             )
             ssh_environments = tuple(
-                SshEnvironment.model_validate(item)
+                decode_stored(SshEnvironment, item)
                 for item in snapshot.get("ssh_environment_snapshot", [])
             )
             include_commands = bool(
@@ -14351,6 +14734,7 @@ class ChatService:
                         client_surface=turn.request_snapshot.get(
                             "client_surface", "browser"
                         ),
+                        butler_focus_project=butler_focus_project(session),
                     )
                 )
                 if (
@@ -14592,6 +14976,11 @@ class ChatService:
                 )
                 if catalog is not None:
                     components = combine_tool_components(components, catalog)
+            focus = butler_focus_project(session)
+            if focus is not None and self.tool_platform is not None:
+                components = await self.tool_platform.focus_components(
+                    components, focus
+                )
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -14679,11 +15068,7 @@ class ChatService:
                     },
                     expected_revision=turn.revision,
                 )
-        model_request = apply_tools_context(
-            model_request,
-            tool_manifest,
-            receipt=catalog_snapshot(turn.request_snapshot),
-        )
+        model_request = apply_tools_context(model_request, tool_manifest)
         return PreparedChat(
             provider=provider,
             provider_profile=profile,

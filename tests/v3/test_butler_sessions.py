@@ -158,3 +158,68 @@ async def test_reservation_api_is_project_scoped_and_reuses_active_session(tmp_p
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_thread_reservation_runs_beside_the_current_butler_conversation(
+    tmp_path,
+):
+    from nebula.v3.project_reads import active_control_assistant_session
+
+    store = NebulaStore(tmp_path / "butler-threads.db")
+    project = await store.create(Engagement(name="Selected project"))
+    profile = await store.create(_profile(local=True))
+    runtime = _runtime(store, tmp_path)
+    current = await reserve_butler_session(
+        store,
+        runtime,
+        ButlerSessionReservation(
+            engagement_id=project.id,
+            backend=ChatBackend.PROVIDER,
+            provider_id=profile.id,
+        ),
+    )
+    threads = [
+        await reserve_butler_session(
+            store,
+            runtime,
+            ButlerSessionReservation(
+                engagement_id=project.id,
+                backend=ChatBackend.PROVIDER,
+                provider_id=profile.id,
+                thread=True,
+                title=f"Question {index}",
+            ),
+        )
+        for index in range(2)
+    ]
+
+    # Each thread is its own Butler conversation with the operator's title.
+    assert len({current.id, *(thread.id for thread in threads)}) == 3
+    assert [thread.title for thread in threads] == ["Question 0", "Question 1"]
+    for thread in threads:
+        assert thread.metadata["control_assistant"] is True
+        assert thread.metadata["butler_thread"] is True
+        # Core does not rename a thread from its first exchange.
+        assert thread.metadata["initial_title_state"] == "operator"
+    assert "butler_thread" not in current.metadata
+
+    # The panel's conversation stays the project's current Butler session.
+    assert (await active_control_assistant_session(store, project.id)).id == current.id
+    again = await reserve_butler_session(
+        store,
+        runtime,
+        ButlerSessionReservation(
+            engagement_id=project.id,
+            backend=ChatBackend.PROVIDER,
+            provider_id=profile.id,
+        ),
+    )
+    assert again.id == current.id
+
+    with pytest.raises(ValueError, match="only a Butler thread takes a title"):
+        ButlerSessionReservation(
+            engagement_id=project.id,
+            backend=ChatBackend.PROVIDER,
+            provider_id=profile.id,
+            title="Not a thread",
+        )

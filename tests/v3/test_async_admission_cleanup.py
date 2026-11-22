@@ -182,7 +182,6 @@ async def test_postcommit_cancellation_reconciles_before_same_process_resume(
     assert not scheduler.admitted(turn_id)
     assert scheduler._provider._value == scheduler.config.provider_limit
     assert scheduler._background._value == scheduler.config.background_limit
-    assert service._automatic_recovery_slots._value == 2
     async with database.session() as session:
         row = await session.get(ProviderTurnQueueRow, turn_id)
         assert row.state != "running" and row.lease_owner is None
@@ -225,7 +224,6 @@ async def test_cancellation_consumes_token_completed_while_position_waits(
         await runtime.task
     assert runtime.done and not scheduler.admitted(turn_id)
     assert scheduler._provider._value == scheduler.config.provider_limit
-    assert service._automatic_recovery_slots._value == 2
     assert not provider.requests
 
 
@@ -245,4 +243,98 @@ async def test_release_error_still_releases_recovery_capacity_and_signals_done(
     await asyncio.wait_for(asyncio.gather(runtime.task, return_exceptions=True), 10)
     assert runtime.done and runtime.error is not None
     assert scheduler._provider._value == scheduler.config.provider_limit
-    assert service._automatic_recovery_slots._value == 2
+
+
+async def test_recovered_turns_do_not_wait_behind_long_running_recovered_turns(
+    tmp_path, monkeypatch
+):
+    # Live: two recovered subagents that ran for hours held the only two
+    # recovery slots, so 13 other recovered turns waited with capacity free.
+    store = NebulaStore(tmp_path / "backlog.db")
+    service, first, _provider = await _chat(store)
+    prepared = [first]
+    for index in range(2):
+        prepared.append(
+            await service.prepare(
+                ChatCompletionRequest(
+                    provider_id=first.turn.provider_profile_id,
+                    engagement_id=first.turn.engagement_id,
+                    model="model-a",
+                    messages=[{"role": "user", "content": f"Synthetic {index}."}],
+                    include_knowledge=False,
+                    stream=True,
+                )
+            )
+        )
+    for item in prepared:
+        item.turn = await store.update(
+            ChatTurn, item.turn.id, {"capacity_lane": "background"}
+        )
+    producing: set[str] = set()
+    release = asyncio.Event()
+
+    async def long_running(prepared, runtime):
+        producing.add(prepared.turn.id)
+        await release.wait()
+
+    monkeypatch.setattr(service, "_produce_provider_turn", long_running)
+    turn_ids = [
+        await service.start_provider_turn(item, automatic_recovery=True)
+        for item in prepared
+    ]
+    for _ in range(500):
+        if len(producing) == len(turn_ids):
+            break
+        await asyncio.sleep(0.01)
+    assert producing == set(turn_ids)
+    assert all(service.provider_scheduler.admitted(turn_id) for turn_id in turn_ids)
+    release.set()
+    for turn_id in turn_ids:
+        runtime = service._active_provider_turns[turn_id]
+        await asyncio.wait_for(asyncio.gather(runtime.task, return_exceptions=True), 10)
+    scheduler = service.provider_scheduler
+    assert scheduler._provider._value == scheduler.config.provider_limit
+    assert scheduler._background._value == scheduler.config.background_limit
+
+
+class _HostPressure:
+    def __init__(self) -> None:
+        self.cleared = asyncio.Event()
+        self.waits = 0
+        self.monitor = type("Monitor", (), {"interval": 0.01})()
+
+    async def wait(self, deferred) -> None:
+        self.waits += 1
+        await deferred("Waiting for host pressure to ease")
+        await self.cleared.wait()
+        await deferred(None)
+
+    async def snapshot(self):
+        return type("Snapshot", (), {"busy": not self.cleared.is_set()})()
+
+
+async def test_recovered_running_turn_waits_out_host_pressure(tmp_path):
+    store = NebulaStore(tmp_path / "pressure.db")
+    turn, scheduler = await _turn(store)
+    turn = await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.ROUTING})
+    pressure = _HostPressure()
+    scheduler.host_load = pressure
+    task = asyncio.create_task(scheduler.admit(turn.id, automatic_recovery=True))
+    await asyncio.sleep(0.1)
+    assert not task.done() and pressure.waits == 1
+    assert scheduler.queue_detail(turn.id) == "Waiting for host pressure to ease"
+    pressure.cleared.set()
+    admission = await asyncio.wait_for(task, 5)
+    assert scheduler.admitted(turn.id)
+    await admission.release(turn.id)
+
+
+async def test_operator_resumed_running_turn_keeps_skipping_host_pressure(tmp_path):
+    store = NebulaStore(tmp_path / "operator.db")
+    turn, scheduler = await _turn(store)
+    turn = await store.update(ChatTurn, turn.id, {"status": ChatTurnStatus.ROUTING})
+    pressure = _HostPressure()
+    scheduler.host_load = pressure
+    admission = await asyncio.wait_for(scheduler.admit(turn.id), 5)
+    assert pressure.waits == 0 and scheduler.admitted(turn.id)
+    await admission.release(turn.id)

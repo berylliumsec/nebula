@@ -297,6 +297,7 @@ async def serve_runtime(
     diagnostics_level: str | None = None,
     startup_id: str | None = None,
     listener: socket.socket | None = None,
+    host_services_listener: socket.socket | None = None,
 ) -> None:
     if not sys.platform.startswith("linux"):
         raise ValueError(
@@ -333,6 +334,7 @@ async def serve_runtime(
         process_host,
         memory_budgets=budgets,
         knowledge_index_factory=create_host_knowledge_index,
+        listener=host_services_listener,
     )
     server = None
 
@@ -358,6 +360,7 @@ async def serve_runtime(
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     connection = None
     automatic = None
+    roller = None
     drain = None
     try:
         # Bind before opening controllers or migrating legacy state into a live
@@ -407,6 +410,11 @@ async def serve_runtime(
 
         automatic = RuntimeAutoAdmission(supervisor, default_version=manifest.version)
         await automatic.start()
+        from .runtime_project_roller import RuntimeProjectRoller
+
+        # Moves resident projects onto the execution target K at a time.
+        roller = RuntimeProjectRoller.for_supervisor(supervisor)
+        await roller.start()
         scheme = "https" if tls_cert else "http"
         display_host = f"[{host}]" if ":" in host else host
         endpoint = f"{scheme}://{display_host}:{port}/api/v1"
@@ -454,6 +462,8 @@ async def serve_runtime(
         listener.close()
         try:
             try:
+                if roller is not None:
+                    await roller.close()
                 if automatic is not None:
                     await automatic.close()
             finally:

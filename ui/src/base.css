@@ -416,6 +416,8 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-scroll-jump { position: sticky; z-index: 2; display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--text-strong); background: var(--surface-raised); box-shadow: none; cursor: pointer; }
 .chat-scroll-jump:hover { border-color: var(--blue); color: var(--blue); }
 .chat-scroll-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* Text labels are shown only by themes that draw the jump controls as labelled pills. */
+.chat-scroll-jump-label { display: none; }
 .chat-scroll-to-top { top: 0; margin: 0 52px -44px auto; }
 .chat-scroll-to-top svg { transform: rotate(180deg); }
 .chat-scroll-to-bottom { bottom: 0; margin: -44px 0 0 auto; }
@@ -455,6 +457,8 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .activity-ledger-attention { display: grid; gap: 4px; padding: 0 12px 9px; }
 .activity-ledger-attention > div { display: grid; min-width: 0; grid-template-columns: 9px minmax(0, 1fr) auto; align-items: start; gap: 8px; padding: 8px 9px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--yellow) 9%, var(--surface-muted)); }
 .activity-ledger-attention > div.status-failed { background: var(--red-muted); }
+.activity-ledger-attention > div.status-cancelled { background: var(--surface-muted); }
+.activity-ledger-live-status { display: grid; gap: 4px; min-width: 0; }
 .activity-ledger-attention > div > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
 .activity-ledger-attention small { color: var(--muted); overflow-wrap: anywhere; }
 .activity-ledger-attention em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }

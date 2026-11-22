@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .project_hold_gate import active_hold, held_detail
 from .async_utils import async_first
 
 import hashlib
@@ -170,6 +171,9 @@ class ButlerGlobalActions:
             or policy.revision != expected
         ):
             raise ValueError("Target project Act authority changed or is unavailable")
+        hold = await active_hold(self.store, project_id)
+        if hold is not None:
+            raise ValueError(held_detail(hold))
         return project
 
     async def projects(self, arguments: dict[str, Any]) -> dict[str, Any]:

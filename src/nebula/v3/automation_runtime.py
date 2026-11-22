@@ -8,7 +8,8 @@ Nebula tools.
 
 from __future__ import annotations
 
-from .async_utils import MaybeAsync
+from .work_priority import is_high
+from .async_utils import finish_cleanup, MaybeAsync
 
 from .async_utils import call_async, resolve_workspace
 
@@ -36,6 +37,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .artifacts import ArtifactStore
 from .diagnostics import create_diagnostic_task, record_caught_exception
+from .memory_budget import HOST_COMMAND_KIND, host_command_labels
+from .memory_policy import MemoryAdmissionTimeout
+from .memory_runtime import HostCommandCancelled
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -452,13 +456,9 @@ class HostRuntimeSession(RuntimeBackendSession):
     async def enable_network(self) -> None:
         return None
 
-    async def run(
-        self,
-        process_id: str,
-        command: str,
-        cwd: str,
-        extra_env: dict[str, str] | None = None,
-    ) -> RuntimeBackendProcess:
+    def _prepare(
+        self, cwd: str, extra_env: dict[str, str] | None
+    ) -> tuple[Path, dict[str, str]]:
         if self._closed:
             raise AutomationRuntimeUnavailable("host session is closed")
         directory = Path(cwd).expanduser()
@@ -475,6 +475,16 @@ class HostRuntimeSession(RuntimeBackendSession):
             if key in {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}
         }
         environment.update(extra_env or {})
+        return directory, environment
+
+    async def run(
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> RuntimeBackendProcess:
+        directory, environment = self._prepare(cwd, extra_env)
         process = await asyncio.create_subprocess_exec(
             "/bin/bash",
             "--noprofile",
@@ -497,6 +507,197 @@ class HostRuntimeSession(RuntimeBackendSession):
         for process in self.processes:
             if process.process.returncode is None:
                 await process.terminate()
+
+
+class ManagedHostRuntimeProcess(RuntimeBackendProcess):
+    """A Host command the protected memory runner started in its job group."""
+
+    def __init__(self, process) -> None:
+        self.process = process
+        self.stdout = process.stdout
+        self.stderr = process.stderr
+
+    async def write(self, data: bytes) -> None:
+        if self.process.returncode is not None or self.process.stdin.is_closing():
+            raise AutomationRuntimeError("process stdin is closed")
+        self.process.stdin.write(data)
+        await self.process.stdin.drain()
+
+    async def _release_pipes(self) -> None:
+        """Close stdio a detached descendant kept open after the command exited.
+
+        The descendant itself stays inside the job group, charged to its budget,
+        until the session's verified cleanup removes the group.
+        """
+
+        deadline = asyncio.get_running_loop().time() + HOST_PIPE_RELEASE_SECONDS
+        while not (self.stdout.at_eof() and self.stderr.at_eof()):
+            if asyncio.get_running_loop().time() >= deadline:
+                break
+            await asyncio.sleep(HOST_EXIT_POLL_SECONDS)
+        await self.process.close()
+
+    async def wait(self) -> int:
+        code = await self.process.wait()
+        await self.process.signal("KILL")
+        await self._release_pipes()
+        return code
+
+    async def terminate(self) -> None:
+        await self.process.signal("TERM")
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            # diagnostic-expected: bounded escalation for a supervised host process.
+            await self.process.signal("KILL")
+            await self.process.wait()
+        await self.process.signal("KILL")
+        await self._release_pipes()
+
+
+class ManagedHostRuntimeSession(HostRuntimeSession):
+    """Host execution as Core's OS user; each command in its own protected group.
+
+    A command is admitted through the Core-wide Host command queue and holds
+    its memory reservation only while it, or anything it started, runs
+    (docs/design/host-command-queue.md).
+    """
+
+    # How often a command that left detached processes is checked again.
+    DETACHED_CHECK_SECONDS = 2.0
+
+    def __init__(
+        self, workspace: Path, runner, memory_compute, project_id: str
+    ) -> None:
+        super().__init__(workspace)
+        self.runner = runner
+        self.memory_compute = memory_compute
+        self.project_id = project_id
+        self.jobs: dict[str, Any] = {}
+        self._settling: set[asyncio.Task[None]] = set()
+
+    @property
+    def ended(self) -> bool:
+        return False
+
+    async def admit(
+        self,
+        process_id: str,
+        *,
+        execution_id: str,
+        labels: dict[str, Any],
+        on_queued=None,
+    ) -> Any:
+        job = await self.memory_compute.open_host_job(
+            self.runner,
+            job_id="command-" + execution_id,
+            project_id=self.project_id,
+            resource_kind=HOST_COMMAND_KIND,
+            resource_id=execution_id,
+            labels=labels,
+            on_queued=on_queued,
+        )
+        self.jobs[process_id] = job
+        return job
+
+    async def run(
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> RuntimeBackendProcess:
+        job = self.jobs.get(process_id)
+        if job is None or job.ended:
+            raise AutomationRuntimeUnavailable(
+                "This Host command has no admitted protected group; run it again."
+            )
+        directory, environment = self._prepare(cwd, extra_env)
+        process = await self.runner.spawn(
+            job.job_id,
+            ["/bin/bash", "--noprofile", "--norc", "-c", command],
+            str(directory),
+            environment,
+        )
+        backend = ManagedHostRuntimeProcess(process)
+        self.processes.append(backend)  # type: ignore[arg-type]
+        return backend
+
+    async def cancel_requested(self, process_id: str) -> bool:
+        job = self.jobs.get(process_id)
+        if job is None:
+            return False
+        current = await self.memory_compute.service.get_job(job.job_id)
+        return bool((current.labels or {}).get("cancel_requested"))
+
+    def settle_after_exit(self, process_id: str) -> None:
+        """Release the command's reservation once its group is empty."""
+
+        job = self.jobs.get(process_id)
+        if job is None:
+            return
+        task = create_diagnostic_task(
+            self._settle(process_id, job),
+            feature="runtime",
+            event_code="runtime.host_command_settle",
+            failure_message="A Host command's memory could not be released yet.",
+        )
+        self._settling.add(task)
+        task.add_done_callback(self._settling.discard)
+
+    async def _settle(self, process_id: str, job) -> None:
+        marked = False
+        while not job.ended:
+            try:
+                report = await self.runner.observe(job.job_id)
+            except Exception as caught_error:
+                # An unreadable group keeps its charge: releasing it could
+                # leave an unseen process running without a reservation.
+                record_caught_exception(
+                    "runtime",
+                    "runtime.host_command_unobserved",
+                    "A Host command's group could not be read; its memory stays held.",
+                    caught_error,
+                    stage="host-command-settle",
+                )
+                report = {"populated": True}
+            if not (report and report.get("populated")):
+                break
+            if not marked:
+                # Detached processes (nohup, setsid, &) outlived the command.
+                await self.memory_compute.service.mark_host_command(
+                    job.job_id, detached=True
+                )
+                marked = True
+            await asyncio.sleep(self.DETACHED_CHECK_SECONDS)
+        self.jobs.pop(process_id, None)
+        current = await self.memory_compute.service.get_job(job.job_id)
+        await job.close(
+            "cancelled"
+            if (current.labels or {}).get("cancel_requested")
+            else "completed"
+        )
+
+    async def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            for process in self.processes:
+                if process.process.returncode is None:
+                    await process.terminate()
+        finally:
+            for task in list(self._settling):
+                task.cancel()
+            await asyncio.gather(*self._settling, return_exceptions=True)
+            jobs, self.jobs = list(self.jobs.values()), {}
+            results = await asyncio.gather(
+                *(job.close() for job in jobs if not job.ended),
+                return_exceptions=True,
+            )
+            failure = next((r for r in results if isinstance(r, BaseException)), None)
+            if failure is not None:
+                raise failure
 
 
 class ContainerRuntimeSession(RuntimeBackendSession):
@@ -852,6 +1053,9 @@ class _ManagedSession:
     processes: dict[str, _ManagedProcess] = field(default_factory=dict)
     used_approval_ids: set[str] = field(default_factory=set)
     scope_expiry_task: asyncio.Task[None] | None = None
+    # Commands between session lookup and process registration (Host queue
+    # waits included). A handoff never closes a session while this is above 0.
+    active_uses: int = 0
 
 
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
@@ -946,7 +1150,10 @@ class AutomationRuntimeManager:
         self._sessions: dict[str, _ManagedSession] = {}
         self._owner_sessions: dict[tuple[str, str, str], str] = {}
         self._processes: dict[str, _ManagedProcess] = {}
+        # Serializes container session starts, which share runner preparation.
         self._session_lock = asyncio.Lock()
+        # One lock per owner: a session waiting for memory never blocks others.
+        self._owner_locks: dict[tuple[str, str, str], asyncio.Lock] = {}
         self._inventory: list[dict[str, str]] = []
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
@@ -1047,6 +1254,7 @@ class AutomationRuntimeManager:
             CommandExecution,
             {
                 "status": [
+                    CommandExecutionStatus.QUEUED.value,
                     CommandExecutionStatus.RUNNING.value,
                     CommandExecutionStatus.WAITING_APPROVAL.value,
                 ]
@@ -1501,9 +1709,12 @@ class AutomationRuntimeManager:
         owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
         owner_id: str,
     ) -> AutomationSession:
-        managed = await self._get_or_create_session(
-            engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
-        )
+        try:
+            managed = await self._get_or_create_session(
+                engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
+            )
+        except MemoryAdmissionTimeout as error:
+            raise AutomationRuntimeUnavailable(str(error)) from error
         return managed.entity
 
     async def run_command(
@@ -1521,12 +1732,51 @@ class AutomationRuntimeManager:
         chat_origin: bool = False,
         expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
-        managed = await self._get_or_create_session(
-            engagement_id=engagement_id,
-            owner_kind=owner_kind,
-            owner_id=owner_id,
-            chat_origin=chat_origin and chat_session_id is not None,
-        )
+        try:
+            managed = await self._get_or_create_session(
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                chat_origin=chat_origin and chat_session_id is not None,
+            )
+        except MemoryAdmissionTimeout as error:
+            raise AutomationRuntimeUnavailable(str(error)) from error
+        # Counted before any await so a handoff release cannot interleave.
+        managed.active_uses += 1
+        try:
+            return await self._run_command_in_session(
+                managed,
+                engagement_id=engagement_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                request=request,
+                approval=approval,
+                requested_by=requested_by,
+                tool_call_id=tool_call_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+                chat_origin=chat_origin,
+                expected_execution_mode=expected_execution_mode,
+            )
+        finally:
+            managed.active_uses -= 1
+
+    async def _run_command_in_session(
+        self,
+        managed: _ManagedSession,
+        *,
+        engagement_id: str,
+        owner_kind: Literal["chat", "mission", "harness", "api", "notebook"],
+        owner_id: str,
+        request: RunCommandRequest,
+        approval: Approval | None,
+        requested_by: str,
+        tool_call_id: str | None,
+        chat_session_id: str | None,
+        chat_turn_id: str | None,
+        chat_origin: bool,
+        expected_execution_mode: Literal["docker", "host"] | None,
+    ) -> CommandResult:
         if (
             expected_execution_mode
             and managed.policy.execution_mode != expected_execution_mode
@@ -1624,7 +1874,36 @@ class AutomationRuntimeManager:
                 ),
             },
         )
+        managed_host = isinstance(managed.backend, ManagedHostRuntimeSession)
+        if managed_host:
+            execution = execution.model_copy(
+                update={"status": CommandExecutionStatus.QUEUED}
+            )
         execution = await self.store.create(execution)
+        if managed_host:
+            execution = await self._admit_host_command(
+                managed,
+                execution,
+                process_id,
+                labels=host_command_labels(
+                    command=request.command,
+                    cwd=request.cwd,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    tool_call_id=tool_call_id,
+                    chat_session_id=chat_session_id,
+                    chat_turn_id=chat_turn_id,
+                    execution_id=execution.id,
+                    process_id=process_id,
+                    background=request.background,
+                    # High-priority chats and projects are admitted first.
+                    priority=(
+                        "high"
+                        if await is_high(self.store, engagement_id, chat_session_id)
+                        else None
+                    ),
+                ),
+            )
         extra_env = (
             {
                 "NEBULA_RESULTS_URL": results_url,
@@ -1716,6 +1995,56 @@ class AutomationRuntimeManager:
                 await asyncio.shield(process.backend.terminate())
             raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
+
+    async def _admit_host_command(
+        self,
+        managed: _ManagedSession,
+        execution: CommandExecution,
+        process_id: str,
+        *,
+        labels: dict[str, Any],
+    ) -> CommandExecution:
+        """Wait for a Core-wide Host command slot, then mark the command running.
+
+        Queued time does not count against the command's timeout. A cancel or
+        a stopped turn ends the wait and records why it never started.
+        """
+        backend = managed.backend
+        assert isinstance(backend, ManagedHostRuntimeSession)
+        try:
+            await backend.admit(process_id, execution_id=execution.id, labels=labels)
+        except BaseException as error:
+            if isinstance(error, HostCommandCancelled):
+                status, detail = CommandExecutionStatus.CANCELLED, str(error)
+            elif isinstance(error, asyncio.CancelledError):
+                status = self._stop_status()
+                detail = (
+                    "Stopped while waiting for a Host command slot; it never started."
+                )
+            else:
+                status, detail = CommandExecutionStatus.FAILED, str(error)
+            current = await self.store.get(CommandExecution, execution.id)
+            await finish_cleanup(
+                self.store.update(
+                    CommandExecution,
+                    execution.id,
+                    {
+                        "status": status,
+                        "completed_at": utc_now(),
+                        "error": detail[:4_000],
+                    },
+                    expected_revision=current.revision,
+                )
+            )
+            if isinstance(error, (HostCommandCancelled, MemoryAdmissionTimeout)):
+                raise AutomationRuntimeUnavailable(detail) from error
+            raise
+        return await self.store.update(
+            CommandExecution,
+            execution.id,
+            {"status": CommandExecutionStatus.RUNNING, "started_at": utc_now()},
+            expected_revision=execution.revision,
+        )
 
     async def accept_results(
         self, process_id: str, api_key: str, request: ProcessResultsRequest
@@ -2050,6 +2379,87 @@ class AutomationRuntimeManager:
             self._discard_capture(process)
         return managed.entity
 
+    @staticmethod
+    def _host_session_idle(managed: _ManagedSession) -> bool:
+        """Whether closing this Host session can end nothing still running.
+
+        Idle means no command between lookup and registration, every tracked
+        process finalized and, for a protected session, no command group still
+        held (a detached descendant keeps its group and job until it exits).
+        Docker sessions never count: their container keeps state and
+        background processes outside the workspace that closing would lose.
+        """
+        backend = managed.backend
+        if not isinstance(backend, HostRuntimeSession) or managed.active_uses:
+            return False
+        if managed.entity.status != AutomationSessionStatus.READY:
+            return False
+        if any(
+            process.final_task is None or not process.final_task.done()
+            for process in managed.processes.values()
+        ):
+            return False
+        if isinstance(backend, ManagedHostRuntimeSession):
+            return not backend.jobs and not backend._settling
+        return all(
+            process.process.returncode is not None for process in backend.processes
+        )
+
+    async def release_idle_sessions_for_handoff(self, engagement_id: str) -> list[str]:
+        """Close this project's idle Host sessions at a handoff boundary.
+
+        A Host session holds no state beyond its live commands: finished
+        command results are durable, and the owner's next command opens a
+        fresh session on whichever runtime then owns the project. Busy, held
+        or Docker sessions stay open and keep pinning the project.
+        """
+
+        released: list[str] = []
+        for session_id, managed in list(self._sessions.items()):
+            if managed.entity.engagement_id != engagement_id:
+                continue
+            if not self._host_session_idle(managed):
+                continue
+            entity = managed.entity
+            async with self._owner_lock(
+                (entity.engagement_id, entity.owner_kind, entity.owner_id)
+            ):
+                # Re-checked under the owner lock, which session lookup takes.
+                if self._sessions.get(
+                    session_id
+                ) is not managed or not self._host_session_idle(managed):
+                    continue
+                try:
+                    await self.close_session(session_id)
+                except Exception as caught_error:
+                    # The session stays open and keeps pinning the project.
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.handoff_session_release_failed",
+                        "An idle Host session could not be closed for handoff.",
+                        caught_error,
+                        stage="project-handoff",
+                    )
+                    continue
+            released.append(session_id)
+        return released
+
+    def _managed_host_for(
+        self, process: _ManagedProcess
+    ) -> ManagedHostRuntimeSession | None:
+        managed = self._sessions.get(process.execution.session_id)
+        if managed is not None and isinstance(
+            managed.backend, ManagedHostRuntimeSession
+        ):
+            return managed.backend
+        return None
+
+    def _owner_lock(self, key: tuple[str, str, str]) -> asyncio.Lock:
+        lock = self._owner_locks.get(key)
+        if lock is None:
+            lock = self._owner_locks[key] = asyncio.Lock()
+        return lock
+
     async def _expire_session_at_scope_boundary(
         self, session_id: str, expires_at: datetime
     ) -> None:
@@ -2073,21 +2483,28 @@ class AutomationRuntimeManager:
         from .temporary_command_override import unmanaged_commands_allowed
         from .execution_policy import effective_scope
 
-        async def require_host_command_access() -> None:
+        async def require_host_command_access() -> Any:
+            """Return the protected runner, or None for the operator override."""
+            from .host_memory_client import HostMemoryRunner
+
+            runner = HostMemoryRunner.from_environment()
+            healthy, detail = await runner.available()
+            if healthy:
+                return runner
             if (
                 owner_kind == "chat" or (owner_kind == "harness" and chat_origin)
             ) and unmanaged_commands_allowed(engagement_id):
-                return
+                return None
             await self.memory_compute.reject_unsupported(
                 "local",
                 project_id=engagement_id,
                 resource_kind="host_command_session",
                 resource_id=owner_id,
-                detail="Host commands need a protected memory-runner/v1 agent. Choose a verified container execution profile; unrestricted host execution is unavailable.",
+                detail=detail,
             )
 
         key = (engagement_id, owner_kind, owner_id)
-        async with self._session_lock:
+        async with self._owner_lock(key):
             existing_id = self._owner_sessions.get(key)
             if existing_id is not None and existing_id in self._sessions:
                 existing = self._sessions[existing_id]
@@ -2096,8 +2513,11 @@ class AutomationRuntimeManager:
                 if (
                     existing.policy.revision == current_policy.revision
                     and existing.scope == current_scope
+                    and not getattr(existing.backend, "ended", False)
                 ):
-                    if existing.policy.execution_mode == "host":
+                    if existing.policy.execution_mode == "host" and not isinstance(
+                        existing.backend, ManagedHostRuntimeSession
+                    ):
                         await require_host_command_access()
                     return existing
                 # Rebuild the execution boundary as well as its approval policy.
@@ -2105,7 +2525,7 @@ class AutomationRuntimeManager:
             engagement = await self.store.get(Engagement, engagement_id)
             policy = await self.project_policy(engagement_id)
             if policy.execution_mode == "host":
-                await require_host_command_access()
+                host_runner = await require_host_command_access()
                 if not policy.host_access_acknowledged:
                     raise AutomationPolicyDenied(
                         "Host access has not been acknowledged"
@@ -2125,7 +2545,6 @@ class AutomationRuntimeManager:
                     else None
                 )
                 scope = await effective_scope(self.store, engagement_id, scope)
-                backend: RuntimeBackendSession = HostRuntimeSession(workspace)
                 entity = AutomationSession(
                     engagement_id=engagement_id,
                     owner_kind=owner_kind,
@@ -2144,15 +2563,30 @@ class AutomationRuntimeManager:
                     metadata={
                         "network_boundary": "host_os",
                         "workspace": str(workspace),
+                        "memory_runner": "nebula.memory-runner/v1"
+                        if host_runner is not None
+                        else "unmanaged_operator_override",
                     },
                 )
-                async with self.store.transaction(immediate=True) as transaction:
-                    (
-                        await transaction.assert_project_workspace(
-                            engagement_id, engagement.workspace_path
-                        )
+                backend: RuntimeBackendSession
+                if host_runner is None:
+                    backend = HostRuntimeSession(workspace)
+                else:
+                    backend = ManagedHostRuntimeSession(
+                        workspace, host_runner, self.memory_compute, engagement_id
                     )
-                    (await transaction.add(entity))
+                try:
+                    async with self.store.transaction(immediate=True) as transaction:
+                        (
+                            await transaction.assert_project_workspace(
+                                engagement_id, engagement.workspace_path
+                            )
+                        )
+                        (await transaction.add(entity))
+                except BaseException:
+                    # diagnostic-expected: an unrecorded session releases its verified worker.
+                    await finish_cleanup(backend.close())
+                    raise
                 managed = _ManagedSession(
                     entity=entity,
                     policy=policy,
@@ -2176,156 +2610,161 @@ class AutomationRuntimeManager:
                         failure_message="Scope-expiry supervision stopped unexpectedly.",
                     )
                 return managed
-            profile = await self._select_runner(policy)
-            if not self.runtime_image or not self.runtime_digest:
-                raise AutomationRuntimeUnavailable(
-                    "prepare the existing Kali headless runtime before starting an agent session"
-                )
-            if (
-                self._prepared_runner_profile_id is not None
-                and profile.id != self._prepared_runner_profile_id
-            ):
-                raise AutomationRuntimeUnavailable(
-                    "the selected runner does not own the prepared Kali runtime"
-                )
-            workspace = (
-                (await resolve_workspace(self.workspace_resolver, engagement_id))
-                .expanduser()
-                .resolve(strict=True)
-            )
-            if not workspace.is_dir():
-                raise AutomationRuntimeUnavailable("project workspace is unavailable")
-            scope = (
-                (await self.store.get(ScopePolicy, engagement.scope_policy_id))
-                if engagement.scope_policy_id is not None
-                else None
-            )
-            scope = await effective_scope(self.store, engagement_id, scope)
-            rules, domains = self._network_boundary(policy, scope)
-            vpn: VpnProfile | None = None
-            vpn_config = None
-            if policy.vpn_profile_id is not None:
-                if self.credential_store is None:
+            async with self._session_lock:
+                profile = await self._select_runner(policy)
+                if not self.runtime_image or not self.runtime_digest:
                     raise AutomationRuntimeUnavailable(
-                        "VPN secret storage is unavailable"
+                        "prepare the existing Kali headless runtime before starting an agent session"
                     )
-                vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
-                from .runtime_credential_access import resolve_credential_async
+                if (
+                    self._prepared_runner_profile_id is not None
+                    and profile.id != self._prepared_runner_profile_id
+                ):
+                    raise AutomationRuntimeUnavailable(
+                        "the selected runner does not own the prepared Kali runtime"
+                    )
+                workspace = (
+                    (await resolve_workspace(self.workspace_resolver, engagement_id))
+                    .expanduser()
+                    .resolve(strict=True)
+                )
+                if not workspace.is_dir():
+                    raise AutomationRuntimeUnavailable(
+                        "project workspace is unavailable"
+                    )
+                scope = (
+                    (await self.store.get(ScopePolicy, engagement.scope_policy_id))
+                    if engagement.scope_policy_id is not None
+                    else None
+                )
+                scope = await effective_scope(self.store, engagement_id, scope)
+                rules, domains = self._network_boundary(policy, scope)
+                vpn: VpnProfile | None = None
+                vpn_config = None
+                if policy.vpn_profile_id is not None:
+                    if self.credential_store is None:
+                        raise AutomationRuntimeUnavailable(
+                            "VPN secret storage is unavailable"
+                        )
+                    vpn = await self.store.get(VpnProfile, policy.vpn_profile_id)
+                    from .runtime_credential_access import resolve_credential_async
 
-                vpn_config = (
-                    await resolve_credential_async(
-                        self.credential_store,
-                        vpn.secret_ref,
-                        purpose="vpn",
-                        profile_id=vpn.id,
-                    )
-                ).get_secret_value()
-            has_network_boundary = bool(rules or domains)
-            session = AutomationSession(
-                engagement_id=engagement_id,
-                owner_kind=owner_kind,
-                owner_id=owner_id,
-                runtime_image=self.runtime_image,
-                runtime_digest=self.runtime_digest,
-                runner_profile_id=profile.id,
-                runner_profile_revision=profile.revision,
-                policy_id=policy.id,
-                policy_revision=policy.revision,
-                scope_policy_id=scope.id if scope is not None else None,
-                scope_policy_revision=scope.revision if scope is not None else None,
-                vpn_profile_id=vpn.id if vpn is not None else None,
-                vpn_profile_revision=vpn.revision if vpn is not None else None,
-                # Even an automatic project never receives egress until a
-                # command explicitly asks for project_scope.
-                network_granted=False,
-            )
-            async with self.store.transaction(immediate=True) as transaction:
-                (
-                    await transaction.assert_project_workspace(
-                        engagement_id, engagement.workspace_path
-                    )
+                    vpn_config = (
+                        await resolve_credential_async(
+                            self.credential_store,
+                            vpn.secret_ref,
+                            purpose="vpn",
+                            profile_id=vpn.id,
+                        )
+                    ).get_secret_value()
+                has_network_boundary = bool(rules or domains)
+                session = AutomationSession(
+                    engagement_id=engagement_id,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    runtime_image=self.runtime_image,
+                    runtime_digest=self.runtime_digest,
+                    runner_profile_id=profile.id,
+                    runner_profile_revision=profile.revision,
+                    policy_id=policy.id,
+                    policy_revision=policy.revision,
+                    scope_policy_id=scope.id if scope is not None else None,
+                    scope_policy_revision=scope.revision if scope is not None else None,
+                    vpn_profile_id=vpn.id if vpn is not None else None,
+                    vpn_profile_revision=vpn.revision if vpn is not None else None,
+                    # Even an automatic project never receives egress until a
+                    # command explicitly asks for project_scope.
+                    network_granted=False,
                 )
-                (await transaction.add(session))
-            resolver_file: Path | None = None
-            if domains:
-                resolver_directory = self.capture_root / session.id
-                resolver_directory.mkdir(mode=0o700)
-                resolver_file = resolver_directory / "resolv.conf"
-                resolver_file.write_text(
-                    "nameserver 127.0.0.53\noptions attempts:1 timeout:2\n",
-                    encoding="ascii",
+                async with self.store.transaction(immediate=True) as transaction:
+                    (
+                        await transaction.assert_project_workspace(
+                            engagement_id, engagement.workspace_path
+                        )
+                    )
+                    (await transaction.add(session))
+                resolver_file: Path | None = None
+                if domains:
+                    resolver_directory = self.capture_root / session.id
+                    resolver_directory.mkdir(mode=0o700)
+                    resolver_file = resolver_directory / "resolv.conf"
+                    resolver_file.write_text(
+                        "nameserver 127.0.0.53\noptions attempts:1 timeout:2\n",
+                        encoding="ascii",
+                    )
+                    # The file contains only the loopback resolver address and must
+                    # be readable by the non-root process inside the container.
+                    resolver_file.chmod(0o644)
+                try:
+                    backend = await self.session_factory(
+                        SessionLaunch(
+                            session_id=session.id,
+                            project_id=engagement_id,
+                            runner=self._runner(profile, workspace=workspace),
+                            image=self.runtime_image,
+                            workspace=workspace,
+                            limits=SandboxLimits(
+                                timeout_seconds=max(1, policy.max_timeout_ms // 1_000)
+                            ),
+                            egress_rules=tuple(rules),
+                            egress_domains=tuple(domains),
+                            egress_ports=tuple(scope.allowed_ports)
+                            if scope is not None and domains
+                            else (),
+                            resolv_conf=resolver_file,
+                            network_granted=session.network_granted,
+                            vpn_config=vpn_config,
+                            notebook_data_directory=(
+                                (await self.notebook_data_directory(engagement_id))
+                                if owner_kind == "notebook"
+                                else None
+                            ),
+                        )
+                    )
+                except Exception as exc:
+                    (
+                        await self.store.update(
+                            AutomationSession,
+                            session.id,
+                            {
+                                "status": AutomationSessionStatus.FAILED,
+                                "completed_at": utc_now(),
+                                "failure_detail": str(exc)[:4_000],
+                            },
+                            expected_revision=session.revision,
+                        )
+                    )
+                    raise
+                session = await self.store.update(
+                    AutomationSession,
+                    session.id,
+                    {"status": AutomationSessionStatus.READY},
+                    expected_revision=session.revision,
                 )
-                # The file contains only the loopback resolver address and must
-                # be readable by the non-root process inside the container.
-                resolver_file.chmod(0o644)
-            try:
-                backend = await self.session_factory(
-                    SessionLaunch(
-                        session_id=session.id,
-                        project_id=engagement_id,
-                        runner=self._runner(profile, workspace=workspace),
-                        image=self.runtime_image,
-                        workspace=workspace,
-                        limits=SandboxLimits(
-                            timeout_seconds=max(1, policy.max_timeout_ms // 1_000)
+                managed = _ManagedSession(
+                    entity=session,
+                    policy=policy,
+                    scope=scope,
+                    backend=backend,
+                    workspace=workspace,
+                )
+                self._sessions[session.id] = managed
+                self._owner_sessions[key] = session.id
+                if (
+                    scope is not None
+                    and scope.not_after is not None
+                    and not scope.bypass_permissions
+                    and has_network_boundary
+                ):
+                    managed.scope_expiry_task = create_diagnostic_task(
+                        self._expire_session_at_scope_boundary(
+                            session.id, scope.not_after
                         ),
-                        egress_rules=tuple(rules),
-                        egress_domains=tuple(domains),
-                        egress_ports=tuple(scope.allowed_ports)
-                        if scope is not None and domains
-                        else (),
-                        resolv_conf=resolver_file,
-                        network_granted=session.network_granted,
-                        vpn_config=vpn_config,
-                        notebook_data_directory=(
-                            (await self.notebook_data_directory(engagement_id))
-                            if owner_kind == "notebook"
-                            else None
-                        ),
+                        feature="runtime",
+                        event_code="runtime.scope_expiry",
+                        failure_message="Scope-expiry supervision stopped unexpectedly.",
                     )
-                )
-            except Exception as exc:
-                (
-                    await self.store.update(
-                        AutomationSession,
-                        session.id,
-                        {
-                            "status": AutomationSessionStatus.FAILED,
-                            "completed_at": utc_now(),
-                            "failure_detail": str(exc)[:4_000],
-                        },
-                        expected_revision=session.revision,
-                    )
-                )
-                raise
-            session = await self.store.update(
-                AutomationSession,
-                session.id,
-                {"status": AutomationSessionStatus.READY},
-                expected_revision=session.revision,
-            )
-            managed = _ManagedSession(
-                entity=session,
-                policy=policy,
-                scope=scope,
-                backend=backend,
-                workspace=workspace,
-            )
-            self._sessions[session.id] = managed
-            self._owner_sessions[key] = session.id
-            if (
-                scope is not None
-                and scope.not_after is not None
-                and not scope.bypass_permissions
-                and has_network_boundary
-            ):
-                managed.scope_expiry_task = create_diagnostic_task(
-                    self._expire_session_at_scope_boundary(session.id, scope.not_after),
-                    feature="runtime",
-                    event_code="runtime.scope_expiry",
-                    failure_message="Scope-expiry supervision stopped unexpectedly.",
-                )
-            return managed
+                return managed
 
     async def _select_runner(
         self, policy: AutomationProjectPolicy
@@ -2538,6 +2977,13 @@ class AutomationRuntimeManager:
             exit_code = await process.backend.wait()
             if process.drain_tasks is not None:
                 await self._settle_drains(process.drain_tasks)
+            host = self._managed_host_for(process)
+            if host is not None:
+                if process.forced_status is None and await host.cancel_requested(
+                    process.execution.process_id
+                ):
+                    process.forced_status = CommandExecutionStatus.CANCELLED
+                host.settle_after_exit(process.execution.process_id)
             status = process.forced_status or (
                 CommandExecutionStatus.COMPLETED
                 if exit_code == 0

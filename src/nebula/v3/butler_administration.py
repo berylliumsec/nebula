@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 import httpx
 from sqlalchemy import func, or_, select
 
+from .stored_entities import decode_stored
 from .action_registry import ActionRegistry
 from .butler_data import ButlerData, _ID, _schema
 from .butler_inspection import _CHUNK, _part
@@ -117,7 +118,7 @@ class ButlerAdministration(ButlerData):
             )
             async with self.store.database.session() as database:
                 rows = [
-                    HarnessSession.model_validate(row.payload)
+                    decode_stored(HarnessSession, row.payload)
                     for row in (
                         await database.scalars(
                             select(EntityRow)

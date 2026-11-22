@@ -18,7 +18,7 @@ from enum import Enum
 from heapq import heappop, heappush
 from pathlib import Path
 from time import monotonic
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import (
     Annotated,
     Any,
@@ -31,7 +31,14 @@ from typing import (
 )
 
 import regex  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+)
 
 from .artifacts import ArtifactStore
 from .diagnostics import record_caught_exception
@@ -55,6 +62,13 @@ MAX_GENERATED_BYTES = 100 * 1024 * 1024
 MAX_EXCERPT_BYTES = 8 * 1024
 MAX_INLINE_OUTPUT_BYTES = 4 * 1024
 MAX_READ_LINES = 200
+# tool_output.read pages are bounded by MAX_EXCERPT_BYTES first; the line
+# limit only stops a page of very short lines from growing without end.
+MAX_TOOL_OUTPUT_READ_LINES = 400
+DEFAULT_TOOL_OUTPUT_READ_LINES = 400
+# A partial preview redacts up to this much of each end of a stream before
+# cutting, so a secret near the shown edge is redacted in its full context.
+PREVIEW_WINDOW_BYTES = 64 * 1024
 MAX_REGEX_PATTERN = 512
 DEFAULT_REGEX_DEADLINE_SECONDS = 0.25
 DEFAULT_TOOL_OUTPUT_SEARCH_SECONDS = 5.0
@@ -117,14 +131,45 @@ class ToolArtifactRef(BaseModel):
     truncated: bool = False
 
 
+class ToolOutputOmission(BaseModel):
+    """The raw lines a partial preview leaves out, for tool_output.read.
+
+    ``byte_count`` counts the raw bytes of lines ``start_line`` through
+    ``end_line``; a line cut at the edge of the head or tail counts in full.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    start_line: int = Field(ge=1)
+    end_line: int = Field(ge=1)
+    byte_count: int = Field(ge=0)
+
+
 class ToolOutputPreview(BaseModel):
-    """A complete, redacted small stream. The artifact remains authoritative."""
+    """A redacted stream preview. The artifact remains authoritative.
+
+    Complete unless ``partial``: then ``text`` holds the stream's head and
+    tail around an omission marker, and ``omitted`` names the lines left out.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     artifact_id: str
     kind: Literal["stdout", "stderr"]
     text: str
+    partial: bool = False
+    total_lines: int | None = Field(default=None, ge=0)
+    total_bytes: int | None = Field(default=None, ge=0)
+    omitted: ToolOutputOmission | None = None
+
+    @model_serializer(mode="wrap")
+    def _complete_shape(self, handler: SerializerFunctionWrapHandler) -> Any:
+        # A complete preview keeps the receipt shape it always had.
+        value = handler(self)
+        if isinstance(value, dict) and not self.partial:
+            for key in ("partial", "total_lines", "total_bytes", "omitted"):
+                value.pop(key, None)
+        return value
 
 
 class ResearchResultCollectionReceipt(BaseModel):
@@ -285,15 +330,13 @@ def artifact_ref(
     )
 
 
-def small_output_preview(
-    artifact_store: ArtifactStore,
+def _preview_candidates(
     streams: list[tuple[Artifact, ToolArtifactRef]],
-) -> list[ToolOutputPreview]:
-    """Inline only complete, searchable streams that fit one bounded receipt.
+) -> list[tuple[Artifact, ToolArtifactRef]]:
+    """Nonempty stdout/stderr streams, or none when any cannot be previewed.
 
-    Use the same display redaction as explicit artifact reads. If any nonempty
-    stream does not fit, leave all output in artifacts so the model cannot
-    mistake a partial preview for a complete command result.
+    A truncated, unsearchable or not fully observed stream keeps every stream
+    artifact-only, so a preview is never mistaken for the whole result.
     """
 
     candidates = [
@@ -312,6 +355,23 @@ def small_output_preview(
             for _, ref in candidates
         )
     ):
+        return []
+    return candidates
+
+
+def small_output_preview(
+    artifact_store: ArtifactStore,
+    streams: list[tuple[Artifact, ToolArtifactRef]],
+) -> list[ToolOutputPreview]:
+    """Inline only complete, searchable streams that fit one bounded receipt.
+
+    Use the same display redaction as explicit artifact reads. If any nonempty
+    stream does not fit, return nothing; ``command_output_preview`` then
+    offers a preview marked partial instead.
+    """
+
+    candidates = _preview_candidates(streams)
+    if not candidates:
         return []
     if sum(ref.byte_count for _, ref in candidates) > MAX_INLINE_OUTPUT_BYTES:
         return []
@@ -337,6 +397,329 @@ def small_output_preview(
         > MAX_INLINE_OUTPUT_BYTES
     ):
         return []
+    return previews
+
+
+def command_output_preview(
+    artifact_store: ArtifactStore,
+    streams: list[tuple[Artifact, ToolArtifactRef]],
+    build: Callable[[list[ToolOutputPreview]], dict[str, Any]],
+) -> list[ToolOutputPreview]:
+    """The output preview for a command receipt the model reads whole.
+
+    Small output is inlined complete, as ``small_output_preview`` does. Larger
+    output gets the redacted head and tail of each stream, marked ``partial``
+    with the omitted line range, so the model reads further only when it
+    needs to. ``build`` renders the model result for a candidate preview; the
+    preview shrinks until that result fits ``MAX_EXCERPT_BYTES`` (the bound
+    ``serialize_model_result`` enforces), and is empty when nothing fits.
+    """
+
+    complete = small_output_preview(artifact_store, streams)
+    if complete and model_result_bytes(build(complete)) <= MAX_EXCERPT_BYTES:
+        return complete
+    candidates = _preview_candidates(streams)
+    if not candidates:
+        return []
+    samples: list[_StreamSample] = []
+    try:
+        for artifact, ref in candidates:
+            sample = _sample_stream(artifact_store, artifact, ref)
+            if sample is None:
+                return []
+            samples.append(sample)
+    except OSError:  # diagnostic-expected: optional preview failure leaves artifact retrieval available.
+        return []
+    # Room for preview text: what the receipt leaves, less each preview's
+    # field names, identifiers and omission marker.
+    budget = MAX_EXCERPT_BYTES - model_result_bytes(build([])) - 360 * len(samples)
+    for _ in range(8):
+        if budget < _MIN_PREVIEW_BUDGET:
+            break
+        previews = _render_previews(samples, budget)
+        if not previews:
+            return []
+        excess = model_result_bytes(build(previews)) - MAX_EXCERPT_BYTES
+        if excess <= 0:
+            return previews
+        # JSON escaping makes the text larger than the budget it was cut to.
+        budget -= max(excess + 64, budget // 16)
+    return []
+
+
+_MIN_PREVIEW_BUDGET = 512
+_KEY_MARKER = regex.compile(r"-----(?:BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----")
+
+
+@dataclass(frozen=True)
+class _StreamSample:
+    """Both ends of one stream, with the line arithmetic a preview needs."""
+
+    artifact_id: str
+    kind: Literal["stdout", "stderr"]
+    size: int
+    head: bytes
+    tail: bytes
+    tail_offset: int
+    newlines_before_tail: int
+    total_lines: int
+
+
+def _sample_stream(
+    artifact_store: ArtifactStore, artifact: Artifact, ref: ToolArtifactRef
+) -> _StreamSample | None:
+    size = ref.byte_count
+    with artifact_store.open(artifact) as stream:
+        head = stream.read(min(size, PREVIEW_WINDOW_BYTES))
+        tail_offset = max(len(head), size - PREVIEW_WINDOW_BYTES)
+        newlines = head.count(b"\n")
+        position = len(head)
+        while position < tail_offset:
+            chunk = stream.read(min(1024 * 1024, tail_offset - position))
+            if not chunk:
+                return None
+            newlines += chunk.count(b"\n")
+            position += len(chunk)
+        tail = stream.read(size - tail_offset)
+        if len(tail) != size - tail_offset or stream.read(1):
+            return None
+    if len(head) != min(size, PREVIEW_WINDOW_BYTES) or b"\x00" in head + tail:
+        return None
+    last = tail or head
+    return _StreamSample(
+        artifact_id=ref.artifact_id,
+        kind=cast(Literal["stdout", "stderr"], ref.kind),
+        size=size,
+        head=head,
+        tail=tail,
+        tail_offset=tail_offset,
+        newlines_before_tail=newlines,
+        total_lines=newlines
+        + tail.count(b"\n")
+        + (1 if last and not last.endswith(b"\n") else 0),
+    )
+
+
+def _physical_lines(data: bytes) -> list[bytes]:
+    """Lines as ``readline`` numbers them, each keeping its newline."""
+
+    parts = data.split(b"\n")
+    lines = [part + b"\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def _display(raw: bytes) -> str:
+    return redacted_display(raw.decode("utf-8", errors="replace"))
+
+
+def _display_bytes(raw: bytes) -> int:
+    return len(_display(raw).encode("utf-8"))
+
+
+def _has_key_marker(raw: bytes) -> bool:
+    return _KEY_MARKER.search(raw.decode("utf-8", errors="replace")) is not None
+
+
+def _utf8_head(value: str, maximum_bytes: int) -> str:
+    return value.encode("utf-8")[:maximum_bytes].decode("utf-8", errors="ignore")
+
+
+def _utf8_tail(value: str, maximum_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    return encoded[max(0, len(encoded) - maximum_bytes) :].decode(
+        "utf-8", errors="ignore"
+    )
+
+
+@dataclass(frozen=True)
+class _Excerpt:
+    text: str
+    # Raw offset just past the last whole line shown (head), or of the first
+    # whole line shown (tail). A line cut at the edge lies outside it.
+    boundary: int
+    lines: int
+    cut_line: bool
+
+
+def _head_excerpt(sample: _StreamSample, budget: int) -> _Excerpt:
+    """Whole leading lines, redacted together, within ``budget`` bytes."""
+
+    lines = _physical_lines(sample.head)
+    whole_file = len(sample.head) == sample.size
+    count = used = 0
+    for line in lines:
+        if not (line.endswith(b"\n") or whole_file):
+            break
+        size = _display_bytes(line)
+        if used + size > budget:
+            break
+        used += size
+        count += 1
+    fitted = count > 0
+    while count:
+        end = sum(len(line) for line in lines[:count])
+        text = _display(sample.head[:end])
+        if _KEY_MARKER.search(text) is None and len(text.encode()) <= budget:
+            return _Excerpt(text, end, count, False)
+        # A private-key marker left after redaction is unmatched: key
+        # material may follow it, so stop before the first line with one.
+        marked = next(
+            (i for i, line in enumerate(lines[:count]) if _has_key_marker(line)),
+            None,
+        )
+        count = marked if marked is not None else count - 1
+    if fitted or not lines:
+        return _Excerpt("", 0, 0, False)
+    # The first line alone exceeds the budget: redact it, then cut.
+    text = _utf8_head(_display(lines[0]), budget)
+    marker = _KEY_MARKER.search(text)
+    if marker is not None:
+        text = text[: marker.start()]
+    return _Excerpt(text, 0, 0, bool(text))
+
+
+def _tail_excerpt(sample: _StreamSample, budget: int, floor: int) -> _Excerpt:
+    """Whole trailing lines at or after raw offset ``floor``, in ``budget``."""
+
+    window, offset = (
+        (sample.tail, sample.tail_offset) if sample.tail else (sample.head, 0)
+    )
+    lines = _physical_lines(window)
+    starts: list[int] = []
+    position = offset
+    for line in lines:
+        starts.append(position)
+        position += len(line)
+    # A window that begins inside the stream may begin inside a line.
+    first_whole = 1 if offset else 0
+    start = len(lines)
+    used = 0
+    while start > first_whole and starts[start - 1] >= floor:
+        size = _display_bytes(lines[start - 1])
+        if used + size > budget:
+            break
+        used += size
+        start -= 1
+    fitted = start < len(lines)
+    while start < len(lines):
+        text = _display(window[starts[start] - offset :])
+        if _KEY_MARKER.search(text) is None and len(text.encode()) <= budget:
+            return _Excerpt(text, starts[start], len(lines) - start, False)
+        # Key material may precede an unmatched marker: start after the
+        # last line with one.
+        marked = next(
+            (
+                i
+                for i in range(len(lines) - 1, start - 1, -1)
+                if _has_key_marker(lines[i])
+            ),
+            None,
+        )
+        start = marked + 1 if marked is not None else start + 1
+    if fitted or not lines:
+        return _Excerpt("", sample.size, 0, False)
+    # The last line alone exceeds the budget: redact its end, then cut.
+    begin = max(starts[-1], floor)
+    if begin >= sample.size:
+        return _Excerpt("", sample.size, 0, False)
+    text = _utf8_tail(_display(window[begin - offset :]), budget)
+    markers = list(_KEY_MARKER.finditer(text))
+    if markers:
+        text = text[markers[-1].end() :]
+    return _Excerpt(text, sample.size, 0, bool(text))
+
+
+def _line_at(sample: _StreamSample, offset: int) -> int:
+    """The 1-based number of the line that starts at raw ``offset``."""
+
+    if sample.tail and offset >= sample.tail_offset:
+        return (
+            sample.newlines_before_tail
+            + sample.tail[: offset - sample.tail_offset].count(b"\n")
+            + 1
+        )
+    return sample.head[:offset].count(b"\n") + 1
+
+
+def _complete_preview(sample: _StreamSample, budget: int) -> ToolOutputPreview | None:
+    if sample.size > len(sample.head):
+        return None
+    text = _display(sample.head)
+    if len(text.encode()) > budget or _KEY_MARKER.search(text) is not None:
+        return None
+    return ToolOutputPreview(
+        artifact_id=sample.artifact_id, kind=sample.kind, text=text
+    )
+
+
+def _stream_preview(sample: _StreamSample, budget: int) -> ToolOutputPreview | None:
+    complete = _complete_preview(sample, budget)
+    if complete is not None:
+        return complete
+    head = _head_excerpt(sample, budget * 2 // 5)
+    floor = head.boundary
+    if head.cut_line:
+        # The tail starts after the cut first line, so it never repeats it.
+        first = _physical_lines(sample.head)[0]
+        floor = len(first) if first.endswith(b"\n") else 0
+    tail = _tail_excerpt(sample, budget - len(head.text.encode()), floor)
+    omitted_bytes = tail.boundary - head.boundary
+    if omitted_bytes <= 0 and not head.cut_line and not tail.cut_line:
+        # Head and tail meet: every line is shown.
+        return ToolOutputPreview(
+            artifact_id=sample.artifact_id,
+            kind=sample.kind,
+            text=head.text + tail.text,
+        )
+    if not head.text and not tail.text:
+        return None
+    start_line = head.lines + 1
+    end_line = (
+        _line_at(sample, tail.boundary) - 1
+        if tail.lines and not tail.cut_line
+        else sample.total_lines
+    )
+    end_line = max(end_line, start_line)
+    marker = (
+        f"[... {omitted_bytes} bytes omitted: lines {start_line}-{end_line} of "
+        f"{sample.total_lines}; read them with tool_output.read "
+        f"starting_line={start_line} ...]"
+    )
+    separator = "" if not head.text or head.text.endswith("\n") else "\n"
+    return ToolOutputPreview(
+        artifact_id=sample.artifact_id,
+        kind=sample.kind,
+        text=f"{head.text}{separator}{marker}\n{tail.text}",
+        partial=True,
+        total_lines=sample.total_lines,
+        total_bytes=sample.size,
+        omitted=ToolOutputOmission(
+            start_line=start_line, end_line=end_line, byte_count=omitted_bytes
+        ),
+    )
+
+
+def _render_previews(
+    samples: list[_StreamSample], budget: int
+) -> list[ToolOutputPreview]:
+    """Share ``budget`` across streams: a small one whole, the rest partial."""
+
+    share = budget // len(samples)
+    complete = {
+        index: preview
+        for index, sample in enumerate(samples)
+        if (preview := _complete_preview(sample, share)) is not None
+    }
+    others = len(samples) - len(complete)
+    remaining = budget - sum(len(item.text.encode()) for item in complete.values())
+    previews: list[ToolOutputPreview] = []
+    for index, sample in enumerate(samples):
+        preview = complete.get(index) or _stream_preview(sample, remaining // others)
+        if preview is None:
+            return []
+        previews.append(preview)
     return previews
 
 
@@ -567,13 +950,15 @@ class ToolOutputService:
         owner_id: str,
         artifact_id: str,
         starting_line: int = 1,
-        line_count: int = 100,
+        line_count: int = DEFAULT_TOOL_OUTPUT_READ_LINES,
         continuation_cursor: str | None = None,
     ) -> dict[str, Any]:
         if starting_line < 1:
             raise ToolOutputQueryError("starting_line must be at least 1")
-        if not 1 <= line_count <= MAX_READ_LINES:
-            raise ToolOutputQueryError("line_count must be between 1 and 200")
+        if not 1 <= line_count <= MAX_TOOL_OUTPUT_READ_LINES:
+            raise ToolOutputQueryError(
+                f"line_count must be between 1 and {MAX_TOOL_OUTPUT_READ_LINES}"
+            )
         artifact = await self._authorized_artifact(
             engagement_id=engagement_id,
             owner_id=owner_id,
@@ -1647,8 +2032,10 @@ def sanitize_model_history_result(
 
 
 __all__ = [
+    "DEFAULT_TOOL_OUTPUT_READ_LINES",
     "MAX_CAPTURE_BYTES",
     "MAX_EXCERPT_BYTES",
+    "MAX_TOOL_OUTPUT_READ_LINES",
     "MAX_GENERATED_BYTES",
     "MAX_GENERATED_FILES",
     "MAX_MODEL_ARTIFACT_REFS",

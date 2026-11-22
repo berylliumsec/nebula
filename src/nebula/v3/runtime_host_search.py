@@ -10,6 +10,7 @@ import httpx
 from fastapi import HTTPException
 from pydantic import Field, ValidationError, model_validator
 
+from .stored_entities import decode_stored
 from .database import EntityRow
 from .deployment_protocol import GLOBAL_EXECUTION_PROJECT
 from .domain import Engagement, NebulaModel, RiskClass, ScopePolicy, WebSearchEngine
@@ -125,13 +126,13 @@ async def _authorize(session, request: HostSearchRequest) -> tuple[str, ...]:
     project_row = await session.get(EntityRow, request.lease.project_id)
     if project_row is None or project_row.kind != Engagement.entity_kind:
         raise ValueError("Project is unavailable")
-    project = Engagement.model_validate(project_row.payload)
+    project = decode_stored(Engagement, project_row.payload)
     if project.scope_policy_id != request.scope_policy_id:
         raise ValueError("Project scope changed")
     scope_row = await session.get(EntityRow, request.scope_policy_id)
     if scope_row is None or scope_row.kind != ScopePolicy.entity_kind:
         raise ValueError("Project scope is unavailable")
-    scope = ScopePolicy.model_validate(scope_row.payload)
+    scope = decode_stored(ScopePolicy, scope_row.payload)
     if (
         scope.engagement_id != request.lease.project_id
         or scope.revision != request.scope_revision
@@ -142,7 +143,7 @@ async def _authorize(session, request: HostSearchRequest) -> tuple[str, ...]:
     if settings_row is None:
         engines = list(WebSearchEngine)[:3]
     elif settings_row.kind == WebSearchSettings.entity_kind:
-        engines = WebSearchSettings.model_validate(settings_row.payload).engines
+        engines = decode_stored(WebSearchSettings, settings_row.payload).engines
     else:
         raise ValueError("Host search settings are unavailable")
     return tuple(engine.value for engine in engines)

@@ -1332,14 +1332,24 @@ async def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_
     provider = FakeProvider("provider", local=False)
     chat = ChatService(store, provider_factory=lambda _: provider)
 
+    instructions_seen: set[str] = set()
     for index in range(4):
         prepared = await chat.prepare(_goal_request(running.id, f"Step {index}"))
         assert "Core-owned goal context" in prepared.model_request.instructions
+        # Progress changes every turn, so it rides on the turn's message and
+        # the instructions stay byte-identical: one cached prefix per goal.
+        assert "current_step" not in prepared.model_request.instructions
+        progress = str(prepared.model_request.messages[-1].content)
+        assert chat_module._GOAL_PROGRESS_HEADING in progress
+        assert f'"current_step": {index}' in progress
+        assert f'"remaining_steps": {4 - index}' in progress
+        instructions_seen.add(prepared.model_request.instructions)
         (await chat.complete(prepared))
         goal = await goals.get("session")
         assert goal.status == ChatGoalStatus.RUNNING
         assert goal.current_step == index + 1
 
+    assert len(instructions_seen) == 1
     assert len((await store.list_entities(ChatTurn, engagement_id="project"))) == 4
     assert (await goals.get("session")).linked_turn_ids == [
         turn.id
@@ -1818,3 +1828,117 @@ async def test_restart_recovery_finishes_the_turn_on_a_goals_last_budget(
         assert (await store.get(ChatGoal, goal.id)).status == ChatGoalStatus.RUNNING
     finally:
         await service.shutdown()
+
+
+@pytest.mark.parametrize("resume", [False, True], ids=["pause", "pause-resume"])
+async def test_pausing_a_goal_keeps_its_running_turns_claim(tmp_path, resume):
+    """Pause stops the goal continuing; it does not fail the turn in flight.
+
+    Clearing the goal's claim made the running turn's next ownership check
+    discard its output, fail the turn and leave a quick resume paused.
+    """
+
+    from types import SimpleNamespace
+
+    store, goals = await setup_goal(tmp_path)
+    chat = ChatService(store, worker_id="worker")
+    draft = await goals.create(
+        "session", GoalCreate(objective="Finish", completion_criteria=["Done"])
+    )
+    running = await goals.write(
+        "session", GoalWrite(action="start", expected_revision=draft.revision)
+    )
+    claimed_at = utc_now()
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="project",
+            session_id="session",
+            goal_id=running.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.ROUTING,
+            execution_owner_id="worker",
+            execution_claim_id="claim",
+            execution_claimed_at=claimed_at,
+        )
+    )
+    running = await store.update(
+        ChatGoal,
+        running.id,
+        {
+            "execution_owner_id": "worker",
+            "execution_claim_id": "claim",
+            "execution_claimed_at": claimed_at,
+        },
+        expected_revision=running.revision,
+    )
+
+    paused = await goals.write(
+        "session", GoalWrite(action="pause", expected_revision=running.revision)
+    )
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert (paused.execution_owner_id, paused.execution_claim_id) == (
+        "worker",
+        "claim",
+    )
+    if resume:
+        resumed = await goals.write(
+            "session", GoalWrite(action="resume", expected_revision=paused.revision)
+        )
+        assert resumed.status == ChatGoalStatus.RUNNING
+
+    prepared = SimpleNamespace(turn=turn, execution_claim_id="claim")
+    owned = await chat._assert_execution_owner(prepared)
+    assert owned.status == ChatTurnStatus.ROUTING
+
+    # The turn's own release still frees the goal for its next step.
+    await chat._release_execution(prepared)
+    released = await goals.get("session")
+    assert released.execution_claim_id is None
+    assert released.status == (
+        ChatGoalStatus.RUNNING if resume else ChatGoalStatus.PAUSED
+    )
+
+
+async def test_pausing_a_goal_releases_a_claim_no_live_turn_holds(tmp_path):
+    """A turn that ended and pauses its own goal leaves no claim behind."""
+
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
+        "session", GoalCreate(objective="Finish", completion_criteria=["Done"])
+    )
+    running = await goals.write(
+        "session", GoalWrite(action="start", expected_revision=draft.revision)
+    )
+    claimed_at = utc_now()
+    (
+        await store.create(
+            ChatTurn(
+                engagement_id="project",
+                session_id="session",
+                goal_id=running.id,
+                provider_profile_id="provider",
+                model="model",
+                status=ChatTurnStatus.FAILED,
+                execution_owner_id="worker",
+                execution_claim_id="claim",
+                execution_claimed_at=claimed_at,
+            )
+        )
+    )
+    running = await store.update(
+        ChatGoal,
+        running.id,
+        {
+            "execution_owner_id": "worker",
+            "execution_claim_id": "claim",
+            "execution_claimed_at": claimed_at,
+        },
+        expected_revision=running.revision,
+    )
+
+    paused = await goals.write(
+        "session", GoalWrite(action="pause", expected_revision=running.revision)
+    )
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert (paused.execution_owner_id, paused.execution_claim_id) == (None, None)

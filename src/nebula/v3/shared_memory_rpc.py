@@ -16,6 +16,7 @@ from .butler_memory import (
     MemoryNotFoundError,
     UnsafeMemoryError,
 )
+from .deployment_protocol import BUTLER_HOME_PROJECT, RESERVED_PROJECT_IDS
 from .domain import NebulaModel
 from .execution_scope import current_execution_lease, execution_context
 from .runtime_coordination import CoordinationConflict, LeaseLost, ProjectLease
@@ -33,11 +34,15 @@ class MemoryAuthority(NebulaModel):
 
 class MemoryListArguments(NebulaModel):
     limit: int = Field(default=100, ge=1, le=200, strict=True)
+    # Butler's home worker reads the memories of the project a Butler session
+    # is about; the host honours it only for the home lease and only to read.
+    target_project: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class MemorySearchArguments(NebulaModel):
     query: str = Field(min_length=1, max_length=500, repr=False)
     limit: int = Field(default=20, ge=1, le=50, strict=True)
+    target_project: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class MemoryDeleteArguments(NebulaModel):
@@ -87,10 +92,18 @@ def register_shared_memory(
                     value = await memory._save(**body.model_dump())
                 elif action == "list":
                     body = MemoryListArguments.model_validate(arguments)
-                    value = await memory.list(lease.project_id, **body.model_dump())
+                    # SharedButlerMemory refuses another project's rows unless
+                    # this is Butler's home lease reading them.
+                    value = await memory.list(
+                        body.target_project or lease.project_id, limit=body.limit
+                    )
                 elif action == "search":
                     body = MemorySearchArguments.model_validate(arguments)
-                    value = await memory.search(lease.project_id, **body.model_dump())
+                    value = await memory.search(
+                        body.target_project or lease.project_id,
+                        body.query,
+                        limit=body.limit,
+                    )
                 elif action == "update":
                     body = MemoryEditArguments.model_validate(arguments)
                     value = await memory.update(lease.project_id, **body.model_dump())
@@ -146,14 +159,26 @@ class RemoteButlerMemory(ButlerMemoryService):
         self.embedding_index = None
 
     @staticmethod
-    def _project(project_id: str):
+    def _project(project_id: str, *, read: bool = False):
         lease = current_execution_lease()
-        if lease is None or lease.project_id != project_id:
+        home_read = (
+            read
+            and lease is not None
+            and lease.project_id == BUTLER_HOME_PROJECT
+            and project_id not in RESERVED_PROJECT_IDS
+        )
+        if lease is None or (lease.project_id != project_id and not home_read):
             raise LeaseLost("Shared Butler memory requires exact project ownership")
         return lease
 
-    async def _call(self, project_id: str, action: str, arguments: dict):
-        lease = self._project(project_id)
+    async def _call(
+        self, project_id: str, action: str, arguments: dict, *, read: bool = False
+    ):
+        lease = self._project(project_id, read=read)
+        if lease.project_id != project_id:
+            # Butler's home reads the focus project's memories; the host
+            # checks this again against the verified home lease.
+            arguments = {**arguments, "target_project": project_id}
         response = await self.client.call(
             MEMORY_OPERATION,
             {
@@ -206,14 +231,16 @@ class RemoteButlerMemory(ButlerMemoryService):
 
     async def list(self, engagement_id: str, *, limit=100) -> ButlerMemoryList:
         return ButlerMemoryList.model_validate(
-            await self._call(engagement_id, "list", {"limit": limit})
+            await self._call(engagement_id, "list", {"limit": limit}, read=True)
         )
 
     async def search(
         self, engagement_id: str, query: str, *, limit=20
     ) -> ButlerMemoryList:
         return ButlerMemoryList.model_validate(
-            await self._call(engagement_id, "search", {"query": query, "limit": limit})
+            await self._call(
+                engagement_id, "search", {"query": query, "limit": limit}, read=True
+            )
         )
 
     async def update(

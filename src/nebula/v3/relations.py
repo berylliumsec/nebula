@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .database import EntityRow, ResourceRelationRow
+from .stored_entities import decode_stored, restore_unknown, stored_unknown
 from .domain import (
     ENTITY_MODEL_BY_KIND,
     Entity,
@@ -712,7 +713,11 @@ class ResourceRelationService:
                     "revision": current.revision + 1,
                 }
             )
-            row.payload = updated.model_dump(mode="json")
+            # Keep keys a newer release stored that this release does not define.
+            row.payload = restore_unknown(
+                updated.model_dump(mode="json"),
+                stored_unknown(decode_stored(type(updated), row.payload)),
+            )
             row.revision = updated.revision
             row.updated_at = updated.updated_at
             row.engagement_id = getattr(updated, "engagement_id")

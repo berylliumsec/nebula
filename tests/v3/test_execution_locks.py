@@ -11,8 +11,9 @@ from contextlib import asynccontextmanager
 
 import pytest
 from sqlalchemy import text, update
+from sqlalchemy.exc import OperationalError
 
-from nebula.v3.database import Database, EntityRow
+from nebula.v3.database import Database, EntityRow, ProjectHandoffRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import ChatTurn, Engagement, ProviderProfile, utc_now
 from nebula.v3.execution_scope import execution_context
@@ -439,6 +440,117 @@ async def test_handoff_waits_for_an_in_flight_source_write(host, location):
             ).description == "from source"
     finally:
         await _close(source_store, target_store)
+
+
+async def _host_row_is_free(control):
+    """Lock the deployment host row without waiting, as any host writer would."""
+    async with control.database.session() as session:
+        await session.execute(
+            text("SELECT key FROM deployment_host WHERE key = 'host' FOR UPDATE NOWAIT")
+        )
+
+
+async def _until_host_row_is_free(control, task):
+    """The host row frees within the bounded owner wait while ``task`` waits on.
+
+    On the old lock order it stayed locked for the owner transaction's whole
+    length, so this fails at the deadline instead.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 5
+    while True:
+        try:
+            await _host_row_is_free(control)
+            break
+        except OperationalError:
+            assert loop.time() < deadline, "the waiting writer kept the host row"
+            await asyncio.sleep(0.05)
+    assert not task.done()
+
+
+async def test_a_waiting_transfer_leaves_the_deployment_host_free(host, location):
+    """Transfer waits for the source's write without holding every host writer.
+
+    The source's in-flight transaction holds its ownership row ``FOR KEY
+    SHARE``, which the transfer's ``FOR UPDATE`` must wait for (up to the
+    execution transaction bound). While it waits, the single deployment host
+    row must stay free: handoff phases, admission and deployment operations
+    all write it, and each waiter would hold one of the supervisor's few
+    pooled connections.
+    """
+    _postgres_only(location)
+    coordinator, control = host
+    source = await worker(host, "v1")
+    target = await worker(host, "v2")
+    lease = await coordinator.coordination.claim_project("one", source)
+    await coordinator.request_handoff("one", target)
+    await coordinator.checkpoint(lease, checkpoint={}, blockers=[])
+    source_store = _execution_store(location, source)
+
+    async def read(transaction):
+        # Every execution transaction key-shares its ownership rows at BEGIN;
+        # a read keeps the project's checkpoint unchanged for the transfer.
+        await transaction.session.execute(text("SELECT 1"))
+
+    try:
+        async with _held(source_store, lease, read) as holder:
+            transfer = asyncio.create_task(coordinator.transfer("one"))
+            await _until_blocked(control, holder, "transactionid", transfer)
+            # The transfer keeps waiting for the owner, without the host row.
+            await _until_host_row_is_free(control, transfer)
+            await asyncio.wait_for(coordinator.resume_after_shutdown(), 3)
+            claimed = await asyncio.wait_for(
+                coordinator.coordination.claim_project("two", target), 3
+            )
+            assert claimed.project_id == "two"
+            assert not transfer.done()
+        moved = await asyncio.wait_for(transfer, SETTLE)
+        assert (moved.runtime_id, moved.fencing_token) == (
+            target,
+            lease.fencing_token + 1,
+        )
+    finally:
+        await _close(source_store)
+
+
+async def test_a_key_shared_owner_never_pins_the_host_row(host, location):
+    """Any transaction key-sharing an ownership row leaves host writers free."""
+    _postgres_only(location)
+    coordinator, control = host
+    source = await worker(host, "v1")
+    target = await worker(host, "v2")
+    await coordinator.coordination.claim_project("one", source)
+    entered, release = asyncio.Event(), asyncio.Event()
+    other = Database(location, bootstrap=False, pool_settings=_pool())
+
+    async def key_share():
+        async with other.session() as session:
+            try:
+                await session.execute(
+                    text(
+                        "SELECT project_id FROM project_ownership "
+                        "WHERE project_id = 'one' FOR KEY SHARE"
+                    )
+                )
+                entered.set()
+                await release.wait()
+            finally:
+                await session.rollback()
+
+    holder = asyncio.create_task(key_share())
+    try:
+        await asyncio.wait_for(entered.wait(), SETTLE)
+        request = asyncio.create_task(coordinator.request_handoff("one", target))
+        await _until_host_row_is_free(control, request)
+        await asyncio.wait_for(coordinator.resume_after_shutdown(), 3)
+    finally:
+        release.set()
+        await asyncio.wait_for(holder, SETTLE)
+        await other.dispose()
+    await asyncio.wait_for(request, SETTLE)
+    async with control.database.session() as session:
+        handoff = await session.get(ProjectHandoffRow, "one")
+    assert (handoff.target_runtime_id, handoff.phase) == (target, "requested")
 
 
 async def test_raw_writes_take_the_shared_row_key_only_for_shared_rows(fleet):

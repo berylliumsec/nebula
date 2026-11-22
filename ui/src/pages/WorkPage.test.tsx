@@ -180,8 +180,11 @@ describe("Work operator journey", () => {
   it("starts with agent tools on and keeps saved Work when they are disabled", async () => {
     const user = userEvent.setup();
     openItem();
-    await user.click(await screen.findByRole("button", { name: "Disable agent tools" }));
-    expect(await screen.findByRole("button", { name: "Enable agent tools" })).toBeVisible();
+    const agentTools = await screen.findByRole("button", { name: "Disable agent tools" });
+    expect(agentTools).toHaveTextContent("Agent tools");
+    expect(agentTools).toHaveAttribute("data-state", "on");
+    await user.click(agentTools);
+    expect(await screen.findByRole("button", { name: "Enable agent tools" })).toHaveAttribute("data-state", "off");
     expect(screen.getByRole("heading", { name: "Build the search page" })).toBeVisible();
   });
 
@@ -458,6 +461,15 @@ describe("Work operator journey", () => {
     expect(screen.getByRole("link", { name: /Sample project 100/ })).toBeVisible();
   });
 
+  it("marks a project with no active work as idle", async () => {
+    saved.items = [];
+    saved.agents = [];
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const row = await screen.findByRole("link", { name: /Documentation portal/ });
+    expect(row).toHaveTextContent("Idle");
+    expect(row).toHaveTextContent("Agent tools on · No check-ins yet");
+  });
+
   it("groups subprojects under their parent and finds them by name", async () => {
     const user = userEvent.setup();
     workspace.engagements = [workspace.engagement, { id: "child-1", name: "Review plan", status: "active", workEnabled: true, parentEngagementId: "project-1" }];
@@ -466,7 +478,9 @@ describe("Work operator journey", () => {
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("1 subprojects · Agent tools on")).toBeVisible();
     const parent = screen.getByRole("link", { name: /Documentation portal/ });
-    expect(parent).toHaveTextContent("1 working · 0 waiting · 1 in progress · 1 blocked · 0 review");
+    // Only non-zero counts are listed; an inactive project reads as idle.
+    expect(parent).toHaveTextContent("1 working, 1 in progress, 1 blocked");
+    expect(parent).not.toHaveTextContent(/waiting|review/);
     expect(screen.getByRole("link", { name: /Latest check-in: Review the plan/ })).toHaveAttribute("href", "/projects/child-1/work/child-item");
     const projects = screen.getByRole("region", { name: "Projects" });
     expect(within(projects).queryByRole("link", { name: /^Review plan/ })).not.toBeInTheDocument();
@@ -503,5 +517,148 @@ describe("Work operator journey", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "Show subprojects of Documentation portal" }));
     expect(screen.getByRole("link", { name: /Other portfolio/ })).toBeVisible();
     expect(screen.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
+  });
+});
+
+describe("Work stages", () => {
+  const stages = [
+    { key: "draft", label: "Draft", flagWhenEmpty: true },
+    { key: "review", label: "Review", flagWhenEmpty: true },
+    { key: "ship", label: "Ship", flagWhenEmpty: false },
+  ];
+  const staged = (overrides: Record<string, unknown> = {}) => ({ ...workspace.engagement, workStages: stages, revision: 4, ...overrides });
+
+  beforeEach(() => {
+    saved.items = [{ ...saved.item, stage: "draft", status: "blocked" }];
+    saved.item.revision = 1; saved.beforePatch = undefined;
+    workspace.engagements = [staged(), { id: "project-2", name: "Release notes", status: "active", workEnabled: true }] as typeof workspace.engagements;
+    vi.clearAllMocks();
+  });
+
+  it("shows each project's stages on All projects, flags gaps and filters to them", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const strip = await screen.findByRole("list", { name: "Documentation portal stages" });
+    expect(within(strip).getByRole("link", { name: "Draft: 1 open, 1 blocked" })).toHaveAttribute("href", "/projects/project-1/work?group=stage&stage=draft");
+    expect(within(strip).getByRole("link", { name: "Review: none yet" })).toBeVisible();
+    expect(within(strip).getByRole("link", { name: /^Ship: 0 open/ })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Define stages" })).toHaveAttribute("href", "/projects/project-2/work?stages=edit");
+    await user.click(screen.getByRole("button", { name: /Missing a stage/ }));
+    expect(screen.getByRole("list", { name: "Documentation portal stages" })).toBeVisible();
+    expect(screen.queryByText("Release notes")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    expect(screen.queryByRole("list", { name: "Documentation portal stages" })).toBeNull();
+    expect(screen.getByText("Release notes")).toBeVisible();
+  });
+
+  it("groups the board by stage from the URL and moves an item to another stage", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/projects/project-1/work/item-1?group=stage"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const board = await screen.findByRole("region", { name: "Project board by stage" });
+    expect(within(board).getByRole("heading", { name: "Draft" })).toBeVisible();
+    expect(within(board).getByRole("heading", { name: "Review" })).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Stage" }), "ship");
+    const patch = workspace.api.request.mock.calls.find(([path, init]) => path === "engagements/project-1/work/item-1" && init?.method === "PATCH");
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ stage: "ship", expected_revision: 1 });
+    expect(saved.items[0].stage).toBe("ship");
+    expect(screen.getByRole("link", { name: "Close item" })).toHaveAttribute("href", "/projects/project-1/work?group=stage");
+  });
+
+  it("edits stages against the project revision and reports a conflict", async () => {
+    const user = userEvent.setup();
+    const original = workspace.api.request.getMockImplementation()!;
+    let conflict = false;
+    workspace.api.request.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.endsWith("/work/stages") && init?.method === "PATCH") {
+        if (conflict) throw new ApiError("project Work stages changed; read its current revision", 409);
+        return { ...staged(), work_stages: JSON.parse(String(init.body)).stages };
+      }
+      return original(path, init);
+    });
+    try {
+      render(<MemoryRouter initialEntries={["/projects/project-1/work?stages=edit"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+      const dialog = await screen.findByRole("dialog", { name: "Work stages" });
+      await user.click(within(dialog).getByRole("button", { name: "Remove Ship" }));
+      await user.click(within(dialog).getByRole("button", { name: "Add stage" }));
+      await user.type(within(dialog).getByRole("textbox", { name: "Stage 3 name" }), "Final check");
+      await user.click(within(dialog).getByRole("button", { name: "Move Final check up" }));
+      await user.click(within(dialog).getByRole("button", { name: "Save stages" }));
+      const patch = workspace.api.request.mock.calls.find(([path, init]) => path === "engagements/project-1/work/stages" && init?.method === "PATCH");
+      expect(JSON.parse(String(patch?.[1]?.body))).toEqual({
+        stages: [
+          { key: "draft", label: "Draft", flag_when_empty: true },
+          { key: "final-check", label: "Final check", flag_when_empty: false },
+          { key: "review", label: "Review", flag_when_empty: true },
+        ],
+        expected_revision: 4,
+      });
+      expect(workspace.retryResource).toHaveBeenCalledWith("projects");
+      expect(screen.queryByRole("dialog", { name: "Work stages" })).toBeNull();
+
+      conflict = true;
+      await user.click(screen.getByRole("button", { name: "Stages" }));
+      const again = await screen.findByRole("dialog", { name: "Work stages" });
+      await user.click(within(again).getByRole("button", { name: "Save stages" }));
+      expect(await within(again).findByRole("alert")).toHaveTextContent("Stages changed somewhere else");
+    } finally {
+      workspace.api.request.mockImplementation(original);
+    }
+  });
+
+  it("gives subprojects their parent's stages and treats an item-less parent as a container", async () => {
+    const user = userEvent.setup();
+    const parent = { id: "portfolio", name: "Portfolio", status: "active", workEnabled: true, workStages: stages, revision: 7 };
+    workspace.engagements = [
+      parent,
+      staged({ workStages: [], parentEngagementId: "portfolio" }),
+      { id: "project-2", name: "Release notes", status: "active", workEnabled: true, parentEngagementId: "portfolio" },
+    ] as typeof workspace.engagements;
+    const view = render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "Show subprojects of Portfolio" }));
+    const strip = await screen.findByRole("list", { name: "Documentation portal stages" });
+    expect(within(strip).getByRole("link", { name: "Draft: 1 open, 1 blocked" })).toBeVisible();
+    // The sibling with no items still shows the inherited stages as gaps; the parent has no strip of its own.
+    expect(within(screen.getByRole("list", { name: "Release notes stages" })).getByRole("link", { name: "Draft: none yet" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Portfolio stages" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Define stages" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Missing a stage/ }));
+    expect(screen.getByRole("list", { name: "Release notes stages" })).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Portfolio stages" })).toBeNull();
+    view.unmount();
+
+    render(<MemoryRouter initialEntries={["/projects/project-1/work?group=stage&stages=edit"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const board = await screen.findByRole("region", { name: "Project board by stage" });
+    expect(within(board).getByText("Using Portfolio's stages.")).toBeVisible();
+    expect(within(board).getByRole("heading", { name: "Draft" })).toBeVisible();
+    const dialog = await screen.findByRole("dialog", { name: "Work stages" });
+    expect(dialog).toHaveTextContent("Documentation portal uses Portfolio's stages.");
+    expect(within(dialog).getByRole("textbox", { name: "Stage 1 name" })).toHaveValue("Draft");
+  });
+
+  it("counts a parent's subprojects by stage and lists those that did or did not reach one", async () => {
+    const user = userEvent.setup();
+    workspace.engagements = [
+      { id: "portfolio", name: "Portfolio", status: "active", workEnabled: true, workStages: stages, revision: 7 },
+      staged({ workStages: [], parentEngagementId: "portfolio" }),
+      { id: "project-2", name: "Release notes", status: "active", workEnabled: true, parentEngagementId: "portfolio" },
+    ] as typeof workspace.engagements;
+    render(<MemoryRouter initialEntries={["/projects/portfolio/work"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const rollup = await screen.findByRole("list", { name: "Subprojects by stage" });
+    // The roll-up reads Core's shared listing, so a parent's page never waits on each subproject's worker.
+    expect(workspace.api.request).toHaveBeenCalledWith("work/items?offset=0&limit=500", expect.any(Object));
+    const draft = await within(rollup).findByRole("link", { name: "Draft: 1 of 2 subprojects, 1 blocked" });
+    expect(within(rollup).getByRole("link", { name: "Review: 0 of 2 subprojects" })).toHaveTextContent("None yet");
+    const subprojects = screen.getByRole("region", { name: "Subprojects" });
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Documentation portal"), expect.stringContaining("Release notes")]);
+
+    await user.click(draft);
+    expect(draft).toHaveAttribute("aria-current", "true");
+    expect(within(subprojects).getByRole("button", { name: "Reached Draft 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Documentation portal")]);
+    await user.click(within(subprojects).getByRole("button", { name: "Not yet 1" }));
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Release notes")]);
+    await user.click(within(subprojects).getByRole("button", { name: "Show all subprojects" }));
+    expect(within(subprojects).getAllByRole("link")).toHaveLength(2);
+    expect(within(rollup).getByRole("link", { name: /^Draft:/ })).not.toHaveAttribute("aria-current");
   });
 });

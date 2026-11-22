@@ -51,7 +51,7 @@ from .sandbox import (
     RunnerIsolationMode,
     RunnerProfile as SandboxRunnerProfile,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, not_reserved_project
 from .runtime_platform import RuntimePlatform, RuntimePlatformError
 
 SCRATCH_PROJECT_ID = "scratch-project"
@@ -374,7 +374,9 @@ async def create_engagement_with_default_scope(
             if receipt is None:
                 existing_names = await transaction.session.execute(
                     select(EntityRow.id, EntityRow.payload).where(
-                        EntityRow.kind == Engagement.entity_kind
+                        EntityRow.kind == Engagement.entity_kind,
+                        # Core's own projects never take an operator's name.
+                        not_reserved_project(),
                     )
                 )
                 for existing_id, payload in existing_names:

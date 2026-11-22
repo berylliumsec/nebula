@@ -4682,6 +4682,8 @@ async def test_core_restart_recovery_bounds_concurrent_provider_turns(tmp_path):
                         provider_profile_id=profile.id,
                         model="model-a",
                         status=ChatTurnStatus.INTERRUPTED,
+                        # Background recovery (subagents, goals) uses the gate.
+                        capacity_lane="background",
                         request_snapshot={
                             "model_request": ModelRequest(
                                 model="model-a",
@@ -4761,6 +4763,8 @@ async def test_recovered_turns_waiting_for_recovery_capacity_hold_no_provider_sl
                         provider_profile_id=profile.id,
                         model="model-a",
                         status=ChatTurnStatus.INTERRUPTED,
+                        # Background recovery (subagents, goals) uses the gate.
+                        capacity_lane="background",
                         request_snapshot={
                             "model_request": ModelRequest(
                                 model="model-a",

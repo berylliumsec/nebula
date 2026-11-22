@@ -114,3 +114,69 @@ async def test_recovery_never_replays_an_abandoned_command(host):
         current, operation_id="recovery-one", restored_checkpoint_digest=digest
     )
     assert await coordinator.coordination.claim_next(current) is None
+
+
+async def test_deployment_status_names_the_recovery_that_granted_the_owner(host):
+    coordinator, target, old = await pair(host)
+    before = await coordinator.status()
+    assert [row.recovery for row in before.projects] == [None]
+    await expire(coordinator)
+    current = await begin(coordinator, target, old)
+    held = (await coordinator.status()).projects[0]
+    assert held.recovery is not None and held.recovery.phase == "held"
+    digest = await restored_checkpoint(coordinator, current)
+    await coordinator.verify_recovery(
+        current, operation_id="recovery-one", restored_checkpoint_digest=digest
+    )
+    project = (await coordinator.status()).projects[0]
+    assert project.runtime_id == target
+    assert project.recovery.model_dump() == {
+        "operation_id": "recovery-one",
+        "source_runtime_id": old.runtime_id,
+        "source_fencing_token": old.fencing_token,
+        "target_runtime_id": target,
+        "target_fencing_token": current.fencing_token,
+        "phase": "verified",
+    }
+
+
+async def test_verified_recovery_is_confirmed_without_rescanning_a_busy_project(
+    host, monkeypatch
+):
+    # The supervisor re-confirms a verified recovery on every handoff pass
+    # until it records the target as activated. A busy project changes during
+    # any full scan, so re-confirmation must not depend on one.
+    from nebula.v3 import runtime_project_handoff
+
+    coordinator, target, old = await pair(host)
+    await expire(coordinator)
+    current = await begin(coordinator, target, old)
+    digest = await restored_checkpoint(coordinator, current)
+    await coordinator.verify_recovery(
+        current, operation_id="recovery-one", restored_checkpoint_digest=digest
+    )
+
+    scans = []
+
+    async def busy_project(*_args, **_kwargs):
+        scans.append(1)
+        raise CoordinationConflict(
+            "Project changed during checkpoint scan; retry recovery"
+        )
+
+    monkeypatch.setattr(
+        runtime_project_handoff, "snapshot_project_checkpoint", busy_project
+    )
+    for _ in range(3):
+        await coordinator.verify_recovery(
+            current, operation_id="recovery-one", restored_checkpoint_digest=digest
+        )
+    assert scans == []
+    await activation_allowed(coordinator, current)
+
+    # Anything short of the exact verified grant still takes the full path.
+    with pytest.raises(CoordinationConflict):
+        await coordinator.verify_recovery(
+            current, operation_id="recovery-one", restored_checkpoint_digest="0" * 64
+        )
+    assert scans == [1]

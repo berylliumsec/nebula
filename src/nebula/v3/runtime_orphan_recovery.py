@@ -6,9 +6,11 @@ import hashlib
 
 from sqlalchemy import and_, delete, or_, select, update
 
+from .stored_entities import decode_stored
 from .database import (
     DeploymentReceiptRow,
     EntityRow,
+    ProjectHandoffRow,
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
@@ -20,6 +22,7 @@ from .database import (
     RuntimeResourceRow,
 )
 from .chat_goals import active_time_changes
+from .deployment_protocol import HandoffPhase
 from .deployments import DeploymentCoordinator
 from .domain import (
     Approval,
@@ -221,7 +224,7 @@ async def reconcile_dead_project(
                 for row in rows
                 if row.payload.get("status") != ChatTurnStatus.WAITING_APPROVAL.value
                 or not await _awaits_undecided_approval(
-                    store, ChatTurn.model_validate(row.payload)
+                    store, decode_stored(ChatTurn, row.payload)
                 )
             ]
             resources = list(
@@ -245,7 +248,7 @@ async def reconcile_dead_project(
             transaction = StoreTransaction(session)
             interrupted = []
             for row in rows:
-                turn = ChatTurn.model_validate(row.payload)
+                turn = decode_stored(ChatTurn, row.payload)
                 calls = await store.find_entities(
                     ToolCall,
                     {"chat_turn_id": turn.id},
@@ -464,6 +467,101 @@ async def reconcile_dead_project(
         await store.event_history.close()
 
 
+async def release_dead_owner(
+    coordinator: DeploymentCoordinator,
+    expected_owner: ProjectLease,
+    *,
+    launch_origin: str | None,
+) -> dict:
+    """Leave a reconciled dead owner's idle project without a worker.
+
+    For an expired owner whose exact process is provably gone and whose
+    project wants no worker (no open chat, chat start, project work, view or
+    storage alert). ``reconcile_dead_project`` must already have settled what
+    the owner left; this only clears the owner, as a verified quiescence
+    does, so the project starts on demand like any idle project. The fencing
+    counter is kept, so the next grant takes a strictly higher token and the
+    dead incarnation's token stays refused. Nothing is replayed. Anything a
+    worker must still restore or settle refuses the release, and the caller
+    recovers the project instead.
+    """
+    if launch_origin is None or launch_origin != process_origin():
+        raise CoordinationConflict(
+            "The original process namespace cannot be verified; retain this project's owner"
+        )
+    coordination = coordinator.coordination
+    async with coordination._write() as session:
+        host = await coordinator._host(session)
+        if host.shutdown_requested:
+            raise CoordinationConflict(
+                "Core is holding recovery for coordinated shutdown"
+            )
+        owner = await session.get(
+            ProjectOwnershipRow, expected_owner.project_id, with_for_update=True
+        )
+        if owner is None or (owner.runtime_id, owner.fencing_token) != (
+            expected_owner.runtime_id,
+            expected_owner.fencing_token,
+        ):
+            raise CoordinationConflict(
+                "Project ownership changed; read fresh recovery state"
+            )
+        process = await session.get(RuntimeProcessRow, expected_owner.runtime_id)
+        now = await coordination._clock_ms(session)
+        # The reconciliation receipt checked below already required the
+        # runtime lease to have expired; the process must still be gone.
+        if (
+            process is None
+            or process.role != "execution"
+            or not process.pid
+            or owner.lease_expires_at_ms > now
+        ):
+            raise CoordinationConflict("The original execution owner is not expired")
+        if same_process(process.pid, process.process_birth):
+            raise CoordinationConflict("The original execution process is still alive")
+        if (
+            await session.get(DeploymentReceiptRow, orphan_receipt_key(expected_owner))
+            is None
+        ):
+            raise CoordinationConflict(
+                "Reconcile the dead owner's work before releasing its project"
+            )
+        handoff = await session.get(ProjectHandoffRow, expected_owner.project_id)
+        if handoff is not None and (
+            handoff.phase != HandoffPhase.VERIFIED.value or handoff.admission_held
+        ):
+            raise CoordinationConflict(
+                "The project's transfer is unfinished; recover it instead"
+            )
+        blockers = await coordinator._recovery_blockers(
+            session, expected_owner.project_id, None
+        )
+        resident = await session.scalar(
+            select(RuntimeResourceRow.id)
+            .where(
+                RuntimeResourceRow.project_id == expected_owner.project_id,
+                RuntimeResourceRow.state != "closed",
+            )
+            .limit(1)
+        )
+        if resident is not None:
+            blockers.append(f"Resource {resident} needs a worker to restore it")
+        if blockers:
+            raise CoordinationConflict("; ".join(blockers[:10]))
+        owner.runtime_id, owner.lease_expires_at_ms = None, 0
+        owner.retirement_requested = False
+        owner.admission_requested = False
+        result = {
+            "project_id": expected_owner.project_id,
+            "runtime_id": expected_owner.runtime_id,
+            "fencing_token": expected_owner.fencing_token,
+            "reason": "dead_owner_without_demand",
+            "effects_replayed": False,
+        }
+        await coordinator._receipt(session, "project.dead_owner_released", result)
+        return result
+
+
 async def _settle_dead_owner_capacity(
     session, store: NebulaStore, owner: ProjectLease, now: int
 ) -> list[str]:
@@ -600,7 +698,7 @@ async def _release_ended_provider_claims(
     held: list[str] = []
     now = utc_now()
     for row in rows:
-        turn = ChatTurn.model_validate(row.payload)
+        turn = decode_stored(ChatTurn, row.payload)
         unconfirmed = None
         if turn.status != ChatTurnStatus.WAITING_APPROVAL:
             try:
@@ -623,7 +721,7 @@ async def _release_ended_provider_claims(
         goal_row = await session.get(EntityRow, turn.goal_id) if turn.goal_id else None
         if goal_row is None or goal_row.kind != ChatGoal.entity_kind:
             continue
-        goal = ChatGoal.model_validate(goal_row.payload)
+        goal = decode_stored(ChatGoal, goal_row.payload)
         if goal.engagement_id != project_id:
             continue
         changes: dict = {}
@@ -674,7 +772,7 @@ async def _release_ended_provider_claims(
         .order_by(EntityRow.id)
         .limit(MAX_ORPHAN_ROWS)
     ):
-        goal = ChatGoal.model_validate(row.payload)
+        goal = decode_stored(ChatGoal, row.payload)
         if await session.scalar(
             select(EntityRow.id)
             .where(
@@ -958,7 +1056,7 @@ async def _mark_unconfirmed_adapter_deliveries(
         )
     marked = []
     for row in rows:
-        approval = Approval.model_validate(row.payload)
+        approval = decode_stored(Approval, row.payload)
         if approval.continuation is None:
             continue
         continuation = approval.continuation.model_copy(

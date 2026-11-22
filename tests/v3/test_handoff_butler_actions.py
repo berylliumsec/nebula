@@ -12,14 +12,12 @@ import pytest
 
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.butler_authority import AuthorityWrite
-from nebula.v3.butler_oversight import watch_id
 from nebula.v3.butler_review import review_pending
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.database import Database, ProjectHandoffRow
 from nebula.v3.database_pool import PoolSettings
 from nebula.v3.domain import (
     ButlerAction,
-    ButlerGoalWatch,
     ButlerProjectState,
     ChatSession,
     ChatTurn,
@@ -32,7 +30,7 @@ from nebula.v3.runtime_chat_stream import RuntimeChatJournal
 from nebula.v3.runtime_coordination import CoordinationConflict, HEARTBEAT_SECONDS
 from nebula.v3.runtime_project_handoff import restored_checkpoint
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_butler_authority import _Reviewer
+from tests.v3.test_butler_authority import STEER_REASON, _Reviewer, _plan_change
 from tests.v3.test_chat import FakeProvider
 from tests.v3.test_deployment_lifecycle import host as host
 from tests.v3.test_handoff_participants import project as project
@@ -129,14 +127,13 @@ async def planned_status_request(app):
         "one",
         AuthorityWrite(authority="steer", delegate_actions=[], expected_revision=0),
     )
-    await store.update(
-        ButlerGoalWatch,
-        watch_id(goal.id),
-        {"progress_due_at": utc_now() - timedelta(seconds=1)},
-    )
-    assert await oversight.fire_due_deadlines("one") == 1
+    await _plan_change(store, goal)
     decision = await review_pending(
-        store, "one", oversight.worker_id, _Reviewer("ask"), oversight.memory_service
+        store,
+        "one",
+        oversight.worker_id,
+        _Reviewer("steer", why_now=STEER_REASON),
+        oversight.memory_service,
     )
     assert decision is not None and decision.status == "reviewed"
     assert await authority.plan_next("one", oversight.worker_id)

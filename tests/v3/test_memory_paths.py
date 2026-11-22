@@ -56,6 +56,9 @@ async def memory(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", forbidden)
+    monkeypatch.setenv(
+        "NEBULA_HOST_MEMORY_RUNNER_SOCKET", str(tmp_path / "absent-runner.sock")
+    )
     store = NebulaStore(tmp_path / "core.db")
     await store.create(Engagement(id="project", name="Synthetic launch paths"))
     admin = MemoryAdministratorLimits(

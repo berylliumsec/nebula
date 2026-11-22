@@ -5,6 +5,7 @@ from __future__ import annotations
 from .async_utils import async_any
 
 from .async_utils import async_done_callback
+from .project_hold_gate import is_held
 
 import asyncio
 from collections import deque
@@ -46,6 +47,9 @@ _TERMINAL_TURNS = {
     ChatTurnStatus.CANCELLED,
     ChatTurnStatus.INTERRUPTED,
 }
+# How often a Mission waiting on a project hold checks for its release.
+HELD_RECHECK_SECONDS = 5.0
+
 _TERMINAL_RUNS = {
     RunStatus.COMPLETE,
     RunStatus.FAILED,
@@ -611,6 +615,15 @@ class DelegatedMissionService:
                         # A child may have finished after the parent response. A
                         # fresh supervisor turn incorporates those late reports.
                         if children and not run.metadata.get("synthesis_started"):
+                            if await is_held(
+                                self.store,
+                                run.engagement_id,
+                                run.metadata.get("supervisor_chat_session_id"),
+                            ):
+                                # Synthesis waits for the project hold's
+                                # release instead of failing the Mission.
+                                await asyncio.sleep(HELD_RECHECK_SECONDS)
+                                continue
                             await self._synthesize(run)
                             continue
                         final_turn = await self.store.get(

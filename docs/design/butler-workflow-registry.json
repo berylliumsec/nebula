@@ -23,6 +23,25 @@
       "status": "supported"
     },
     {
+      "id": "settings.host_commands",
+      "entry_point": "Settings > Automation > Memory budgets > Host commands, a Host command card in chat, or an explicit Butler request about the Host command queue",
+      "ui_calls": [
+        "ui/src/api/memoryBudgets.ts::request::GET `memory-budgets/host-commands${options.toolCallId ? `?tool_call_id=${encodeURIComponent(options.toolCallId)}` : \"\"}`",
+        "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets/host-commands/settings\"",
+        "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/host-commands/${encodeURIComponent(jobId)}/cancel`"
+      ],
+      "core_owner": "Host-wide memory_jobs queue (fair order, heartbeat, stale reaping) and the revisioned host-commands settings row, with protected runner groups per command",
+      "butler": {
+        "discover": "nebula.settings.catalog; nebula.settings.host_commands",
+        "read": "nebula.settings.host_commands",
+        "change": "nebula.settings.set_host_command_limit; nebula.settings.cancel_host_command"
+      },
+      "authority": "Normal authenticated Core settings authorization. The limit save is revision-checked and audited. Cancel and stop act on one exact job the operator named; a running stop kills the command's protected group. No automatic retry.",
+      "observed_result_test": "tests/v3/test_memory_api.py::test_butler_reads_sets_and_cancels_host_commands",
+      "result": "UI and Butler share the same queue view, limit and cancel routes. A queued cancel never starts the command; a stop settles its reservation as cancelled after the group is removed.",
+      "status": "supported"
+    },
+    {
       "id": "butler.memory_manage",
       "entry_point": "Butler Memory panel: read, search, edit or delete a visible saved memory; Butler can remember, search, update or forget one through typed tools",
       "ui_calls": [
@@ -48,7 +67,8 @@
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::setChatSessionArchived",
         "ui/src/pages/chatBulkActions.ts::listChatSessions",
-        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived"
+        "ui/src/pages/chatBulkActions.ts::setChatSessionArchived",
+        "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived"
       ],
       "core_owner": "ChatService and chat session metadata",
       "butler": {
@@ -80,6 +100,42 @@
       "status": "supported"
     },
     {
+      "id": "chat.high_priority",
+      "entry_point": "Conversation menu High priority, the list's bulk actions, or a Butler board card's expanded actions",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::setChatSessionPriority",
+        "ui/src/pages/chatBulkActions.ts::setChatSessionPriority",
+        "ui/src/pages/ButlerModePage.tsx::setChatSessionPriority"
+      ],
+      "core_owner": "ChatService chat session metadata and work_priority admission",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.set_priority"
+      },
+      "authority": "Selected project, listed main chat; no confirmation because priority only reorders waiting work",
+      "observed_result_test": "tests/v3/test_work_priority.py::test_operator_and_butler_mark_priority_and_the_board_leads_with_it",
+      "result": "Core saved metadata.priority agrees with the chat list marker and the Butler board order",
+      "status": "supported"
+    },
+    {
+      "id": "project.priority",
+      "entry_point": "Project switcher: the chevron button on a project's row",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::setEngagementPriority"
+      ],
+      "core_owner": "Core project store and work_priority admission",
+      "butler": {
+        "discover": "nebula.work.overview",
+        "read": "nebula.work.overview",
+        "change": "nebula.work.set_priority"
+      },
+      "authority": "Exact project; no confirmation because priority only reorders waiting work",
+      "observed_result_test": "tests/v3/test_work_priority.py::test_operator_and_butler_mark_priority_and_the_board_leads_with_it",
+      "result": "Core saved project metadata.priority agrees with the project switcher after refresh",
+      "status": "supported"
+    },
+    {
       "id": "chat.fork",
       "entry_point": "Conversation toolbar: fork a saved main chat",
       "ui_calls": [
@@ -101,7 +157,8 @@
       "entry_point": "Conversation menu: permanently delete a saved main chat",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::deleteChatSession",
-        "ui/src/pages/chatBulkActions.ts::deleteChatSession"
+        "ui/src/pages/chatBulkActions.ts::deleteChatSession",
+        "ui/src/pages/ButlerModePage.tsx::deleteChatSession"
       ],
       "core_owner": "ChatService and session dependency guards",
       "butler": {
@@ -325,6 +382,40 @@
       "authority": "Explicit instruction, selected project and current project revision",
       "observed_result_test": "ui/tests/real-core.spec.ts::assistant upgrade control assistant starts project work on production LAN Core",
       "result": "Core project setting and Work board agree after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "work.stages",
+      "entry_point": "Work board: Stages editor (or settings assistant Work stages)",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/stages`"
+      ],
+      "core_owner": "Core project revision and Work stages",
+      "butler": {
+        "discover": "nebula.work.catalog",
+        "read": "nebula.work.work_stages",
+        "change": "nebula.work.set_work_stages"
+      },
+      "authority": "Explicit instruction, selected project, full ordered stage list and current project revision",
+      "observed_result_test": "ui/tests/work-import.spec.ts::work hub stages: define, view gaps, group and move items, resync from import",
+      "result": "Saved stages appear on All projects and the stage board after refresh",
+      "status": "supported"
+    },
+    {
+      "id": "work.item_stage",
+      "entry_point": "Work item detail: Stage field",
+      "ui_calls": [
+        "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}`"
+      ],
+      "core_owner": "WorkService, item revision",
+      "butler": {
+        "discover": "nebula.work.work_items",
+        "read": "nebula.work.work_item",
+        "change": "nebula.work.update_work_item"
+      },
+      "authority": "Selected project, current item revision and a listed stage key",
+      "observed_result_test": "ui/tests/work-import.spec.ts::work hub stages: define, view gaps, group and move items, resync from import",
+      "result": "The item's saved stage shows in its column and Stage field after refresh",
       "status": "supported"
     },
     {
@@ -1014,7 +1105,7 @@
     },
     {
       "id": "chat.start_and_read",
-      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also lists chats from direct child projects in one Core-paged list",
+      "entry_point": "Workbench conversations: start and read project chats; the parent sidebar also lists chats from direct child projects in one Core-paged list; Butler mode reads one Core status board of every project's chats and lists Butler threads across projects",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::streamChat",
         "ui/src/pages/SessionsPage.tsx::getChatSession",
@@ -1027,7 +1118,12 @@
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
         "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
-        "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged"
+        "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
+        "ui/src/api/butlerBoard.ts::requestIfChanged",
+        "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+        "ui/src/api/butlerBrief.ts::request::GET `butler/sessions/${encodeURIComponent(sessionId)}/brief?before=${before}`",
+        "ui/src/api/butlerBrief.ts::requestIfChanged",
+        "ui/src/pages/ButlerChatPopup.tsx::listChatMessages"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1054,7 +1150,8 @@
         "ui/src/pages/SessionsPage.tsx::getHarnessTurn",
         "ui/src/pages/SessionsPage.tsx::getHarnessTurnEvents",
         "ui/src/pages/SessionsPage.tsx::followChatTurn",
-        "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents"
+        "ui/src/pages/SessionsPage.tsx::followHarnessTurnEvents",
+        "ui/src/pages/ButlerModePage.tsx::cancelChatTurn"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1069,7 +1166,7 @@
     },
     {
       "id": "chat.goal_lifecycle",
-      "entry_point": "Workbench goals: create a draft conversation, revise or transition its Core goal, and create a linked child",
+      "entry_point": "Workbench goals: create a draft conversation, revise or transition its Core goal, and create a linked child; Butler mode starts, edits (through Butler) or cancels goal chats Butler proposed, and pauses or resumes a goal from a chat's brief",
       "ui_calls": [
         "ui/src/pages/SessionsPage.tsx::createChatGoalConversation",
         "ui/src/pages/SessionsPage.tsx::getChatGoal",
@@ -1079,13 +1176,18 @@
         "ui/src/components/ProviderGoalPanel.tsx::updateChatGoal",
         "ui/src/components/ProviderGoalPanel.tsx::writeChatGoal",
         "ui/src/components/ProviderGoalChildren.tsx::listGoalChildren",
-        "ui/src/components/ProviderGoalChildren.tsx::startGoalChild"
+        "ui/src/components/ProviderGoalChildren.tsx::startGoalChild",
+        "ui/src/api/butlerBoard.ts::getChatGoal",
+        "ui/src/api/butlerBoard.ts::writeChatGoal",
+        "ui/src/api/butlerBoard.ts::request::\"DELETE\" `chat-sessions/${encodeURIComponent(sessionId)}`",
+        "ui/src/pages/ButlerChatBrief.tsx::getChatGoal",
+        "ui/src/pages/ButlerChatBrief.tsx::writeChatGoal"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
         "discover": "nebula.work.chats and nebula.work.goals",
         "read": "nebula.work.goal",
-        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
+        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.propose_goal_chat, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
       },
       "authority": "Selected project, current goal revision, existing Core goal transition guards and child lineage; creating a draft does not start a turn",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
@@ -1145,7 +1247,8 @@
         "ui/src/pages/SessionsPage.tsx::preflightChatRuntimeSwitch",
         "ui/src/components/McpServerChoices.tsx::getEngagementScope",
         "ui/src/components/NebulaControlAssistant.tsx::getChatAssistantConfig",
-        "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig"
+        "ui/src/components/NebulaControlAssistant.tsx::updateChatAssistantConfig",
+        "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1193,7 +1296,8 @@
         "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
         "ui/src/pages/SessionsPage.tsx::getApproval",
         "ui/src/state/WorkspaceContext.tsx::listApprovals",
-        "ui/src/state/WorkspaceContext.tsx::decideApproval"
+        "ui/src/state/WorkspaceContext.tsx::decideApproval",
+        "ui/src/pages/ButlerModePage.tsx::decideApproval"
       ],
       "core_owner": "Core ControlAssistantWork and the owning chat, goal, queue, mission or Work service",
       "butler": {
@@ -1771,7 +1875,7 @@
     },
     {
       "id": "ui.butler_conversation_protocol",
-      "entry_point": "Butler composer opens, streams, follows its queued follow-ups, polls and stops its own private conversation",
+      "entry_point": "Butler composer opens, streams, follows its queued follow-ups, polls and stops its own private conversation; Butler mode starts separate Butler threads with the project's saved Butler settings and streams each one in parallel",
       "ui_calls": [
         "ui/src/components/NebulaControlAssistant.tsx::getControlAssistantSession",
         "ui/src/components/NebulaControlAssistant.tsx::getOrCreateControlAssistantSession",
@@ -1781,7 +1885,11 @@
         "ui/src/components/NebulaControlAssistant.tsx::cancelChatTurn",
         "ui/src/components/NebulaControlAssistant.tsx::stopHarnessTurn",
         "ui/src/pages/SessionsPage.tsx::getControlAssistantSession",
-        "ui/src/pages/SessionsPage.tsx::resumeChatTurn"
+        "ui/src/pages/SessionsPage.tsx::resumeChatTurn",
+        "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
+        "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
+        "ui/src/pages/ButlerModePage.tsx::streamChat",
+        "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn"
       ],
       "core_owner": "The requesting browser owns the live composer and its private Butler session. Work actions exclude that session; internal session/stream/cancel RPCs do not let a model message or stop itself.",
       "butler": {
@@ -1958,34 +2066,6 @@
           "workspace.text_files"
         ],
         "reason": "The browser binds references, hashes and transient unsent selections to its device identity. Core resolution/consumption revisions protect recovery; a model cannot create a generic device envelope or receive unsent bytes through these UI calls."
-      }
-    },
-    {
-      "id": "ui.device_read_cursor",
-      "entry_point": "The transcript acknowledges only messages rendered on this device",
-      "ui_calls": [
-        "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
-        "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`"
-      ],
-      "core_owner": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
-      "butler": {
-        "discover": "not model-callable",
-        "read": "not model-callable",
-        "change": "not model-callable"
-      },
-      "authority": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work.",
-      "observed_result_test": "tests/v3/test_chat_catchup.py::test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending",
-      "result": "The existing UI owner retains this protocol. It creates no additional Butler operation or authority; the referenced operator workflows keep their own scoped controls.",
-      "status": "supporting_transport",
-      "transport": {
-        "kind": "device_read_state",
-        "owner": "requesting_browser",
-        "model_operation": false,
-        "workflows": [
-          "chat.start_and_read",
-          "approval.review"
-        ],
-        "reason": "The browser owns its read-device identity and rendered position. Its monotonic cursor acknowledges reading, not approvals or task completion; a model must not impersonate a device read or dismiss pending work."
       }
     },
     {
@@ -2917,10 +2997,12 @@
     },
     {
       "id": "workspace.git_inspection",
-      "entry_point": "workspace git inspection",
+      "entry_point": "workspace git inspection; Butler mode's Code & files marks files and lines chats changed and lists who changed the open file",
       "ui_calls": [
         "ui/src/components/EditorSourceControl.tsx::sourceControlStatus",
-        "ui/src/components/EditorSourceControl.tsx::sourceControlDiff"
+        "ui/src/components/EditorSourceControl.tsx::sourceControlDiff",
+        "ui/src/api/fileAttribution.ts::request::GET `${projectPath(projectId)}/history?path=${encodeURIComponent(path)}`",
+        "ui/src/api/fileAttribution.ts::requestIfChanged"
       ],
       "core_owner": "WorkspaceService bounded Git inspection with external diff/textconv disabled",
       "butler": {
@@ -3630,6 +3712,30 @@
   ],
   "ui_api_calls": [
     {
+      "key": "ui/src/api/butlerBoard.ts::getChatGoal",
+      "count": 2
+    },
+    {
+      "key": "ui/src/api/butlerBoard.ts::request::\"DELETE\" `chat-sessions/${encodeURIComponent(sessionId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerBoard.ts::requestIfChanged",
+      "count": 2
+    },
+    {
+      "key": "ui/src/api/butlerBoard.ts::writeChatGoal",
+      "count": 2
+    },
+    {
+      "key": "ui/src/api/butlerBrief.ts::request::GET `butler/sessions/${encodeURIComponent(sessionId)}/brief?before=${before}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/butlerBrief.ts::requestIfChanged",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/butlerInstructions.ts::request::\"PUT\" \"butler/check-interval\"",
       "count": 1
     },
@@ -3678,6 +3784,14 @@
       "count": 1
     },
     {
+      "key": "ui/src/api/fileAttribution.ts::request::GET `${projectPath(projectId)}/history?path=${encodeURIComponent(path)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/fileAttribution.ts::requestIfChanged",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/hostCpuBudget.ts::request::\"PUT\" \"host-cpu-budget\"",
       "count": 1
     },
@@ -3694,6 +3808,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/host-commands/${encodeURIComponent(jobId)}/cancel`",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/memoryBudgets.ts::request::\"POST\" `memory-budgets/jobs/${encodeURIComponent(job.id)}/apply`",
       "count": 1
     },
@@ -3706,11 +3824,19 @@
       "count": 1
     },
     {
+      "key": "ui/src/api/memoryBudgets.ts::request::\"PUT\" \"memory-budgets/host-commands/settings\"",
+      "count": 1
+    },
+    {
       "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets\"",
       "count": 1
     },
     {
       "key": "ui/src/api/memoryBudgets.ts::request::GET \"memory-budgets/jobs\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/memoryBudgets.ts::request::GET `memory-budgets/host-commands${options.toolCallId ? `?tool_call_id=${encodeURIComponent(options.toolCallId)}` : \"\"}`",
       "count": 1
     },
     {
@@ -3959,14 +4085,6 @@
     },
     {
       "key": "ui/src/components/ChatAttachments.tsx::request::GET `chat/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/preview`",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ChatCatchUp.tsx::request::\"PUT\" `${path}/read-cursor`",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ChatCatchUp.tsx::request::GET `${path}/catch-up?device_id=${encodeURIComponent(device)}`",
       "count": 1
     },
     {
@@ -5334,6 +5452,62 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/ButlerChatBrief.tsx::getChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerChatBrief.tsx::writeChatGoal",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerChatPopup.tsx::listChatMessages",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::cancelChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::decideApproval",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::deleteChatSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getChatAssistantConfig",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getOrCreateControlAssistantSession",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::getPendingChatTurn",
+      "count": 2
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::listChatMessages",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::setChatSessionArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::setChatSessionPriority",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/ButlerModePage.tsx::streamChat",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
       "count": 1
     },
@@ -5702,7 +5876,15 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}`",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/setting`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/pages/WorkPage.tsx::request::\"PATCH\" `engagements/${encodeURIComponent(projectId)}/work/stages`",
       "count": 1
     },
     {
@@ -5983,6 +6165,10 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::setEngagementArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::setEngagementPriority",
       "count": 1
     },
     {

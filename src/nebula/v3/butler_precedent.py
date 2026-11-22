@@ -19,6 +19,8 @@ _QUERIES = {
     "agent.attention_reported": "urgent machine unreachable blocker pause parent agent lesson",
     "agent.plan_changed": "investigation plan change correction precedent lesson",
     "agent.turn_completed": "completed investigation result evidence follow up lesson",
+    # Core no longer emits overdue checkpoints; recovery cases opened by an
+    # earlier build still read precedent while they finish.
     "goal.progress_overdue": "progress checkpoint overdue parent agent status lesson",
     "goal.plan_changed": "investigation plan change correction precedent lesson",
     "goal.blocked": "blocked investigation recovery parent agent precedent lesson",

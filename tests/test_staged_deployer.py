@@ -470,3 +470,450 @@ def test_failed_migration_prevents_promotion_and_preserves_journal():
     assert "promote_api" not in [action for action, _ in host.calls]
     assert host.state["api_version"] == "v1"
     assert record["runtime_deployment"]["state"] == "running"
+
+
+def _stall_then_recover(
+    host, *, version="v2", source_fence=1, recovery_phase="verified"
+):
+    """Stall the first handoff, then let Core recover the project itself."""
+    stalled = []
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff" and not stalled:
+            # Core accepted the request, but the source never reached a safe
+            # boundary: ownership stays with the old worker.
+            stalled.append(request["parameters"]["target_runtime_id"])
+            host.state["projects"][0].update(
+                runtime_id="old",
+                runtime_version="v1",
+                fencing_token=1,
+                phase="finishing",
+                target_version="v2",
+                admission_held=True,
+            )
+        return receipt
+
+    return post, stalled
+
+
+def _recover(host, *, runtime_version, source_fence=1, phase="verified", blockers=None):
+    host.live_runtimes.pop("old", None)
+    host.live_runtimes["recovered"] = runtime_version
+    host._refresh_resident_versions()
+    host.state["projects"][0].update(
+        runtime_id="recovered",
+        runtime_version=runtime_version,
+        fencing_token=source_fence + 1,
+        phase=phase,
+        target_version=runtime_version,
+        admission_held=phase != "verified",
+        blockers=blockers or [],
+        recovery={
+            "operation_id": "auto-recovery",
+            "source_runtime_id": "old",
+            "source_fencing_token": source_fence,
+            "target_runtime_id": "recovered",
+            "target_fencing_token": source_fence + 1,
+            "phase": phase,
+        },
+    )
+    host.state["revision"] += 1
+
+
+def _with_processes(host):
+    get = host.get
+
+    def read(path):
+        value = get(path)
+        value["processes"] = [
+            {
+                "runtime_id": runtime_id,
+                "version": version,
+                "role": "execution",
+                "state": "ready",
+                "ready_verified": True,
+            }
+            for runtime_id, version in host.live_runtimes.items()
+        ]
+        return value
+
+    return read
+
+
+def _recovery_deployer(host, record):
+    deployer = host.deployer(record)
+    deployer.get = _with_processes(host)
+    return deployer
+
+
+def test_stalled_handoff_adopts_core_recovery_onto_the_new_version():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, stalled = _stall_then_recover(host)
+    assert deployer.promote("v2")["status"] == "waiting_for_handoffs"
+    target = stalled[0]
+
+    # The operator stops the stalled source; Core recovers the project onto a
+    # fresh worker of the target version that this deployer never prepared.
+    _recover(host, runtime_version="v2")
+    host.hold_unverified = False
+    result = _recovery_deployer(host, record).promote("v2")
+
+    assert result["status"] == "promoted"
+    assert target not in host.live_runtimes
+    assert [action for action, _ in host.calls].count("handoff") == 1
+    adopted = record["runtime_deployment"]["reconciled_recoveries"]["project"]
+    assert adopted["runtime_id"] == "recovered"
+    assert adopted["recovery_operation_id"] == "auto-recovery"
+    assert adopted["source_runtime_id"] == "old"
+
+
+def test_recovery_from_an_older_grant_is_not_adopted():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    deployer.promote("v2")
+    # The journaled source grant was fence 1; a recovery that started from an
+    # earlier grant proves nothing about this deployment's source.
+    _recover(host, runtime_version="v2", source_fence=0)
+    host.state["projects"][0]["fencing_token"] = 2
+    host.state["projects"][0]["recovery"]["target_fencing_token"] = 2
+    result = _recovery_deployer(host, record).promote("v2")
+    assert result["status"] == "waiting_for_handoffs"
+    assert "reconciled_recoveries" not in record["runtime_deployment"]
+
+
+def test_unverified_recovery_keeps_waiting_with_its_blocker():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    deployer.promote("v2")
+    _recover(
+        host,
+        runtime_version="v2",
+        phase="transferred",
+        blockers=["Target runtime recovered has not verified restoration"],
+    )
+    result = _recovery_deployer(host, record).promote("v2")
+    assert result["status"] == "waiting_for_handoffs"
+    assert "reconciled_recoveries" not in record["runtime_deployment"]
+
+
+def test_recovery_onto_the_old_version_hands_off_again_under_a_new_generation():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, stalled = _stall_then_recover(host)
+    deployer.promote("v2")
+    _recover(host, runtime_version="v1")
+    host.hold_unverified = False
+    result = _recovery_deployer(host, record).promote("v2")
+
+    assert result["status"] == "promoted"
+    project = host.state["projects"][0]
+    assert project["runtime_version"] == "v2"
+    assert "recovered" not in host.live_runtimes
+    assert stalled[0] not in host.live_runtimes
+    journal = record["runtime_deployment"]
+    assert journal["handoff_generation"] == {"project": 1}
+    handoffs = [step for step in journal["steps"] if step.startswith("handoff/")]
+    assert len(handoffs) == 2 and any(step.endswith(":g1") for step in handoffs)
+
+
+class Clock:
+    def __init__(self):
+        self.now = 1_000.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _grace_deployer(host, record, clock, *, grace=60):
+    deployer = module.StagedDeployer(
+        record,
+        get=_with_processes(host),
+        post=host.post,
+        save=lambda value: host.saved.append(copy.deepcopy(value)),
+        verify=lambda version: (Path("/retained") / version, "a" * 64),
+        handoff_grace_seconds=grace,
+        recovery_wait_seconds=120,
+        poll_seconds=5,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+    return deployer
+
+
+def _evict_then_recover(host, deployer, clock):
+    """Core's side: a stopped source's project is recovered a little later."""
+    stopped = []
+    post = deployer.post
+
+    def evicting_post(path, request):
+        receipt = post(path, request)
+        if request["action"] == "evict_execution":
+            owner = request["parameters"]["expected_owner"]
+            stopped.append((owner, clock.now))
+            host.live_runtimes.pop(owner["runtime_id"], None)
+            receipt["result"] = {**owner, "affected_project_ids": [owner["project_id"]]}
+        return receipt
+
+    get = deployer.get
+
+    def recovering_get(path):
+        if stopped and clock.now >= stopped[-1][1] + 20:
+            project = host.state["projects"][0]
+            if project.get("runtime_id") == stopped[-1][0]["runtime_id"]:
+                _recover(host, runtime_version="v2")
+        return get(path)
+
+    deployer.post, deployer.get = evicting_post, recovering_get
+    return stopped
+
+
+def test_stalled_handoff_stops_its_source_after_grace_and_completes():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.hold_unverified = True
+    deployer = _grace_deployer(host, record, clock)
+    deployer.post, _ = _stall_then_recover(host)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    result = deployer.promote("v2")
+
+    assert result["status"] == "promoted"
+    assert len(stopped) == 1
+    owner, at = stopped[0]
+    assert owner == {"project_id": "project", "runtime_id": "old", "fencing_token": 1}
+    assert at - 1_000.0 >= 60
+    journal = record["runtime_deployment"]
+    assert journal["evicted_sources"]["project"]["runtime_id"] == "old"
+    assert journal["reconciled_recoveries"]["project"]["runtime_id"] == "recovered"
+    assert host.state["projects"][0]["runtime_version"] == "v2"
+
+
+def test_pinned_project_is_stopped_after_grace_instead_of_blocking():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    deployer = _grace_deployer(host, record, clock)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    result = deployer.promote("v2")
+
+    assert result["status"] == "promoted"
+    assert [owner["runtime_id"] for owner, _ in stopped] == ["old"]
+    assert host.state["projects"][0]["runtime_id"] == "recovered"
+
+
+def test_without_grace_a_stalled_handoff_reports_and_never_stops_its_source():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.hold_unverified = True
+    deployer = _recovery_deployer(host, record)
+    deployer.post, _ = _stall_then_recover(host)
+    assert deployer.promote("v2")["status"] == "waiting_for_handoffs"
+    assert "evict_execution" not in [action for action, _ in host.calls]
+
+
+def test_promotion_reports_each_phase_duration():
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    result = host.deployer(record).promote("v2")
+    assert result["status"] == "promoted"
+    steps = [step["step"] for step in result["timings"]["steps"]]
+    assert steps == [
+        "stage_migrate_host_and_api",
+        "target_execution",
+        "project_handoffs",
+    ]
+    assert all(step["seconds"] >= 0 for step in result["timings"]["steps"])
+    assert result["timings"]["total_seconds"] >= 0
+
+
+IDLE_SESSION = "harness_sessions 7f265d4f remains idle; its restoration is unavailable"
+
+
+def test_idle_unrestorable_sessions_are_stopped_without_waiting_out_grace():
+    """Idle harness sessions Core cannot restore never hand off by
+    themselves; the source is stopped at once instead of after the grace."""
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff":
+            host.state["projects"][0]["blockers"] = [
+                IDLE_SESSION,
+                IDLE_SESSION.replace("7f265d4f", "df734f1a"),
+            ]
+        return receipt
+
+    host.post = post
+    deployer = _grace_deployer(host, record, clock, grace=180)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert [owner["runtime_id"] for owner, _ in stopped] == ["old"]
+    assert stopped[0][1] - 1_000.0 < 180
+
+
+def test_other_blockers_still_get_their_grace():
+    host, record, clock = Host(), {"active": "v1", "pending": "v2"}, Clock()
+    host.pinned = True
+    original = host.post
+
+    def post(path, request):
+        receipt = original(path, request)
+        if request["action"] == "handoff":
+            host.state["projects"][0]["blockers"] = [
+                IDLE_SESSION,
+                "An accepted provider turn is finishing on its current runtime",
+            ]
+        return receipt
+
+    host.post = post
+    deployer = _grace_deployer(host, record, clock, grace=180)
+    stopped = _evict_then_recover(host, deployer, clock)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert stopped[0][1] - 1_000.0 >= 180
+
+
+def test_promotion_retires_unowned_workers_of_older_versions():
+    """A spare old worker owns no project but stays resident, which would
+    hold the next release at "execution staged"; promotion retires it."""
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    host.live_runtimes["spare-old"] = "v1"
+    host._refresh_resident_versions()
+    deployer = _recovery_deployer(host, record)
+
+    assert deployer.promote("v2")["status"] == "promoted"
+    retired = [
+        values["runtime_id"] for action, values in host.calls if action == "retire"
+    ]
+    assert "spare-old" in retired
+    assert host.state["resident_versions"] == ["v2"]
+
+
+def _status_reads_with_moved_projects(count):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    for index in range(count):
+        runtime_id = f"moved-{index}"
+        host.state["projects"].append(
+            {
+                "project_id": f"moved-{index}",
+                "runtime_id": runtime_id,
+                "runtime_version": "v2",
+                "fencing_token": 2,
+                "phase": "verified",
+            }
+        )
+        host.live_runtimes[runtime_id] = "v2"
+    reads = []
+    get = host.get
+
+    def counting_get(path):
+        reads.append(path)
+        return get(path)
+
+    deployer = host.deployer(record)
+    deployer.get = counting_get
+    assert deployer.promote("v2")["status"] == "promoted"
+    return len(reads)
+
+
+GATE_SPEC = importlib.util.spec_from_file_location(
+    "staged_deployer_gate", SOURCE.with_name("nebula_deploy_gate.py")
+)
+gate = importlib.util.module_from_spec(GATE_SPEC)
+GATE_SPEC.loader.exec_module(gate)
+
+
+class FlakyCore(gate.CoreClient):
+    """The real promotion read path over the fake host, failing on cue."""
+
+    def __init__(self, host, *, fail_from_read, failures):
+        super().__init__("http://127.0.0.1:8000", "inert")
+        self.host, self.fail_from_read = host, fail_from_read
+        self.failures, self.reads = list(failures), 0
+
+    def _get_once(self, path, parameters):
+        self.reads += 1
+        if self.reads >= self.fail_from_read and self.failures:
+            raise self.failures.pop(0)
+        return self.host.get(path)
+
+
+def _flaky_deployer(monkeypatch, host, record, failures, *, fail_from_read=3):
+    clock, sleeps = [0.0], []
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(gate.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(gate.time, "sleep", sleep)
+    core = FlakyCore(host, fail_from_read=fail_from_read, failures=failures)
+    deployer = host.deployer(record)
+    deployer.get = core.read
+    return deployer, sleeps
+
+
+def _http(code):
+    return gate.HTTPError("http://core", code, "answer", {}, None)
+
+
+def _dispatched_once(host):
+    actions = [action for action, _ in host.calls]
+    assert len(host.calls) == len({(a, repr(v)) for a, v in host.calls})
+    return actions
+
+
+def test_status_read_failing_twice_with_500_lets_promotion_continue(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(
+        monkeypatch, host, record, [_http(500), _http(500)]
+    )
+    assert deployer.promote("v2")["status"] == "promoted"
+    assert sleeps == [2.0, 4.0]
+    assert host.state["projects"][0]["runtime_version"] == "v2"
+    assert _dispatched_once(host).count("handoff") == 1
+
+
+def test_persistent_500_stops_after_the_bound_and_the_rerun_resumes(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(monkeypatch, host, record, [_http(500)] * 200)
+    with pytest.raises(gate.CoreUnavailable, match="re-run `nebula_deployer promote`"):
+        deployer.promote("v2")
+    assert sum(sleeps) <= gate.TRANSIENT_BUDGET_SECONDS
+    journal_id = record["runtime_deployment"]["id"]
+    sent_before = len(host.calls)
+    # Core answers again; the next run resumes the same journal.
+    assert host.deployer(record).promote("v2")["status"] == "promoted"
+    assert record["runtime_deployment"]["id"] == journal_id
+    assert len(host.calls) >= sent_before
+    assert _dispatched_once(host).count("promote_api") == 1
+
+
+def test_status_read_answered_4xx_fails_at_once(monkeypatch):
+    host, record = Host(), {"active": "v1", "pending": "v2"}
+    deployer, sleeps = _flaky_deployer(monkeypatch, host, record, [_http(403)])
+    with pytest.raises(gate.HTTPError) as raised:
+        deployer.promote("v2")
+    assert raised.value.code == 403 and sleeps == []
+
+
+def test_projects_already_moved_share_one_status_read_per_pass():
+    # Deployment status lists every project; one read per skipped project made
+    # a pass over a thousand projects take minutes.
+    # The move of the first project ends with one fresh read for the rest.
+    assert (
+        _status_reads_with_moved_projects(200)
+        <= _status_reads_with_moved_projects(0) + 1
+    )

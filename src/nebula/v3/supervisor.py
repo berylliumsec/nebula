@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 import threading
 
-from fastapi import Depends, FastAPI, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 import httpx
 from sqlalchemy import and_, or_, select
 from starlette.requests import HTTPConnection
@@ -22,6 +22,7 @@ from .async_utils import cancel_and_join, finish_cleanup
 from .authentication import CoreAuthentication
 from .authentication_api import AuthenticationApi
 from .database import (
+    DatabaseBusyError,
     DeploymentHostRow,
     ProjectOwnershipRow,
     ProjectHandoffRow,
@@ -262,6 +263,19 @@ class RuntimeSupervisor:
         async def conflict(_request, error):
             return JSONResponse({"detail": str(error)}, status_code=409)
 
+        @api.exception_handler(DatabaseBusyError)
+        async def database_busy(_request, _error):
+            # The pool wait ran out; nothing was decided. Answer like the
+            # execution kernel does, so callers retry instead of seeing a 500.
+            return JSONResponse(
+                {
+                    "detail": "Database capacity is busy. Refresh saved state before retrying.",
+                    "code": "database_busy",
+                },
+                status_code=503,
+                headers={"Retry-After": "1", "Cache-Control": "private, no-store"},
+            )
+
         @api.get(
             "/api/v1/deployment/status",
             dependencies=[Depends(authentication.require_auth)],
@@ -286,11 +300,18 @@ class RuntimeSupervisor:
             ]
 
         @api.api_route("/api/v1/memory-budgets", methods=["GET", "PUT"])
-        @api.api_route("/api/v1/memory-budgets/{path:path}", methods=["GET", "POST"])
+        @api.api_route(
+            "/api/v1/memory-budgets/{path:path}", methods=["GET", "POST", "PUT"]
+        )
         async def memory_control(request: Request):
             if request.url.path.endswith("/apply"):
                 return _Forward(self.proxy)
-            return _Forward(self.shared_services.memory_control.app)
+            control = self.shared_services.memory_control
+            if control is None:
+                # Shared services open before the host serves; a request in
+                # that window gets a retryable answer, not an AttributeError.
+                raise HTTPException(503, "Host memory control is starting")
+            return _Forward(control.app)
 
         @api.api_route(
             "/{path:path}",
@@ -749,9 +770,19 @@ class RuntimeSupervisor:
                 expected_lease=lease,
             )
             status = await self._recovery_status(lease)
+        # Blockers gate verification and the start of activation. Once a
+        # verified worker is activating, its application may re-claim work and
+        # a check can no longer stop it; checking anyway held the owner row
+        # FOR UPDATE through a project-wide scan on every pass and starved the
+        # activating worker's transactions.
+        activating = (
+            phase == "verified"
+            and status.get("state") == "prepared"
+            and status.get("activation_started") is True
+        )
         current, current_operation, phase, digest = await self._recovery_grant(
             row,
-            check_blockers=status.get("state") != "ready",
+            check_blockers=status.get("state") != "ready" and not activating,
         )
         if (
             current != lease
@@ -765,6 +796,9 @@ class RuntimeSupervisor:
             raise CoordinationConflict(
                 "The target has not prepared this exact recovery checkpoint"
             )
+        if activating:
+            # Activation is already under way; a later pass sees it ready.
+            return lease
         await self.coordinator.verify_recovery(
             lease,
             operation_id=operation_id,
@@ -781,6 +815,7 @@ class RuntimeSupervisor:
                 now = asyncio.get_running_loop().time()
                 if now >= self._next_process_reconciliation:
                     await self.host.reconcile_processes()
+                    await self.retire_drained_apis()
                     self._next_process_reconciliation = now + 5
                 await self.advance_project_handoffs()
             except Exception as error:
@@ -792,6 +827,39 @@ class RuntimeSupervisor:
                     stage="handoff",
                 )
             await asyncio.sleep(0.5)
+
+    async def retire_drained_apis(self) -> list[str]:
+        """Retire each replaced API once its drain grace has passed.
+
+        Promotion only routes new traffic to the new API; without this the
+        replaced process stayed draining until the next deployment. Requests
+        it accepted are already in SQL, and its streams close so clients
+        reconnect to the promoted API. A refusal or slow exit keeps the row
+        draining for the next pass, and status reports it past its bound.
+        """
+        retired: list[str] = []
+        async with self._operations:
+            if self.closed or not self.started or self._shutdown_committed:
+                return retired
+            for runtime_id in await self.coordinator.drained_apis():
+                try:
+                    identity = await self.host.retire(runtime_id)
+                except (
+                    CoordinationConflict,
+                    RuntimeIpcError,
+                    TimeoutError,
+                ) as error:
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.api.drain_retirement_waiting",
+                        "A replaced API stays draining until its retirement is verified.",
+                        error,
+                        stage="deployment",
+                    )
+                    continue
+                await self.proxy.discard_endpoint(identity.endpoint)
+                retired.append(runtime_id)
+        return retired
 
     async def stage(self, source: Path, *, manifest_sha256: str) -> ReleaseManifest:
         async with self._operations:
@@ -1047,6 +1115,73 @@ class RuntimeSupervisor:
                 expected_owner,
                 launch_origin=self.host.launch_origin,
             )
+
+    async def evict_execution(self, *, expected_owner: ProjectLease) -> dict:
+        """Stop a source worker whose deployment handoff ran out of time.
+
+        Used by a deployment after its grace period: the project's owner is
+        still the exact grant the deployer journaled and runs an execution
+        version behind the deployment target. Stopping the worker is a
+        planned crash; expired-owner recovery then settles what it left
+        without replaying any effect and restores every project it owned on
+        the target version. A refusal here changed nothing.
+        """
+        async with self._operations:
+            self._active()
+            async with self.coordinator.database.session() as session:
+                host = await session.get(DeploymentHostRow, "host")
+                owner = await session.get(
+                    ProjectOwnershipRow, expected_owner.project_id
+                )
+                process = (
+                    await session.get(RuntimeProcessRow, expected_owner.runtime_id)
+                    if owner is not None
+                    else None
+                )
+                affected = (
+                    sorted(
+                        await session.scalars(
+                            select(ProjectOwnershipRow.project_id).where(
+                                ProjectOwnershipRow.runtime_id
+                                == expected_owner.runtime_id
+                            )
+                        )
+                    )
+                    if process is not None
+                    else []
+                )
+            if owner is None or (owner.runtime_id, owner.fencing_token) != (
+                expected_owner.runtime_id,
+                expected_owner.fencing_token,
+            ):
+                raise OperationRejected(
+                    "Project ownership changed; read fresh deployment status"
+                )
+            if (
+                host is None
+                or host.target_version is None
+                or host.shutdown_requested
+                or process is None
+                or process.role != "execution"
+                or process.version == host.target_version
+                or host.api_runtime_id == process.runtime_id
+            ):
+                raise OperationRejected(
+                    "Only a source worker behind the deployment target can be stopped"
+                )
+            try:
+                signalled = await self.host.stop_overdue_source(process.runtime_id)
+            except RuntimeIpcError as error:
+                raise OperationRejected(str(error)) from error
+            return {
+                "project_id": expected_owner.project_id,
+                "runtime_id": expected_owner.runtime_id,
+                "fencing_token": expected_owner.fencing_token,
+                "version": process.version,
+                "affected_project_ids": affected,
+                "signalled": signalled,
+                "effects_replayed": False,
+            }
 
     async def recover_project(
         self,

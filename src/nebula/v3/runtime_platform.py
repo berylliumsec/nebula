@@ -17,6 +17,7 @@ from .artifacts import ArtifactStore
 from .context_retrieval import DenseEncoder
 from .conversation_search import ConversationSearchTool
 from .knowledge_search import KnowledgeSearcher, KnowledgeSearchTool
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
     Approval,
@@ -58,6 +59,7 @@ from .runtime_prepared_catalog import (
 )
 from .tool_results import ToolOutputService
 from .tools import (
+    FOCUS_WORKSPACE_READS,
     InvalidToolArguments,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
@@ -66,6 +68,7 @@ from .tools import (
     ToolInvocation,
     ToolRegistry,
     ToolSpec,
+    focus_workspace_reads,
     register_artifact_retrieval_tools,
 )
 from .web_search import (
@@ -121,6 +124,49 @@ class ToolExecutionBroker(Protocol):
         *,
         approval: Approval | None = None,
     ) -> ToolExecutionResult: ...
+
+
+class _ButlerFocusBroker:
+    """Serve a Butler home session's workspace reads from its focus project.
+
+    Only workspace.find/search/read change: they read the focus project's
+    workspace. The call's ledger, receipt and evidence, and every other tool,
+    stay in Butler's own project, whose writes alone this worker may make.
+    """
+
+    def __init__(
+        self, broker: ToolExecutionBroker, project_name: str, workspace: Path | None
+    ) -> None:
+        self.broker = broker
+        self.project_name = project_name
+        self.workspace = workspace
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult:
+        if invocation.tool_name not in FOCUS_WORKSPACE_READS:
+            return await self.broker.execute(invocation, scope, approval=approval)
+        if self.workspace is None:
+            raise RuntimePlatformError(
+                f"{self.project_name} has no workspace files yet."
+            )
+        with focus_workspace_reads(self.workspace):
+            return await self.broker.execute(invocation, scope, approval=approval)
+
+
+def with_butler_focus(
+    components: "RuntimeToolComponents", project_name: str, workspace: Path | None
+) -> "RuntimeToolComponents":
+    from dataclasses import replace
+
+    return replace(
+        components,
+        broker=_ButlerFocusBroker(components.broker, project_name, workspace),
+    )
 
 
 class _ControlAssistantScopeBroker:
@@ -400,6 +446,9 @@ class RuntimePlatform:
         self.mcp_service: McpProbeService | None = None
         self.settings_assistant_api: SettingsAssistantApi | None = None
         self.control_assistant_work: Any = None
+        # Set only on Butler's home worker: sends Butler's changes to other
+        # projects as butler.action/v1 commands (runtime_butler_actions.py).
+        self.butler_actions: Any = None
         self.butler_memory: Any = None
         self.workspace_service: WorkspaceService | None = None
         self.container_terminal_service: ContainerTerminalService | None = None
@@ -430,6 +479,38 @@ class RuntimePlatform:
             raise ValueError("MCP service must use the runtime platform store")
         self.mcp_service = service
 
+    async def _check_focus_privacy(
+        self, project_id: str | None, provider: ModelProvider | None
+    ) -> None:
+        """Butler's home must not carry a local-only project to a cloud model.
+
+        The session's own scope is Butler's home, so the provider check that
+        guards every project chat never sees the focus project's boundary.
+        Every home turn checks it here, so a later local-only change applies.
+        """
+
+        from .execution_scope import observer_reads
+        from .privacy import (
+            ProviderPrivacyViolation,
+            validate_engagement_provider_privacy,
+        )
+
+        if project_id is None or provider is None:
+            raise RuntimePlatformError(
+                "Butler's own worker needs a provider model to read a project"
+            )
+        with observer_reads():
+            project = await self.store.get(Engagement, project_id)
+            try:
+                await validate_engagement_provider_privacy(
+                    self.store, project, provider
+                )
+            except ProviderPrivacyViolation as exc:
+                raise RuntimePlatformError(
+                    f"{project.name} keeps its data on local models; switch "
+                    "Butler to a local model to ask about it."
+                ) from exc
+
     async def chat_components(
         self,
         *,
@@ -445,9 +526,14 @@ class RuntimePlatform:
         operator_message: str = "",
         background_case_id: str | None = None,
         client_surface: str = "browser",
+        butler_focus_project: str | None = None,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
-        """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
+        """Build MCP and SSH-environment components; OCI commands are fixed elsewhere.
+
+        A Butler session in ``BUTLER_HOME_PROJECT`` passes its focus project:
+        Butler's actions then read that project through observer reads.
+        """
 
         operator_turn_id = turn_id
         del model
@@ -477,11 +563,18 @@ class RuntimePlatform:
         if settings_assistant:
             from .butler_capabilities import ButlerCapabilities
 
+            observer = bool(
+                engagement_id == BUTLER_HOME_PROJECT and butler_focus_project
+            )
+            if observer:
+                await self._check_focus_privacy(butler_focus_project, provider)
             for plugin in (
                 await ButlerCapabilities.create(
                     self.store,
                     self.artifact_store,
-                    engagement_id,
+                    butler_focus_project if observer else engagement_id,
+                    observer=observer,
+                    butler_actions=self.butler_actions,
                     settings_api=self.settings_assistant_api,
                     work=self.control_assistant_work,
                     memory=self.butler_memory,
@@ -547,6 +640,39 @@ class RuntimePlatform:
             workspace=(await self.workspace_for(engagement_id)),
             specs={spec.name: spec for spec in registry.specs()},
         )
+
+    async def focus_workspace(self, project_id: str) -> tuple[str, Path | None]:
+        """A focus project's name and existing workspace folder, if any.
+
+        Unlike ``workspace_for``, this never creates or re-permissions the
+        focus project's folder: Butler only reads what is already there.
+        """
+
+        from .execution_scope import observer_reads
+
+        with observer_reads():
+            project = await self.store.get(Engagement, project_id)
+        workspace: Path | None = None
+        if project.workspace_path:
+            candidate = Path(project.workspace_path).expanduser()
+            if candidate.is_dir():
+                workspace = candidate.resolve()
+        else:
+            candidate = (
+                self.workspace_root
+                / hashlib.sha256(project_id.encode("utf-8")).hexdigest()
+            )
+            if candidate.is_dir():
+                workspace = candidate
+        return project.name, workspace
+
+    async def focus_components(
+        self, components: RuntimeToolComponents, project_id: str
+    ) -> RuntimeToolComponents:
+        """Point a Butler home session's workspace reads at its focus project."""
+
+        name, workspace = await RuntimePlatform.focus_workspace(self, project_id)
+        return with_butler_focus(components, name, workspace)
 
     async def workspace_for(self, engagement_id: str) -> Path:
         engagement = await self.store.get(Engagement, engagement_id)

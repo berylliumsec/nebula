@@ -20,10 +20,13 @@ from .domain import (
     ChatTurnStatus,
     Engagement,
     EngagementStatus,
+    MAX_WORK_STAGES,
     NebulaModel,
     RiskClass,
     ScopePolicy,
+    WORK_STAGE_KEY_PATTERN,
     WorkItem,
+    WorkStage,
     WorkUpdate,
 )
 from .runtime_platform import RuntimeToolComponents, require_project_scope
@@ -51,6 +54,7 @@ class WorkCreate(NebulaModel):
     assignee_session_id: str | None = Field(default=None, max_length=200)
     source_kind: Literal["chat", "mission", "manual", "import"] = "manual"
     source_id: str | None = Field(default=None, max_length=200)
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
@@ -59,6 +63,8 @@ class WorkCheckIn(NebulaModel):
     next_step: str | None = Field(default=None, max_length=2_000)
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
+    # Moves the item to this stage with the update; omitted keeps its stage.
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
     expected_revision: int | None = Field(default=None, ge=1)
 
@@ -66,6 +72,20 @@ class WorkCheckIn(NebulaModel):
 class WorkSettingPatch(NebulaModel):
     enabled: bool
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class WorkStagesPatch(NebulaModel):
+    """Replace a project's ordered Work stages; items keep their stage keys."""
+
+    stages: list[WorkStage] = Field(max_length=MAX_WORK_STAGES)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def unique_keys(self) -> "WorkStagesPatch":
+        keys = [stage.key for stage in self.stages]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Work stage keys must be unique in a project")
+        return self
 
 
 class WorkListRequest(NebulaModel):
@@ -84,6 +104,8 @@ class WorkPatch(NebulaModel):
     description: str | None = Field(default=None, max_length=20_000)
     priority: WorkPriority | None = None
     assignee_session_id: str | None = Field(default=None, max_length=200)
+    # An explicit null clears the stage.
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     expected_revision: int | None = Field(default=None, ge=1)
 
 
@@ -92,6 +114,9 @@ class WorkImportUpdate(NebulaModel):
     next_step: str | None = Field(default=None, max_length=2_000)
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
+    # The source's identity for this update. A later import with a new
+    # update_id posts another update; without one an item gets only its first.
+    update_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class WorkImportItem(NebulaModel):
@@ -100,6 +125,8 @@ class WorkImportItem(NebulaModel):
     description: str = Field(default="", max_length=20_000)
     status: WorkStatus = "backlog"
     priority: WorkPriority = "normal"
+    # The source owns an imported item's stage: each import sets it.
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     update: WorkImportUpdate | None = None
 
 
@@ -728,6 +755,7 @@ class WorkService:
                 assignee_session_id=data.assignee_session_id,
                 source_kind=data.source_kind,
                 source_id=data.source_id,
+                stage=data.stage,
             )
             if item_id
             else WorkItem(
@@ -739,6 +767,7 @@ class WorkService:
                 assignee_session_id=data.assignee_session_id,
                 source_kind=data.source_kind,
                 source_id=data.source_id,
+                stage=data.stage,
             )
         )
         try:
@@ -759,7 +788,7 @@ class WorkService:
             for key, value in data.model_dump(
                 exclude_unset=True, exclude={"expected_revision"}
             ).items()
-            if value is not None or key == "assignee_session_id"
+            if value is not None or key in {"assignee_session_id", "stage"}
         }
         (await self._session(engagement_id, changes.get("assignee_session_id")))
         for _ in range(1 if data.expected_revision is not None else 3):
@@ -840,6 +869,7 @@ class WorkService:
             ):
                 raise ConflictError("work item changed; read its current revision")
             status = "blocked" if data.blocker else (data.status or item.status)
+            stage = data.stage or item.stage
             update = (
                 WorkUpdate(
                     id=update_id,
@@ -849,6 +879,7 @@ class WorkService:
                     next_step=data.next_step,
                     blocker=data.blocker,
                     status=status,
+                    stage=data.stage,
                     actor_kind=actor_kind,
                     actor_id=actor_id,
                     source_session_id=source_session_id,
@@ -864,6 +895,7 @@ class WorkService:
                     next_step=data.next_step,
                     blocker=data.blocker,
                     status=status,
+                    stage=data.stage,
                     actor_kind=actor_kind,
                     actor_id=actor_id,
                     source_session_id=source_session_id,
@@ -879,7 +911,11 @@ class WorkService:
                         await transaction.update(
                             WorkItem,
                             item.id,
-                            {"status": status, "last_update_at": update.created_at},
+                            {
+                                "status": status,
+                                "stage": stage,
+                                "last_update_at": update.created_at,
+                            },
                             expected_revision=item.revision,
                         )
                     )
@@ -898,10 +934,151 @@ class WorkService:
                     raise
         raise ConflictError("work item changed concurrently; retry")
 
+    async def effective_stages(
+        self, engagement: Engagement
+    ) -> tuple[builtins.list[WorkStage], Engagement | None]:
+        """A project's own stages, else its nearest ancestor's and that ancestor."""
+
+        current: Engagement | None = engagement
+        seen: set[str] = set()
+        while current is not None and current.id not in seen:
+            seen.add(current.id)
+            if current.work_stages:
+                return current.work_stages, (
+                    None if current.id == engagement.id else current
+                )
+            if current.parent_engagement_id is None:
+                break
+            try:
+                current = await self.store.get(Engagement, current.parent_engagement_id)
+            except NotFoundError:
+                # diagnostic-expected: a removed parent leaves the project without stages.
+                break
+        return [], None
+
+    async def set_stages(
+        self,
+        engagement_id: str,
+        stages: builtins.list[WorkStage],
+        *,
+        expected_revision: int | None = None,
+    ) -> Engagement:
+        """Save a project's ordered stages; item stage keys are left unchanged."""
+
+        for _ in range(1 if expected_revision is not None else 3):
+            project = await self.store.get(Engagement, engagement_id)
+            if expected_revision is not None and project.revision != expected_revision:
+                raise ConflictError(
+                    "project Work stages changed; read its current revision"
+                )
+            if project.work_stages == stages:
+                return project
+            try:
+                updated = await self.store.update(
+                    Engagement,
+                    engagement_id,
+                    {
+                        "work_stages": [
+                            stage.model_dump(mode="json") for stage in stages
+                        ]
+                    },
+                    expected_revision=project.revision,
+                )
+                self.changes.publish("projects")
+                return updated
+            except ConflictError:
+                if expected_revision is not None:
+                    raise
+                # diagnostic-expected: concurrent settings edits are retried.
+                continue
+        raise ConflictError("project Work stages changed concurrently; retry")
+
+    async def import_item(
+        self,
+        engagement_id: str,
+        *,
+        source: str,
+        project_external_id: str,
+        entry: WorkImportItem,
+    ) -> WorkImportItemResult:
+        """Create or resync one source item: its stage follows the source."""
+
+        identity = json.dumps(
+            [project_external_id, entry.external_id], separators=(",", ":")
+        )
+        request_id = sha256(identity.encode("utf-8")).hexdigest()
+        actor_id = f"import:{source}"
+        item = await self.create(
+            engagement_id,
+            WorkCreate(
+                title=entry.title,
+                description=entry.description,
+                status=entry.status,
+                priority=entry.priority,
+                source_kind="import",
+                source_id=entry.external_id,
+                stage=entry.stage,
+                request_id=request_id,
+            ),
+            actor_id=actor_id,
+            notify=False,
+        )
+        if "stage" in entry.model_fields_set and item.stage != entry.stage:
+            for _ in range(3):
+                try:
+                    async with self.store.transaction() as transaction:
+                        item = await transaction.update(
+                            WorkItem,
+                            item.id,
+                            {"stage": entry.stage},
+                            expected_revision=item.revision,
+                        )
+                    break
+                except ConflictError:
+                    # diagnostic-expected: a concurrent edit retries on the latest item.
+                    item = await self.get(engagement_id, item.id)
+                    if item.stage == entry.stage:
+                        break
+            else:
+                raise ConflictError("work item changed concurrently; retry")
+        update_id = None
+        if entry.update is not None:
+            update_request = (
+                sha256(
+                    json.dumps(
+                        [
+                            project_external_id,
+                            entry.external_id,
+                            entry.update.update_id,
+                        ],
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
+                if entry.update.update_id is not None
+                else request_id
+            )
+            update = await self.check_in(
+                engagement_id,
+                item.id,
+                WorkCheckIn(
+                    summary=entry.update.summary,
+                    next_step=entry.update.next_step,
+                    blocker=entry.update.blocker,
+                    status=entry.update.status,
+                    request_id=update_request,
+                ),
+                actor_kind="import",
+                actor_id=actor_id,
+                notify=False,
+            )
+            update_id = update.id
+        return WorkImportItemResult(
+            external_id=entry.external_id, item_id=item.id, update_id=update_id
+        )
+
     async def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
         """Create source-identified projects and Work without overwriting later edits."""
 
-        actor_id = f"import:{batch.source}"
         results: list[WorkImportProjectResult] = []
         for project in batch.projects:
             if project.engagement_id is not None:
@@ -947,50 +1124,15 @@ class WorkService:
                     raise ConflictError(
                         "import project ID belongs to a different source"
                     )
-            item_results: list[WorkImportItemResult] = []
-            for entry in project.items:
-                identity = json.dumps(
-                    [project.external_id, entry.external_id], separators=(",", ":")
-                )
-                request_id = sha256(identity.encode("utf-8")).hexdigest()
-                item = await self.create(
+            item_results = [
+                await self.import_item(
                     engagement.id,
-                    WorkCreate(
-                        title=entry.title,
-                        description=entry.description,
-                        status=entry.status,
-                        priority=entry.priority,
-                        source_kind="import",
-                        source_id=entry.external_id,
-                        request_id=request_id,
-                    ),
-                    actor_id=actor_id,
-                    notify=False,
+                    source=batch.source,
+                    project_external_id=project.external_id,
+                    entry=entry,
                 )
-                update_id = None
-                if entry.update is not None:
-                    update = await self.check_in(
-                        engagement.id,
-                        item.id,
-                        WorkCheckIn(
-                            summary=entry.update.summary,
-                            next_step=entry.update.next_step,
-                            blocker=entry.update.blocker,
-                            status=entry.update.status,
-                            request_id=request_id,
-                        ),
-                        actor_kind="import",
-                        actor_id=actor_id,
-                        notify=False,
-                    )
-                    update_id = update.id
-                item_results.append(
-                    WorkImportItemResult(
-                        external_id=entry.external_id,
-                        item_id=item.id,
-                        update_id=update_id,
-                    )
-                )
+                for entry in project.items
+            ]
             results.append(
                 WorkImportProjectResult(
                     external_id=project.external_id,
@@ -1159,10 +1301,25 @@ class WorkBroker:
                 invocation.engagement_id,
                 list_request.project_name,
             )
+            stages, _ = await self.service.effective_stages(
+                await self.service.store.get(Engagement, target_id)
+            )
             return ToolExecutionResult(
                 output=(
                     await self.service.agent_list_page(
-                        target_id, offset=list_request.offset, limit=list_request.limit
+                        target_id,
+                        offset=list_request.offset,
+                        limit=list_request.limit,
+                        envelope=(
+                            {
+                                "stages": [
+                                    {"key": stage.key, "label": stage.label}
+                                    for stage in stages
+                                ]
+                            }
+                            if stages
+                            else None
+                        ),
                     )
                 )
             )
@@ -1290,6 +1447,11 @@ def work_components(
                 },
                 "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
                 "project_name": {"type": "string", "minLength": 1, "maxLength": 300},
+                "stage": {
+                    "type": "string",
+                    "pattern": WORK_STAGE_KEY_PATTERN,
+                    "description": "A stage key from work_list's stages, when the project defines stages.",
+                },
             },
             ["title"],
         ),
@@ -1314,6 +1476,11 @@ def work_components(
                         "review",
                         "done",
                     ],
+                },
+                "stage": {
+                    "type": "string",
+                    "pattern": WORK_STAGE_KEY_PATTERN,
+                    "description": "Move the item to this stage key from work_list's stages, when the project defines stages.",
                 },
                 "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
             },
@@ -1344,5 +1511,5 @@ def work_components(
         scope=require_project_scope(scope, "Work"),
         workspace=workspace,
         specs=specs,
-        runtime_digest="work-v2",
+        runtime_digest="work-v3",
     )

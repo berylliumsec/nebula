@@ -13,8 +13,20 @@ from .domain import NebulaModel
 IPC_PROTOCOL: Final = "nebula.runtime/v1"
 MAX_EXECUTION_VERSIONS = 2
 GLOBAL_EXECUTION_PROJECT = "__nebula_host_work__"
+# Butler's own project: its chats run on their own worker instead of queueing
+# behind the project they oversee. See docs/design/butler-home-worker.md.
+BUTLER_HOME_PROJECT: Final = "__nebula_butler__"
+# Project ids Core reserves for itself. They never appear in project lists,
+# search or operator pickers, and cannot be archived or deleted.
+RESERVED_PROJECT_IDS: Final = frozenset({GLOBAL_EXECUTION_PROJECT, BUTLER_HOME_PROJECT})
 SHARED_MEMORY_BOOTSTRAP_KEY = "shared_butler_memory_v1"
 IDLE_RETIREMENT_FEATURE: Final = "project.idle-retirement/v1"
+# An execution release that can host the Butler home project: it supports
+# observer reads (execution_scope.observer_reads) for that project's worker.
+BUTLER_HOME_FEATURE: Final = "butler.home/v1"
+# One Butler change from Butler's home, run by the target project's worker.
+# Also the release feature: only a worker that declares it may receive one.
+BUTLER_ACTION_COMMAND: Final = "butler.action/v1"
 SHA256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 RuntimeVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.+-]{0,99}$")]
 
@@ -133,6 +145,22 @@ class WorkerIdentity(NebulaModel):
     endpoint: str = Field(min_length=1, max_length=4096)
 
 
+class ProjectRecoveryStatus(NebulaModel):
+    """The recovery that granted a project to its current owner.
+
+    A deployer whose handoff was overtaken by expired-owner recovery reads
+    this to prove that Core moved the project on from the exact source grant
+    it journaled, instead of guessing from a changed owner.
+    """
+
+    operation_id: str
+    source_runtime_id: str | None
+    source_fencing_token: int
+    target_runtime_id: str
+    target_fencing_token: int
+    phase: str
+
+
 class ProjectDeploymentStatus(NebulaModel):
     project_id: str
     runtime_id: str | None
@@ -142,6 +170,8 @@ class ProjectDeploymentStatus(NebulaModel):
     target_version: str | None = None
     blockers: list[str] = Field(default_factory=list)
     admission_held: bool = False
+    # None on older hosts and for an owner that a handoff or claim granted.
+    recovery: ProjectRecoveryStatus | None = None
 
 
 class ProcessDeploymentStatus(NebulaModel):
@@ -152,6 +182,49 @@ class ProcessDeploymentStatus(NebulaModel):
     role: str
     state: str
     ready_verified: bool = False
+
+
+class RollMovingProject(NebulaModel):
+    """A project the in-Core roller is moving onto the execution target."""
+
+    project_id: str
+    phase: HandoffPhase
+    target_runtime_id: str
+    admission_held: bool
+
+
+class RollPinnedProject(NebulaModel):
+    """A project left on its current version until its pins clear."""
+
+    project_id: str
+    runtime_version: str | None
+    blockers: list[str] = Field(default_factory=list)
+    retry_in_seconds: int = Field(ge=0)
+    attempts: int = Field(ge=0)
+
+
+class RollStatus(NebulaModel):
+    """The in-Core roller's last pass; None on hosts without a roller.
+
+    ``state`` is ``disabled`` (``NEBULA_ROLL_PROJECTS_AT_ONCE=0``), ``idle``
+    (no execution target, or a host shutdown), ``deferred`` (an operator
+    deployment operation ran recently), ``rolling``, ``waiting`` (only pinned
+    or backing-off projects remain), ``blocked`` (the target cannot take a
+    project now) or ``complete``.
+    """
+
+    state: Literal[
+        "disabled", "idle", "deferred", "rolling", "waiting", "blocked", "complete"
+    ]
+    detail: str
+    target_version: str | None = None
+    projects_at_once: int = Field(ge=0)
+    remaining: int = Field(default=0, ge=0)
+    moving: list[RollMovingProject] = Field(default_factory=list)
+    pinned: list[RollPinnedProject] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    retired_sources: int = Field(default=0, ge=0)
+    updated_at_ms: int | None = None
 
 
 class DeploymentStatus(NebulaModel):
@@ -166,3 +239,5 @@ class DeploymentStatus(NebulaModel):
     detail: str
     # None distinguishes older hosts without an authoritative process inventory.
     processes: list[ProcessDeploymentStatus] | None = None
+    # The in-Core project roller's last pass; None where no roller runs.
+    roll: RollStatus | None = None

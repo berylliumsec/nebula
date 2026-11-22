@@ -14,6 +14,7 @@ const initial: MemorySettings = {
 function fixture(atLimit = false, observed: Partial<MemorySettings> = {}) {
   let saved = {...structuredClone(initial), ...observed};
   const request = vi.fn(async (path: string, options?: RequestInit) => {
+    if (path.startsWith("memory-budgets/host-commands")) return {settings: {revision: 1, running_at_once: 8}, running_count: 0, running: [], queued: []};
     if (path === "memory-budgets/jobs") return {items: atLimit ? [{id: "queued", resource_kind: "fixture", resource_id: "older-job", state: "queued", application_state: "not_started", snapshot: {limits: initial.policy.default_job, policy_revision: 1}, evidence: null}] : [], at_limit: atLimit, display_limit: 1};
     if (options?.method === "PUT") {const body = JSON.parse(String(options.body)); if (body.expected_revision !== saved.revision) throw new Error("409: budgets changed; reload"); saved = {...saved, revision: saved.revision + 1, policy: body.policy};}
     return structuredClone(saved);

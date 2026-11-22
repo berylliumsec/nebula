@@ -18,7 +18,14 @@ from typing import Any, ClassVar, Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 
 def utc_now() -> datetime:
@@ -363,11 +370,12 @@ class ChatBackend(StringEnum):
 class HarnessKind(StringEnum):
     CODEX_APP_SERVER = "codex_app_server"
     GROK_ACP = "grok_acp"
-    # Retained only so historical profiles and activity records remain readable.
     CLAUDE_AGENT_SDK = "claude_agent_sdk"
 
 
-PROVIDED_HARNESS_KINDS = frozenset({HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP})
+PROVIDED_HARNESS_KINDS = frozenset(
+    {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP, HarnessKind.CLAUDE_AGENT_SDK}
+)
 
 
 class HarnessConnectionMode(StringEnum):
@@ -560,6 +568,7 @@ class AutomationSessionStatus(StringEnum):
 
 class CommandExecutionStatus(StringEnum):
     WAITING_APPROVAL = "waiting_approval"
+    QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -622,6 +631,9 @@ class Entity(NebulaModel):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
     revision: int = Field(default=1, ge=1)
+    # Keys a newer release stored that this release does not define, set
+    # aside by ``stored_entities.decode_stored`` and restored on rewrite.
+    _stored_unknown: tuple[Any, ...] = PrivateAttr(default=())
 
     @field_validator("created_at", "updated_at")
     @classmethod
@@ -861,6 +873,26 @@ class AssistantDefaults(NebulaModel):
     allow_agent_messaging: bool = True
 
 
+WORK_STAGE_KEY_PATTERN = r"^[a-z0-9][a-z0-9_-]{0,63}$"
+MAX_WORK_STAGES = 12
+
+
+class WorkStage(NebulaModel):
+    """One project-defined Work stage; the key links items, the label is shown."""
+
+    key: str = Field(pattern=WORK_STAGE_KEY_PATTERN)
+    label: str = Field(min_length=1, max_length=60)
+    flag_when_empty: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def label_must_have_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("stage label must not be blank")
+        return value
+
+
 class Engagement(Entity):
     entity_kind: ClassVar[str] = "engagements"
     name: str = Field(min_length=1, max_length=300)
@@ -871,6 +903,9 @@ class Engagement(Entity):
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     work_enabled: bool = True
+    work_stages: list[WorkStage] = Field(
+        default_factory=list, max_length=MAX_WORK_STAGES
+    )
     parent_engagement_id: str | None = None
     workspace_path: str | None = Field(default=None, max_length=4096)
     assistant_defaults: AssistantDefaults = Field(default_factory=AssistantDefaults)
@@ -885,6 +920,14 @@ class Engagement(Entity):
         if not candidate.is_absolute() or candidate == Path("/"):
             raise ValueError("workspace_path must be an absolute non-root folder")
         return str(candidate)
+
+    @field_validator("work_stages")
+    @classmethod
+    def work_stage_keys_must_be_unique(cls, value: list[WorkStage]) -> list[WorkStage]:
+        keys = [stage.key for stage in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Work stage keys must be unique in a project")
+        return value
 
 
 class WorkItem(Entity):
@@ -901,6 +944,7 @@ class WorkItem(Entity):
     assignee_session_id: str | None = Field(default=None, max_length=200)
     source_kind: Literal["chat", "mission", "manual", "import"] = "manual"
     source_id: str | None = Field(default=None, max_length=200)
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     last_update_at: datetime | None = None
 
 
@@ -914,6 +958,7 @@ class WorkUpdate(Entity):
     next_step: str | None = Field(default=None, max_length=2_000)
     blocker: str | None = Field(default=None, max_length=2_000)
     status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"]
+    stage: str | None = Field(default=None, pattern=WORK_STAGE_KEY_PATTERN)
     actor_kind: Literal["operator", "agent", "import"]
     actor_id: str = Field(min_length=1, max_length=200)
     source_session_id: str | None = Field(default=None, max_length=200)
@@ -929,7 +974,9 @@ class AutomationProjectPolicy(Entity):
     execution_mode: Literal["docker", "host"] = "docker"
     host_access_acknowledged: bool = False
     engagement_id: str
-    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    # New projects run commands without approval prompts; a project can still
+    # choose on_boundary or always in its execution policy.
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.NEVER
     # Narrow project opt-in for the visible browser and Security Tools MCP only.
     # Command, mission, and other approval policies remain independent.
     browser_security_allow_all: bool = False
@@ -3592,6 +3639,38 @@ DEFAULT_GOAL_RESUME_INSTRUCTION = (
     "operator message."
 )
 
+GOAL_START_INSTRUCTION = (
+    "Begin work on the active conversation goal now. Review the goal "
+    "objective and completion criteria provided by Core, then make "
+    "concrete progress without waiting for another operator message."
+)
+"""What Core asks when an operator starts a goal."""
+
+GOAL_CONTINUE_INSTRUCTION = (
+    "Review the active conversation goal and its completion criteria. Is the "
+    "goal complete? If it is complete, call the offered goal_complete tool with a final summary "
+    "and concrete evidence, then give the operator a concise handoff. If it is "
+    "not complete, continue making concrete progress toward the goal now. Do "
+    "not stop merely to report status."
+)
+"""What Core asks when a running goal continues without an operator message."""
+
+SUBAGENT_REPORTS_INSTRUCTION = (
+    "Subagent reports are ready. Continue the conversation goal."
+)
+"""What Core asks when a goal's subagents have reported."""
+
+CORE_GOAL_INSTRUCTIONS = frozenset(
+    {
+        GOAL_START_INSTRUCTION,
+        GOAL_CONTINUE_INSTRUCTION,
+        SUBAGENT_REPORTS_INSTRUCTION,
+        DEFAULT_GOAL_RESUME_INSTRUCTION,
+    }
+)
+"""Fixed texts Core sends as a goal's user message. They state no project fact
+and are not the operator's words."""
+
 
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
@@ -3606,6 +3685,9 @@ class ChatGoal(Entity):
         default=DEFAULT_GOAL_RESUME_INSTRUCTION, min_length=1, max_length=4_000
     )
     current_step: int = Field(default=0, ge=0)
+    # The plan entry the agent last reported working on (0-based), separate
+    # from ``current_step``, which counts turns. None until it is reported.
+    active_plan_index: int | None = Field(default=None, ge=0)
     status: ChatGoalStatus = ChatGoalStatus.DRAFT
     token_budget: int | None = Field(default=None, ge=1)
     time_budget_seconds: int | None = Field(default=None, ge=1)
@@ -3641,6 +3723,10 @@ class ChatGoal(Entity):
         # by ``step_budget``; the plan is guidance and may be shorter than that.
         if self.status == ChatGoalStatus.BLOCKED and not self.blocked_reason:
             raise ValueError("blocked goals require a reason")
+        if self.active_plan_index is not None and self.active_plan_index >= len(
+            self.plan
+        ):
+            raise ValueError("active_plan_index must name an entry of the plan")
         if self.status == ChatGoalStatus.COMPLETED and (
             not self.completion_summary or not self.completion_evidence
         ):
@@ -3794,6 +3880,63 @@ class ButlerAuthorityPolicy(Entity):
         if len(self.delegate_actions) != len(set(self.delegate_actions)):
             raise ValueError("delegated actions must be unique")
         return self
+
+
+class ProjectHoldGoal(NebulaModel):
+    goal_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+
+
+class ProjectHoldTurn(NebulaModel):
+    turn_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    outcome: str = Field(min_length=1, max_length=500)
+
+
+class ProjectHoldRestore(NebulaModel):
+    goal_id: str = Field(min_length=1, max_length=200)
+    outcome: str = Field(min_length=1, max_length=500)
+
+
+class ProjectHold(Entity):
+    """Core's durable stop of all chat work in one project.
+
+    While a hold is ``holding`` or ``held`` no chat turn starts in the project
+    from any source, and the goals it paused cannot be resumed by anyone but
+    its release. ``holding`` lets running turns finish for ``grace_seconds``;
+    after that Core stops what is left and the hold becomes ``held`` once no
+    turn is active. Release resumes exactly the goals it paused.
+
+    A chat hold sets ``session_id``: it covers that chat and the subagent and
+    goal-child chats under it, and the rest of the project keeps working.
+    Holds placed together share a ``batch_id`` so they release together.
+    """
+
+    entity_kind: ClassVar[str] = "project_holds"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    session_id: str | None = Field(default=None, max_length=200)
+    batch_id: str | None = Field(default=None, max_length=200)
+    status: Literal["holding", "held", "released"] = "holding"
+    reason: str = Field(min_length=1, max_length=500)
+    deployment_id: str | None = Field(default=None, max_length=200)
+    grace_seconds: int = Field(default=180, ge=0, le=3600)
+    # When Core starts stopping turns that are still running.
+    grace_until: datetime | None = None
+    held_at: datetime | None = None
+    released_at: datetime | None = None
+    release_reason: str | None = Field(default=None, max_length=500)
+    paused_goals: list[ProjectHoldGoal] = Field(default_factory=list, max_length=1000)
+    interrupted_turns: list[ProjectHoldTurn] = Field(
+        default_factory=list, max_length=5000
+    )
+    stopped_subagents: list[str] = Field(default_factory=list, max_length=5000)
+    restored_goals: list[ProjectHoldRestore] = Field(
+        default_factory=list, max_length=1000
+    )
+
+    @property
+    def active(self) -> bool:
+        return self.status != "released"
 
 
 class ButlerAction(Entity):
@@ -5252,6 +5395,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,
+    ProjectHold,
     ButlerAction,
     ButlerIssueDestination,
     ButlerIssueScan,

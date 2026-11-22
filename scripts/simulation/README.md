@@ -19,7 +19,93 @@ the cutover boundary.
 The service token stays in the host's private environment file; these source
 files contain no token value.
 
-After a successful promotion, the deployer retains the newly verified
+## Hold the public listener across host swaps
+
+Without a socket unit, Core's listener closes when the supervisor stops and
+clients are refused until the next generation binds it (84 s in rehearsal E1
+of `docs/design/rolling-core-releases.md`). With `nebula-core.socket`, systemd
+holds `127.0.0.1:8000` and connections wait in the kernel queue instead.
+
+Install the files in `scripts/simulation/systemd/` for the `simulation` user:
+
+1. Copy `nebula-core.socket` to `~/.config/systemd/user/` and
+   `nebula-core.service.d/10-socket.conf` to
+   `~/.config/systemd/user/nebula-core.service.d/`.
+2. Add `--listen-fd 3` to the `serve` arguments in the service's `ExecStart`.
+   `mercury-run` and the onefile bootloader sit between systemd and Core, so
+   `LISTEN_PID` names a parent and Core needs the descriptor explicitly.
+   `--host 127.0.0.1 --port 8000` must still match the socket exactly; Core
+   refuses any other inherited socket.
+3. The Core release must already support `serve --listen-fd`. Run
+   `systemctl --user daemon-reload`, stop `nebula-core.service`, start
+   `nebula-core.socket`, then start the service. This one restart is not
+   held; every later host activation is.
+
+On every host activation the deployer reads the unit configuration and, when
+the socket is configured, requires `Requires=nebula-core.socket`, exactly
+`ListenStream=127.0.0.1:8000`, `Accept=no`, `--listen-fd 3` and a
+`TimeoutStopSec` above 40 s. A connection that arrives while the service is
+stopped starts it from `current`, so the deployer selects the new release
+*before* it stops the old supervisor (journal state `release_selected`), and
+the old process's exit is still proven before readiness is read. A failed
+start that trips the socket's start limit fails the socket too; the deployer
+resets and restarts it, and readback reports `socket_listening`.
+
+Before any stop the deployer reads `GET /api/v1/deployment/operations` and
+waits up to `HOST_OPERATION_WAIT_SECONDS` (120 s) for the live supervisor's
+in-flight deployment operations, which its stop would otherwise wait for past
+the stop grace. It refuses the swap, leaving the old host running, if one is
+still in flight. A supervisor without that route relays the read to its API
+worker (503 "reconnecting" in practice); that answer, or 404/405, means the
+listing is unsupported and the stop is not waited for, as before. 401/403 and
+an unreachable Core refuse the swap.
+
+## Build ahead, and see where the time goes
+
+`python3 -m nebula_deployer prebuild` does what `prepare` does, so that a later
+`promote` or `cycle` finds the immutable release already built and only
+verifies it. It is meant for a timer, so waiting states are results rather than
+failures: it reports `waiting_for_ci` while main CI evidence is still running,
+missing or failed, `skipped` while a deployment journal is unfinished or another
+deployer run holds the lock, and `current` when main is already live. It never
+promotes, never runs local tests and leaves Core untouched. A `promote` or
+`cycle` that starts while a prebuild holds the deploy lock waits for it, up to
+`PREBUILD_LOCK_WAIT_SECONDS` (30 min); any other busy holder is still refused
+at once. A prebuild sets `pending`, so run it only on a host where promotion is
+a manual step. An example user timer:
+
+```ini
+# ~/.config/systemd/user/nebula-prebuild.service
+[Service]
+Type=oneshot
+WorkingDirectory=/home/simulation/.local/bin
+ExecStart=/usr/bin/python3 -m nebula_deployer prebuild
+
+# ~/.config/systemd/user/nebula-prebuild.timer
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+[Install]
+WantedBy=timers.target
+```
+
+Every `prepare` reports each step's duration on stderr as it ends (`prepare:
+core_build took 109.0s`), including the step a failed run stopped in, and keeps
+them under `timings` in the release's `simulation-acceptance.json`. A
+supervisor `promote` returns `timings` for staging, migration, host and API
+promotion, execution targeting and project handoffs. Host activation logs how
+long chat turns took to go quiet and records `stop_and_switch_seconds` and
+`start_to_ready_seconds` in its journal.
+
+Backups are operator opt-in: `promote --backup` (or `cycle --backup`) takes a
+coherent rollback snapshot before a legacy release switch, or an online
+PostgreSQL dump (`rollback-backups/operator-pre-<commit>-<time>`) before a
+supervisor-mode promotion. Without `--backup` no backup is taken. A failed
+legacy promotion without a snapshot then restores the previous release's code
+and keeps the current data, and an older snapshot is dropped from the deployer
+state so it can never be restored over newer data.
+
+After a successful promotion that took a snapshot, the deployer retains the newly verified
 `rollback_backup` and removes older completed directories directly under
 `/srv/apple-sim/nebula/rollback-backups`. It checks every target's name, type,
 and mount boundary before deletion, and verifies that the retained directory is
@@ -33,25 +119,73 @@ Do not delete that state during an unverified recovery just to meet the normal
 one-snapshot count. Record the exception and resolve it after recovery is
 verified.
 
-`nebula_deployer.py prepare` runs its reviewed local test selection by default.
-For a deliberate CI-backed preparation, pass `--ci-run-id <run-id>` once for a
-one-commit candidate. For a candidate containing multiple first-parent commits
-after the live release, repeat the option once per commit, oldest to newest,
-such as `prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
+## Deploy a release in two steps
+
+A release that adds stored-entity fields declares
+`storage.entity-field-additions/v1`. Core refuses to start it while the
+execution target or any running worker lacks `storage.tolerant-entities/v1`
+(#1271): the new supervisor would refuse the API after the host swap. Deploy
+the first tolerant commit, let projects move to it and the older workers
+retire, then deploy main:
+
+```sh
+python3 -m nebula_deployer prepare --commit <first-tolerant-commit>
+python3 -m nebula_deployer promote
+# after deployment status shows only that version resident
+python3 -m nebula_deployer prepare
+python3 -m nebula_deployer promote
+```
+
+`--commit` accepts only a hexadecimal ID on `origin/main`'s first-parent
+history; it never builds a pull request's own branch commit.
+
+`nebula_deployer.py prepare` accepts CI evidence only; it never runs tests
+on this host. For every first-parent commit from the live release to
+`origin/main` it finds the newest successful `main` push run of
+`.github/workflows/ci.yml` and verifies it as below. A commit with no successful
+run (none yet, failed, or still running) stops preparation with the commit and
+reason. Each commit's selection is still validated against its own diff, and the
+union is recorded; selections repeated by later commits need no extra review,
+because CI already ran each commit's own selection. To name runs explicitly, pass
+`--ci-run-id <run-id>` once per commit, oldest to newest, such as
+`prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
 requires exactly one distinct successful `main` push run from the active
 `.github/workflows/ci.yml` for every commit in the complete
 live-baseline-to-head chain. Each run must match that exact commit and its first
 parent. The deployer verifies each run's selection artifact SHA-256, validates
 the committed selection against that commit's diff, and requires all selected
-jobs to have completed successfully. The immutable acceptance record retains
+jobs to have completed successfully. Each required job is a job family: the
+exact job name, or GitHub's matrix instances named `<job> (<matrix values>)`.
+A family needs at least one job, and every job in it must have completed with
+`success`; a failed, cancelled, or unfinished instance fails closed. A bare
+prefix never matches, so `python (3.12)` stays separate from `python (3.11)`.
+A selected terminal client test therefore requires every `terminal-client`
+matrix job, whatever runners and Python versions the matrix lists. Acceptance
+records key the family as `terminal-client`; records written earlier with the
+six exact Ubuntu/macOS and Python 3.11–3.13 job names still validate, and no
+other substitute does. The immutable acceptance record retains
 the ordered per-commit receipts and selected-job conclusions; the reviewed
 selection union must cover the entire first-parent range. Missing, repeated,
-reordered, or mismatched runs fail closed. This mode skips local test collection
-and test execution only; dependency setup, lint/diagnostic checks, builds,
-release hashes, and existing staging/promotion guards still run. It fails closed
-when a per-commit CI selection contains Playwright entries because the push CI
-workflow does not run those entries. Runs from pull requests or workflow
-dispatches are not accepted.
+reordered, or mismatched runs fail closed. Dependency setup, lint/diagnostic checks, builds,
+release hashes, and existing staging/promotion guards still run. Push CI does
+not run Playwright entries, so a commit whose selection names them is accepted
+only with its merged pull request's successful `ci.yml` and
+`playwright-impact.yml` runs, which `prepare` discovers on the PR head. For a
+merge commit the head is its second parent. For a squash merge it is the head of
+the one PR GitHub records as merged into that commit, fetched from
+`refs/pull/<n>/head` if needed; that head must contain the squash commit's
+parent and have the identical tree, so it tested exactly what main received.
+Matrix jobs are matched to selected entries by GitHub's displayed job name, which
+is cut at 100 characters; entries that truncate to the same name each still need
+their own successful job. If that PR's own runs did not both succeed (for
+example, its CI refused a stale selection), the commit is proven instead by a
+successful `playwright-impact.yml` run dispatched on exactly that commit (push a
+branch at the commit and dispatch with the commit's selectors and a review
+reason). Its plan must equal the trusted selector's plan for the commit's
+committed selection, with no baseline, and every entry needs its own successful
+job; the receipt records it as `commit_playwright_evidence`, never as PR
+evidence. A Playwright-selected commit with neither stops preparation. Other pull
+request or workflow dispatch runs are not accepted.
 
 CI-only acceptance also requires the workflow files, local action definitions,
 and `scripts/test_selection.py` to match the original live baseline for every
@@ -68,10 +202,53 @@ ingress available. Execution migration is serial: prepare one target, hand off
 one project, verify its new owner and fencing token from fresh status, retire the
 now-ownerless source, and confirm that retirement before preparing another
 target. The foreground supervisor may retire a verified target for a project
-with no open chat. Pinned projects remain on their source runtime; uncertain
-handoffs remain journaled and stop further target preparation until reconciled.
+with no open chat. A source that has not handed off within
+`HANDOFF_GRACE_SECONDS` (180 s), including a pinned project or a source shared by
+several projects, is stopped with the journaled `evict_execution` operation.
+Core refuses to stop the API worker, a worker already on the deployment target,
+or an owner whose grant changed since the deployer journaled it. Expired-owner
+recovery settles the stopped worker's leftovers without replay and restores its
+projects on the target version. The deployer accepts that recovery only when
+the project's `recovery` status names a verified recovery that started at or
+after the exact source grant it journaled, with no blockers and a ready target.
+It then retires the unused target it prepared. A recovery onto an older
+version is handed off again under a new journal generation. One run polls until
+no project is left waiting, or until a wait has made no progress for the grace
+period plus `HANDOFF_RECOVERY_WAIT_SECONDS`. An interrupted command record no
+longer pins a project, because no process in the old worker still runs it.
+Uncertain handoffs remain journaled and stop further target preparation until
+reconciled.
 The accepted runtime manifest hashes every executable/UI asset and uses the
 build's reviewed compatibility metadata, including its migration-tree digest.
+
+Before stopping the foreground supervisor, `promote` checks every API and
+execution version in deployment status. When each is an exact commit that
+includes #1023 (workers wait out a supervisor replacement for host reads),
+running chat turns cross the restart and the deployer does not wait for
+projects to go idle. If any version is unknown or older, it still waits up to
+`HOST_QUIET_WAIT_SECONDS` for chat work to settle and refuses otherwise.
+
+When a version predates #1023 and the Core supports project holds (#1232),
+`promote` holds each busy project instead of waiting for it to settle, waits
+until no held project has chat work (up to the hold grace plus
+`PROJECT_HOLD_WAIT_SECONDS`), restarts the supervisor and then releases those
+holds, also when activation fails. `hold --reason <why> [--project <id>]...`
+and `release-holds` place and release holds for a stop or wind-down; every
+placed hold is saved in `project-holds.json` until Core confirms its release,
+and a host restart releases only the holds it placed.
+
+A deployment runs to completion without an operator restarting it. Core reads
+time out after 60 s and are asked again (up to four times), because deployment
+status lists every project and is slow while handoffs run. Waiting for the new
+host waits out a `degraded` status (the replaced API worker drains) within its
+bound. A project whose only handoff blockers are idle harness sessions that Core
+cannot restore is stopped at once instead of after `HANDOFF_GRACE_SECONDS`,
+because those sessions never hand off by themselves. Once every project runs the
+target, unowned execution workers of older versions are retired, so the next
+release is not held at "execution staged". Core confirms `target_execution`,
+`handoff`, `promote_api` and `rollback_code` with a bounded summary instead of
+the full deployment status, which outgrew the 64 KiB receipt and left those
+committed effects reported as uncertain.
 
 Foreground host activation is separately guarded from API and execution worker
 promotion. `activate-host` targets only the exact accepted pending candidate
@@ -135,6 +312,19 @@ Run the same checks without changing deployer state by adding `--dry-run`. It
 returns the proposed classification, verified receipts, live readback, uncertain
 effects to preserve, and state alignment. Rerun without `--dry-run` only after
 reviewing that summary.
+
+If a later verified manual host release superseded a promotion and an attempted
+code rollback stopped before host activation, use
+`reconcile-unactivated-supersession --deployment-id <rollback-journal-id> --dry-run`.
+This command accepts only a promotion with confirmed stage and migration receipts
+nested inside a rollback with a confirmed stage receipt. Both host activations
+must be merely requested. It checks the current release's accepted or reconciled
+identity, live service process, authenticated Core health and runtime inventory,
+and the exact database migration head. It preserves both journals and all three
+Core receipts in deployment history, then clears only the stale pending candidate
+and aligns host state. Review the dry run before repeating without `--dry-run`.
+Any extra operation or live candidate runtime blocks reconciliation; never edit
+the journal to make it match.
 
 New hosts expose authenticated operation reconciliation at
 `POST /api/v1/deployment/operations/{operation_id}/reconcile`. It never repeats

@@ -1,12 +1,13 @@
 """Management envelopes keep auth, replay and post-response shutdown on the host."""
 
 import asyncio
+import json
 
 import httpx
 import pytest
 from sqlalchemy import func, select
 
-from nebula.v3.database import DeploymentOperationRow
+from nebula.v3.database import DatabaseBusyError, DeploymentOperationRow
 from nebula.v3.process_identity import same_process
 from nebula.v3.runtime_coordination import CoordinationConflict
 from tests.v3.test_release_store import bundle
@@ -129,6 +130,42 @@ async def test_operation_finishes_its_receipt_when_a_stopping_host_cancels_the_r
     async with recovery.managed.database.session() as session:
         row = await session.get(DeploymentOperationRow, "stage-during-drain")
     assert row is not None and row.state == "succeeded"
+
+
+async def test_running_listing_names_this_generations_inflight_operations(
+    recovery, tmp_path
+):
+    # The deployer reads this before a host swap: the supervisor's stop joins
+    # these operations, so a swap must not begin while one runs.
+    assert (await recovery.client.get(PATH)).status_code == 401
+    assert (await recovery.client.get(PATH, headers=AUTH)).json() == {"running": []}
+    source = tmp_path / "listed-source"
+    digest = bundle(source, version="listed")
+    original = recovery.root.stage
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def held_stage(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(*args, **kwargs)
+
+    recovery.root.stage = held_stage
+    body = {
+        "operation_id": "stage-listed",
+        "action": "stage",
+        "parameters": {"source": str(source), "manifest_sha256": digest},
+    }
+    request = asyncio.create_task(recovery.client.post(PATH, headers=AUTH, json=body))
+    await asyncio.wait_for(entered.wait(), 10)
+    listing = await recovery.client.get(PATH, headers=AUTH)
+    assert listing.status_code == 200
+    assert listing.headers["Cache-Control"] == "private, no-store"
+    assert listing.json() == {
+        "running": [{"operation_id": "stage-listed", "action": "stage"}]
+    }
+    release.set()
+    assert (await request).json()["state"] == "succeeded"
+    assert (await recovery.client.get(PATH, headers=AUTH)).json() == {"running": []}
 
 
 @pytest.mark.parametrize("refused", [False, True])
@@ -279,3 +316,118 @@ async def test_owned_project_refuses_real_shutdown_without_notifying_launcher(re
     assert result["error_type"] == "ShutdownBlocked"
     assert "admitted-project" in result["detail"]
     assert observed == [] and same_process(owner.pid, owner.process_birth)
+
+
+async def test_operations_on_a_busy_host_confirm_with_a_bounded_receipt(
+    recovery, monkeypatch
+):
+    """A host with hundreds of projects has a status far over the 64 KiB
+    receipt bound. The effect committed, so the receipt must confirm it
+    with a bounded summary instead of reporting it uncertain."""
+    from nebula.v3.deployment_protocol import ProjectDeploymentStatus
+
+    coordinator = recovery.root.coordinator
+    real_status = coordinator.status
+    targeted = []
+
+    async def big_status():
+        status = await real_status()
+        rows = [
+            ProjectDeploymentStatus(
+                project_id=f"project-{index:04d}",
+                runtime_id=f"runtime-{index:04d}",
+                runtime_version="v" * 40,
+                fencing_token=index,
+                blockers=["harness_sessions idle; its restoration is unavailable"],
+            )
+            for index in range(700)
+        ]
+        return status.model_copy(update={"projects": rows})
+
+    async def target_execution(version):
+        targeted.append(version)
+
+    monkeypatch.setattr(coordinator, "status", big_status)
+    monkeypatch.setattr(coordinator, "target_execution", target_execution)
+    assert len((await big_status()).model_dump_json().encode()) > 64 * 1024
+
+    response = await recovery.client.post(
+        PATH,
+        headers=AUTH,
+        json={
+            "operation_id": "target-busy-host",
+            "action": "target_execution",
+            "parameters": {"version": "busy-release"},
+        },
+    )
+
+    receipt = response.json()
+    assert targeted == ["busy-release"]
+    assert receipt["state"] == "succeeded", receipt
+    assert set(receipt["result"]) == {
+        "protocol",
+        "revision",
+        "api_version",
+        "target_execution_version",
+        "resident_versions",
+        "health",
+    }
+
+
+async def test_handoff_receipt_carries_only_its_project_row(recovery, monkeypatch):
+    from nebula.v3.deployment_protocol import ProjectDeploymentStatus
+
+    coordinator = recovery.root.coordinator
+    real_status = coordinator.status
+
+    async def status_with_projects():
+        status = await real_status()
+        rows = [
+            ProjectDeploymentStatus(
+                project_id=f"project-{index}",
+                runtime_id=f"runtime-{index}",
+                runtime_version="v1",
+                fencing_token=index,
+            )
+            for index in range(400)
+        ]
+        return status.model_copy(update={"projects": rows})
+
+    async def handoff(**_values):
+        return None
+
+    monkeypatch.setattr(coordinator, "status", status_with_projects)
+    monkeypatch.setattr(recovery.root, "request_project_handoff", handoff)
+    response = await recovery.client.post(
+        PATH,
+        headers=AUTH,
+        json={
+            "operation_id": "handoff-busy-host",
+            "action": "handoff",
+            "parameters": {
+                "project_id": "project-7",
+                "target_runtime_id": "runtime-new",
+            },
+        },
+    )
+    receipt = response.json()
+    assert receipt["state"] == "succeeded", receipt
+    assert receipt["result"]["project"]["project_id"] == "project-7"
+    assert "projects" not in receipt["result"]
+
+
+async def test_supervisor_answers_busy_database_with_a_retryable_503(recovery):
+    # Deployment status timed out its pool wait during live handoffs and the
+    # supervisor, with no handler for DatabaseBusyError, answered 500. The
+    # handler is called directly: replacing the coordinator would also feed
+    # the error to the supervisor's background loops that read status.
+    # The fixture's process only exits cleanly once its client has been used.
+    healthy = await recovery.client.get("/api/v1/deployment/status", headers=AUTH)
+    assert healthy.status_code == 200
+    handler = recovery.root.app.app.exception_handlers[DatabaseBusyError]
+    response = await handler(
+        None, DatabaseBusyError("Database connection capacity is busy")
+    )
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+    assert json.loads(response.body)["code"] == "database_busy"

@@ -3,6 +3,12 @@
 Only the supervisor sets the policy. Workers share its SQL ledger through a
 coordination pool; a project-scoped application pool cannot write these tables.
 An expired ownership lease never proves that a vendor call or tool has ended.
+
+High-priority work goes first. A high-priority request that does not fit
+records a ``waiting`` row (its ``created_at_ms`` is refreshed on every poll).
+A normal request waits whenever taking its share would leave a fresh waiter
+without room, so the next free slot goes to the high-priority work.
+Nothing held is taken back and no capacity is reserved in advance.
 """
 
 from __future__ import annotations
@@ -24,6 +30,9 @@ from .runtime_coordination import (
 )
 
 CAPACITY_DIMENSIONS = frozenset({"provider", "background", "tool", "cpu"})
+# A high-priority waiter not seen for this long (its process died or gave up)
+# no longer holds normal work back, and is removed on the next acquisition.
+WAITER_TTL_MS = 10_000
 
 
 def _units(values: Mapping[str, int]) -> dict[str, int]:
@@ -111,7 +120,7 @@ class RuntimeCapacity:
             return {"revision": row.revision, "limits": dict(row.limits)}
 
     async def acquire(
-        self, lease: ProjectLease, request_key: str, demands
+        self, lease: ProjectLease, request_key: str, demands, *, high: bool = False
     ) -> CapacityReservation | None:
         demands = _units(demands)
         if not isinstance(request_key, str) or not 1 <= len(request_key) <= 200:
@@ -128,6 +137,10 @@ class RuntimeCapacity:
                     RuntimeCapacityReservationRow.request_key == request_key,
                 )
             )
+            if existing is not None and existing.state == "waiting":
+                waiting, existing = existing, None
+            else:
+                waiting = None
             if existing is not None:
                 if existing.demands != demands:
                     raise CoordinationConflict(
@@ -156,11 +169,42 @@ class RuntimeCapacity:
             ):
                 for name, value in held.demands.items():
                     used[name] = used.get(name, 0) + value
-            if any(
-                used[name] + value > policy.limits[name]
+            now = await self.coordination._clock_ms(session)
+            pending = await self._high_pending(session, now, exclude=waiting)
+            fits = all(
+                used[name] + value <= policy.limits[name]
+                for name, value in demands.items()
+            )
+            if not high and any(
+                pending.get(name, 0)
+                and used[name] + pending[name] + value > policy.limits[name]
                 for name, value in demands.items()
             ):
                 return None
+            if not fits:
+                if high:
+                    if waiting is None:
+                        session.add(
+                            RuntimeCapacityReservationRow(
+                                id=str(uuid4()),
+                                runtime_id=lease.runtime_id,
+                                project_id=lease.project_id,
+                                fencing_token=lease.fencing_token,
+                                request_key=request_key,
+                                demands=demands,
+                                state="waiting",
+                                created_at_ms=now,
+                            )
+                        )
+                    else:
+                        waiting.demands, waiting.created_at_ms = demands, now
+                return None
+            if waiting is not None:
+                waiting.demands, waiting.state = demands, "held"
+                waiting.created_at_ms = now
+                await session.flush()
+                await self.coordination._check(session, lease, lock=False)
+                return _reservation(waiting)
             row = RuntimeCapacityReservationRow(
                 id=str(uuid4()),
                 runtime_id=lease.runtime_id,
@@ -169,12 +213,46 @@ class RuntimeCapacity:
                 request_key=request_key,
                 demands=demands,
                 state="held",
-                created_at_ms=await self.coordination._clock_ms(session),
+                created_at_ms=now,
             )
             session.add(row)
             await session.flush()
             await self.coordination._check(session, lease, lock=False)
             return _reservation(row)
+
+    async def _high_pending(self, session, now, *, exclude=None):
+        """Units fresh high-priority waiters need, per dimension; prune stale ones."""
+
+        pending: dict[str, int] = {}
+        for waiter in await session.scalars(
+            select(RuntimeCapacityReservationRow).where(
+                RuntimeCapacityReservationRow.state == "waiting"
+            )
+        ):
+            if waiter is exclude:
+                continue
+            if now - waiter.created_at_ms > WAITER_TTL_MS:
+                await session.delete(waiter)
+                continue
+            for name, value in waiter.demands.items():
+                pending[name] = pending.get(name, 0) + value
+        return pending
+
+    async def withdraw(self, lease: ProjectLease, request_key: str) -> None:
+        """Remove this request's high-priority waiter once it stops waiting."""
+
+        async with self._write() as session:
+            row = await session.scalar(
+                select(RuntimeCapacityReservationRow).where(
+                    RuntimeCapacityReservationRow.runtime_id == lease.runtime_id,
+                    RuntimeCapacityReservationRow.project_id == lease.project_id,
+                    RuntimeCapacityReservationRow.fencing_token == lease.fencing_token,
+                    RuntimeCapacityReservationRow.request_key == request_key,
+                    RuntimeCapacityReservationRow.state == "waiting",
+                )
+            )
+            if row is not None:
+                await session.delete(row)
 
     async def release(self, reservation: CapacityReservation):
         # A stale owner may acknowledge its own effect has ended. It cannot
@@ -231,6 +309,7 @@ class RuntimeCapacity:
         *,
         interval=0.25,
         on_wait=None,
+        high: bool = False,
     ):
         if interval < 0.01 or interval > 5:
             raise ValueError("Capacity polling must remain bounded")
@@ -240,7 +319,11 @@ class RuntimeCapacity:
             # SQL commits, so a lost result cannot leak a known-idle reservation.
             while acquired is None:
                 # diagnostic-expected: this acquisition is shielded and drained below, releasing any late reservation.
-                task = asyncio.create_task(self.acquire(lease, request_key, demands))
+                task = asyncio.create_task(
+                    self.acquire(
+                        lease, request_key, demands, **({"high": True} if high else {})
+                    )
+                )
                 try:
                     acquired = await asyncio.shield(task)
                 except BaseException:
@@ -261,3 +344,5 @@ class RuntimeCapacity:
         finally:
             if acquired is not None:
                 await finish_cleanup(self.release(acquired))
+            elif high:
+                await finish_cleanup(self.withdraw(lease, request_key))

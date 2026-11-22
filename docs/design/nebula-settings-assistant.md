@@ -65,6 +65,23 @@ acknowledgement; a memory failure never authorizes automatic retry, a larger
 budget or goal resume. See [Compute memory budgets](../MEMORY_BUDGETS.md) for
 precedence, units, scope and runner dependencies.
 
+Host commands are a host-wide Settings section under Memory budgets (catalog
+entry `settings.host-commands`, target `host-command-settings`). Commands from
+every project share one Core queue, and each running command holds its memory
+limit until it and anything it started exit. The operator sets "Running at once"
+(1–64); commands beyond it wait in line, and projects with fewer running commands
+go first. The section lists running, detached and queued commands with project,
+chat, elapsed or waited time and memory; each row cancels a queued command or
+stops a running or detached one. A run_command tool card shows the same Core
+state: "Waiting for Host capacity · 3rd in line" with a cancel control, running
+time and memory with a stop control, or an exited command whose detached process
+still holds capacity. Saving the limit is revision-checked and is reported saved
+only after Core's read-back matches; a stale revision is a conflict. A command
+cancelled while queued never started, and its result says so. The settings
+assistant finds this section through the catalog; typed Butler read, limit and
+cancel actions for the queue do not exist yet. See
+[Host command queue](host-command-queue.md).
+
 Local search has one persistent `web_search_service` entry in the aggregate job
 budget, with no per-query or additional runtime-reserve charge. Butler reports
 its frozen effective policy and observed kernel evidence, including failed or
@@ -133,6 +150,7 @@ Settings assistant and the complete destination catalog.
 | Explain a Nebula problem | A question receives an answer grounded in the selected project's effective mode and linked workspace when those facts matter; it does not infer operator intent from an automatically stored Docker default and distinguishes future policy from existing frozen command sessions | Core project and automation policy; model owns explanation | Tool unit, provider and harness boundary, real Core model turn |
 | Help resolve a problem | A suggested Settings destination opens the same visible lens as search; a mode change still requires an explicit request and Core's Host access acknowledgment field | Shared setting catalog, shell lens, Core policy | Component, browser, real Core and LAN |
 | Check project work | The selected project's assistant chats and missions are listed with bounded current status and exact targets. In Workbench conversations, chats Butler creates appear below Butler; older recovery chats use their linked Core goal as ownership evidence. Search reveals matching children, and a selected child remains open after reload | Core sessions, goal metadata, turns, queues and runs; URL for selection | Tool unit, component, browser and real Core |
+| Define Work stages | Settings assistant **Work stages** opens the selected project's Work board stage editor. The operator names, orders, flags and removes stages; Save sends the full list with the project revision and reloads projects from Core; a conflict asks to reopen. A subproject without its own stages uses its nearest parent's; its board says whose, and saving there gives it its own list. A parent's Work page counts its subprojects per stage under Subprojects by stage, and selecting a stage lists the subprojects that did or did not reach it. Group: Stage shows one column per stage (plus No stage and Other stage when used) and each item's Stage field saves at the item revision. All projects shows each project's stage cells, gaps and Missing a stage / Blocked filters. Butler reads `nebula.work.work_stages` and changes them with `nebula.work.set_work_stages`; agent Work tools and imports accept a stage key | Core project `work_stages` and item `stage`; URL owns grouping, focused stage and the open editor | Core unit, Butler capability, component and real Core |
 | Organize conversations | In the Workbench conversation list, More actions can pin or flag one chat. Select conversations loads the full project chat list, then lets the operator select individual chats or all search matches and apply Archive, Restore, Pin, Unpin, a flag color, Clear flag, or Delete permanently. Deletion shows the exact selected count for confirmation. Core readback confirms each outcome, and failed chats remain selected for retry. These choices survive refresh because Core owns them. An archived Butler-created chat moves into Butler's own collapsed Archived section and remains searchable and restorable. The dedicated settings assistant can open this list and describe the selection workflow when asked for bulk chat actions, pinned chats, flagged chats, or archived Butler chats; it does not apply destructive actions for the operator | Core chat-session metadata and deletion; UI owns only temporary selection and expansion state | Core API, component, browser and real Core |
 | Edit a saved conversation message | Interactive Butler can page active message previews with `nebula.work.chat_messages`, then use `nebula.work.rewind_chat` with the selected user message ID and current chat revision after an explicit request. Core retracts that message and later replies in the same chat and reports the saved revision. A replacement is a separate `nebula.work.message_chat` action; Butler must verify that turn separately. Scheduled Butler cannot rewind. The Workbench edit control uses the same Core retraction path | Core transcript, chat revision and harness replay; URL selects the chat | Core API, Butler tool and real Core browser |
 | Export a saved conversation | Interactive Butler discovers `nebula.chats.export` for one listed main chat and passes its current revision. The requesting browser confirms sensitive transcript content, rereads the chat, fetches the complete active transcript through authenticated Core, verifies that the revision stayed stable, and starts a Markdown download using the chat menu's formatter. Butler receives only a short outcome, never the transcript bytes. Cancellation starts no download; scheduled Butler has no device export action | Core chat and messages; requesting browser owns confirmation and local download | Butler tool, component and production LAN browser |
@@ -202,6 +220,13 @@ profile is disabled. Health and quota reads can start that saved host program.
 Butler can preserve an existing program while renaming the profile; constrained
 Codex endpoint profiles can still use nonsecret Settings CRUD. Unrestricted
 permission mode remains operator-owned.
+
+Assistant harnesses offer Codex, Grok and Claude. **Add Claude** creates a
+managed Claude Agent SDK process; the CLI path is optional because the SDK
+bundles one. It signs in with the host's existing `claude` login (`/login`) or
+an API key credential. Claude profiles use managed approvals only, have no
+separate account home folder, and do not offer browser, computer-use or image
+generation capabilities.
 
 Follow-up preferences use `body.expected_revision` from the current project
 settings. Butler may preserve an existing cloud confirmation for the same backend
@@ -305,7 +330,9 @@ The dedicated assistant also has `nebula.work.catalog`, `nebula.work.overview`,
 `nebula.work.chat`, `nebula.work.mission`, `nebula.work.browser_sessions`, `nebula.work.start_chat`,
 `nebula.work.message_chat`, `nebula.work.stop_chat`,
 `nebula.work.start_mission`, `nebula.work.steer_mission`, and
-`nebula.work.stop_mission`. These typed tools are bound to the selected project
+`nebula.work.stop_mission`. With `nebula.work.browser_sessions` and
+`nebula.work.start_mission` Butler can start a scoped browser automation
+mission for the project. These typed tools are bound to the selected project
 by Core. They list targets and enabled runtimes before an action; they do not
 accept arbitrary API paths, workspace commands or cross-project target IDs.
 For the selected project's Work board, Butler discovers
@@ -407,6 +434,19 @@ For agent access, Butler reads `nebula.work.work_setting` before calling
 `nebula.work.set_work_setting` with the current project revision. The Core
 read-back confirms whether the selected project's built-in agent Work tools
 are enabled. Disabling them leaves existing items and check-ins visible.
+For Work stages, Butler reads `nebula.work.work_stages` (ordered key, label
+and flag-when-empty, plus the project revision; `effective_stages` and
+`inherited_from` report the nearest parent's stages that a subproject without
+its own uses) and replaces the project's own list with
+`nebula.work.set_work_stages` at that revision only after an explicit request;
+Core reads the saved list back. Saved stage keys never change, so items keep
+their stage; an item whose key is no longer listed shows under Other stage.
+Butler moves an item with the `stage` argument of `nebula.work.check_in_work_item`
+or `nebula.work.update_work_item` (null clears it). The settings assistant's
+**Work stages** entry and destination open the selected project's Work board with
+its stage editor (`/projects/{project_id}/work?stages=edit`); All projects
+shows each project's stages, flags a stage marked flag-when-empty that nothing
+has reached, and filters to Missing a stage or Blocked.
 For older check-ins, Butler pages `nebula.work.work_updates` by item and reads
 `nebula.work.work_update` for exact summary, next step, or blocker text in
 bounded chunks. The item and update must belong to the selected project.
@@ -777,6 +817,10 @@ A memory-admission or readiness refusal remains visible; an explicit retry uses
 the same owner and never falls back to an unrestricted local launch. Image
 download/build remains unavailable without a verified daemon-side memory runner;
 inspect and use only a fully verified cached image in that environment.
+Host-mode commands need the protected local memory runner. When the Memory
+budgets `local` environment reports unsupported, tell the operator to run
+`sudo systemctl enable --now nebula-memory-runner@<user>` on the Core host;
+Butler cannot install or start it, and must not suggest the unmanaged override.
 
 The focused test selection must cover the capability catalog, provider and
 harness tool paths, Core authorization and read-back, shell visibility, settings
@@ -1160,6 +1204,223 @@ conversation. Reloading preserves the same case and investigation, and restartin
 Core reattaches to existing investigation turns rather than duplicating work.
 
 
+## Projects paused for a Core update
+
+A Core update can hold a project (`ProjectHold`; see
+[Project holds](project-holds.md)). While a project is held, the workspace
+shows "Pausing work in this project" while running responses use their grace
+period, then "Work in this project is paused". No chat work starts in a held
+project: Send is disabled with the draft kept, goals the hold paused read
+"Goal paused by update · resumes automatically" and have no Resume control,
+and queued messages, subagent reports and schedules wait. Nothing is lost or
+failed. Releasing the hold resumes exactly the goals it paused; goals that were
+paused before stay paused.
+
+When an operator asks why work stopped, or why Send or Resume is unavailable,
+explain the hold and that it ends on its own when the update finishes. The
+banner's **Release** control (an icon button at phone width) confirms first and
+should be suggested only when the update that placed the hold is no longer
+running. This project-wide hold has no Settings destination; the deployer and
+the hold API place it. Butler can place or release one only when the operator
+asks (`nebula.work.hold_project`, `nebula.work.release_project`). To set
+current research aside while the project keeps working, hold chats instead
+(see "Holding chats when priorities shift").
+
+## Butler mode
+
+**Butler mode** (route `/butler`) is the one place for Butler: talking to it,
+seeing every running chat across projects and what needs you, and Butler's
+oversight, memory and settings. The
+**Butler** launcher in the top bar opens Butler mode (the iPhone app keeps its
+docked Butler); the small panel's **Open Butler mode** button and asking Butler
+to "open Butler mode" do too. **Esc** or **Exit Butler mode** returns to the page
+the operator came from. There is no separate floating Butler panel on the web or
+desktop.
+
+Butler's threads stay on the left. The top bar's sections switch the right
+side: **Board** (the status board), **Code & files**, **Oversight** (incidents,
+authority, watched goals, decisions and resources; `?section=oversight`),
+**Memory** and **Settings** (Butler's model, effort, cyber access, subagents,
+Voice timeout, appearance, and "find a setting or place"; `?section=settings`).
+Oversight, Memory and Settings follow the project chosen in their **Project**
+picker. Links to Butler settings or oversight from elsewhere open these
+sections; while the small panel is open they open inside it instead. On a phone
+the sections are **Board**, **Threads**, **Oversight** and **More** (Code &
+files, Memory, Settings, All projects, Open full Nebula). **Start Butler Voice**
+is in the top bar, next to **All projects**, which opens the Projects page
+(`/projects`): every project's Work status and, where projects define them,
+their stage cells and Missing a stage filter.
+
+The rail's **Projects** picker holds each project's one ongoing Butler
+conversation (the same conversation the small panel shows), with its request
+cards for uploads, credentials, Library adds and linked folders. The picker is
+searchable: typing filters projects by every word of their name, projects
+whose chats need the operator or are working stay under **Active** with their
+counts above **Quiet**, ↑/↓ move, Enter opens the project's thread and Esc
+closes the list. It renders the first 80 matches and says to keep typing for
+more. Parallel
+**Threads** follow below. Text added to Butler from the selection menu while in
+Butler mode joins the composer's **selected context** and is sent with the next
+message; remove an item with its ×.
+
+The **status board** reads one Core-owned list of goal chats across all
+projects that are not archived; chats without a goal are not listed. Each
+project has three sections: **Active** (running goals, including chats
+working or needing the operator, which come first), **Idle** (paused, blocked
+or proposed by Butler) and **Completed** (completed or cancelled, collapsed at
+first). Its header shows "N goals" and each section's count. Butler's own
+conversations, side chats, subagent chats and archived chats are never listed.
+**Group** switches between **Project** and **Status** (the three sections
+across projects). The board's search sits beside
+**Group**: it filters loaded cards as the operator types, says how many chats in
+how many projects match, then Core's search (chat titles, models and project
+names) fills in chats the board had not loaded. Esc or × clears it. The grouping
+and open sections are remembered on this device only.
+
+Each card shows the chat's status, project, model, how long its current
+response has run, one line of what it is doing or waiting for, and "Started by
+Butler" or "Proposed by Butler" when Butler created it. Section dots: Active
+solid blue, Idle a hollow amber ring, Completed green (grey when cancelled). Clicking a card opens
+its brief (below); ↑ and ↓ move between chats while a brief is open and Esc
+returns to the board. In the brief, **Approve** and **Deny** answer a pending
+approval with the exact request shown; **Stop** stops a working chat's response
+after confirmation; **Pause goal** and **Resume goal** change its goal; **Ask
+Butler about this** quotes that chat into the open idle thread of its project,
+or starts a new thread there (if that thread is still answering, it switches
+to **Reply in this thread** when Butler finishes, unless you chose); and
+**Open full chat** shows the transcript in a pop-up over Butler mode (scroll
+it, then click outside or press Esc to return; **Open in workbench** leaves for
+the full chat). The pop-up reads the newest messages and older ones on request,
+and re-reads only while the chat runs. A decision or stop is reported only
+after the next board read from Core shows the change.
+
+Click a board card in Butler mode to open its **brief**, which Core serves as
+`GET /api/v1/butler/sessions/{session_id}/brief` (Butler's own conversations,
+side chats and archived chats or projects are not found). The brief shows the
+chat's state, model, turn count, billed cost when the route reported it,
+subagent count, its goal with the plan step the agent is on, what needs the
+operator (for an approval, the exact command), the chat's turns as one line
+each and its 50 most recently changed files. Each turn's line is derived
+without a model: the first sentence of its answer, else a phrase from its
+tool calls (for example "Ran 3 commands · edited fuzz.c"), else its failure.
+Each turn also shows command, edit, approval and tool counts and the files it
+changed. Turns come 30 at a time (at most 100), newest last; `before` and
+`older_before` page back. Files come from Core's workspace observations and
+from the paths of file-editing tool calls, so a runtime that reports neither
+shows none. The active plan step is reported by the agent: `report_progress`
+takes an optional 0-based `plan_index`, and the goal's
+`PATCH /api/v1/chat/sessions/{session_id}/goal` accepts `active_plan_index`
+(null clears it). It is an agent claim, separate from `current_step`, which
+counts turns. A turn's plan step is the last one reported in it, else the one
+in effect when it started.
+
+**Threads** run Butler conversations in parallel. Each message starts a new
+thread by default, in the project chosen beside the composer, and Butler
+answers each one at once, so the operator never waits for one answer to ask
+the next. **Reply in this thread** continues the open thread once Butler has
+answered it. Threads use the project's saved Butler settings (runtime, model,
+tools and subagents); a project with no Butler conversation yet asks the
+operator to open the Butler panel once to choose them. Threads are separate
+Butler conversations, so the Butler panel keeps its own conversation. Butler in
+a thread acts only inside that thread's project. A step that needs this
+browser (for example a picker or opening a setting) shows a note to finish it
+in the Butler panel. The open thread and the phone tab are in the URL
+(`?thread=` and `?tab=`), so reload and back return to them. On a phone,
+**Board** and **Threads** tabs share one composer.
+
+To archive or delete a Butler thread, open it and use **Archive** or
+**Delete** in its header. Archive hides the thread from Butler mode at once and
+Core keeps it in the project's archived chats, where it can be restored. Delete
+first asks "Delete this thread and its messages? This can't be undone." and
+then removes it from Core. Both wait until Butler has finished answering.
+
+While Butler works on a thread, the thread shows the same **Activity** card as
+a normal chat: its tool steps as they run, or **Queued** with Core's reason and
+queue position when the turn waits for capacity (for example a turn Core
+resumed after a restart). The card comes back from Core after a reload or on
+another device. A finished answer keeps a collapsed card of its steps. While
+Butler answers the open thread, the send button becomes **Stop response**,
+which stops that answer like Stop in a normal chat; **New thread** still sends.
+
+### Butler-proposed goal chats
+
+Asked in plain words to spin up work ("triage the crash logs with Claude until
+there is a deduplicated report"), Butler calls `nebula.work.propose_goal_chat`
+with a title, a listed runtime, model and effort, objective, completion
+criteria, MCP tools and limits (time, tokens, steps, subagents). Core saves a
+durable draft goal conversation marked `proposed_by: butler`, visible after
+reload and on every device. The receipt has `state: proposed`,
+`operator_confirmation_required: true` and a `goal_chat_proposal` client
+action: nothing runs until the operator chooses **Start**. **Edit** changes the
+draft goal; **Cancel** deletes the empty draft. The status board lists each
+proposal in Idle, waiting with attention kind `proposal`.
+
+Under Delegate or Act authority Core begins the goal chat at once and returns
+`state: started` with a `goal_chat_started` action, which Butler reports. If
+Core refuses (for example a hold), the draft stays and the receipt says why.
+Board cards carry `started_by: butler` for chats Butler began. Watch and Steer
+always leave the draft for the operator.
+
+### Resuming idle goals from the Butler board
+
+**Resume all idle** (beside the search) resumes idle goals in bulk. It reads
+every paused or blocked goal Core lists across projects, matching the search
+when one is set, not only the cards on screen. It then asks to confirm with the
+count ("Resume 47 idle goals?"). To resume a chosen set instead, tick the
+checkbox on each paused or blocked Idle card, or use **Select all** in a
+project's Idle section, which ticks every resumable idle goal Core lists in that
+project. A bar then shows "N selected" with **Clear** and **Resume N**; Esc also
+clears the selection, which is kept on this device only until reload. Proposed
+goals (drafts Butler suggested) have no checkbox and are never started by
+these controls; use **Start** on their card. Each goal resumes through Core's
+own goal action, so a project hold, a spent budget, unavailable harness usage
+or an interrupted response awaiting recovery still refuses it. A status line
+counts progress ("Resuming 12 of 47…") and then reports the result ("Resumed
+45 of 47. 2 stayed idle; their cards say why."). Each refused card shows
+"Not resumed:" with Core's reason and stays ticked so it can be retried.
+
+### Holding chats when priorities shift
+
+When the operator's priorities change, they hold the chats doing the current
+research and start new goals in the same project. A chat hold pauses that
+chat's goal, its subagents, queued follow-ups and schedules; running steps get
+a short grace period and then stop. Other chats, and new chats and goals, keep
+running. Nothing is lost: releasing a hold resumes exactly the goals it paused,
+each from its saved progress.
+
+On the Butler board, tick Active or Idle cards and press **Hold N** in the
+selection bar, or press **Hold all active** beside the search to hold every
+chat with work running now. Hold acts at once with no confirmation; a bar
+then says "Held N chats" with **Undo**. Held chats move to a **Held** section
+under Active, showing the hold's reason and age, with **Release all** for the
+section and a ▷ **Release** button on each card. In a chat, the conversation
+menu has **Hold chat** and **Release chat**; the list shows a pause mark and a
+muted title on a held chat. Opening a held chat shows "This chat is on hold"
+with **Release**, and Send becomes **Release and send**, which releases only
+that chat (and its subagents) and then sends the draft; other chats in the
+same batch stay held.
+
+Butler holds and releases chats when asked, without a confirmation step:
+`nebula.work.hold_chats` (chosen chats, or `all_active`),
+`nebula.work.release_chats` (by batch or chat) and `nebula.work.holds` to read
+them. Background Butler checks never hold or release work.
+
+### High-priority chats and projects
+
+Mark a chat **High priority** in its conversation menu (or for several chats
+from the list's bulk actions), or mark a whole project with the chevron
+button on its row in the project switcher. High-priority work is taken first
+wherever work waits for shared capacity: provider and tool slots, the host
+pressure line, the Host command queue and project workers. Subagents and goal
+children inherit their chat's priority; forks start at normal priority.
+Nothing already running is interrupted and no capacity is set aside, so
+normal work runs at full speed when nothing high-priority is waiting. Blue
+chevrons mark high-priority chats in the list and on Butler board cards, which
+list them first; a card's expanded actions toggle **High priority**. Butler
+sets priority when asked (`nebula.work.set_priority`) and reviews
+high-priority chats first; the operator does not need to tell Butler which
+chats matter.
+
 ## Closing the desktop and shutting down Core
 
 On Linux, local Core runs independently of its desktop viewer. Closing, updating,
@@ -1178,8 +1439,9 @@ Remote Core is controlled by its own host; the local shutdown control is hidden
 when the desktop is connected to a remote Core.
 
 An existing installation that predates independent Core needs one coordinated
-restart before adoption. Follow the project's Butler deployment coordination
-procedure, stop every legacy Core using that database, then run
+restart before adoption. Hold the projects for the stop as AGENTS.md describes
+(the Butler procedure for Cores older than project holds), stop every legacy
+Core using that database, then run
 `nebula-core runtime-adopt --confirm-core-stopped --data-dir <existing-directory>`.
 Keep any configured administration credential in `NEBULA_V3_API_TOKEN` for this
 command. Adoption preserves the database and files in place; it does not merge
@@ -1206,9 +1468,28 @@ read-back rather than the request. Moving to `inject` requires
 completed before the first enable are never curated. See
 [Linked memory](../LINKED_MEMORY.md).
 
+## File attribution in Butler mode
+
+Butler mode's **Code & files** section shows which chat last changed each
+workspace file: a dot in the file list (orange for a chat that needs the
+operator, blue for one running), bars beside changed lines (green added, orange
+changed) and a **Who changed this file** list with **Open brief** for each
+chat. It has no setting. Core reads `GET /api/v1/projects/{project_id}/files/attribution`
+(each path's most recent change in the last 7 days by default, at most 500
+paths, newest first, with the chat's board state) and
+`.../files/attribution/history?path=` (up to 50 changes to one path, newest
+first). Paths are relative to the project workspace, as the file browser shows
+them. Attribution comes from two records: a turn or tool observation written
+when a project native lifecycle hook runs (path level only, so provider chats
+in projects without hooks show nothing), and harness file-change activity
+(Codex patches and Claude Write or Edit calls, with line counts and changed
+line ranges where a patch was recorded). A change seen while other turns ran in
+the same workspace is marked uncertain; Butler reports it as possible, never as
+proof that a chat made the edit.
+
 # Project tool approval policy
 
-Project approval policy `never` grants permission bypass for every enabled
+New projects start with approval policy `never`. Project approval policy `never` grants permission bypass for every enabled
 Core-managed tool: provider, native harness gateway, MCP, SSH and browser tools.
 It overrides approval requirements, scope restrictions and explicit policy denies.
 Authentication, disabled capabilities, input validation, execution resource limits,

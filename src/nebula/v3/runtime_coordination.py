@@ -19,7 +19,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -113,6 +113,33 @@ STORAGE_SOURCE_ACTOR_PREFIX = "storage-source:"
 
 class CoordinationConflict(RuntimeError):
     """A request conflicts with durable ownership or a previous receipt."""
+
+
+# A coordination write that holds the deployment host row waits at most this
+# long for each project ownership row lock (lock_timeout bounds every lock
+# wait separately, so a multi-row statement may wait this long per row). Execution transactions hold their
+# ownership rows FOR KEY SHARE until they commit, for up to the execution
+# transaction bound; waiting that long under the host row would queue every
+# other host writer (handoff phases, admission, deployment operations), each
+# holding one of the supervisor's few pooled connections.
+OWNER_LOCK_UNDER_HOST_MS = 500
+# Each retry first waits for the owner without the host row, so an attempt
+# fails again only if a new execution transaction outlasts the bound.
+OWNER_LOCK_ATTEMPTS = 10
+_LOCK_NOT_AVAILABLE = "55P03"
+_T = TypeVar("_T")
+
+
+class OwnerLockBusy(Exception):
+    """An ownership row lock needed more than the bound under the host row.
+
+    Raised inside a ``write_after_owners`` attempt; that loop rolls back,
+    waits for ``statement``'s locks without the host row, and retries.
+    """
+
+    def __init__(self, statement) -> None:
+        super().__init__("a project ownership row is held by an execution transaction")
+        self.statement = statement
 
 
 class RecoveryBlocked(CoordinationConflict):
@@ -477,6 +504,78 @@ class RuntimeCoordination:
                 await session.execute(text("BEGIN IMMEDIATE"))
             yield session
 
+    async def lock_owners_under_host(self, session: AsyncSession, statement):
+        """Run a locking ownership ``statement`` while the host row is held.
+
+        Waits at most ``OWNER_LOCK_UNDER_HOST_MS`` and raises ``OwnerLockBusy``
+        instead of holding the host row for an execution transaction's full
+        length. Only valid inside ``write_after_owners``. The lock order stays
+        host, then ownership, then handoff; this only bounds the wait.
+        """
+        if self.database.engine.dialect.name != "postgresql":
+            return await session.execute(statement)
+        previous = await session.scalar(text("SELECT current_setting('lock_timeout')"))
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :bound, true)").bindparams(
+                bound=f"{OWNER_LOCK_UNDER_HOST_MS}ms"
+            )
+        )
+        try:
+            result = await session.execute(statement)
+        except SQLAlchemyError as error:
+            if getattr(getattr(error, "orig", None), "sqlstate", None) == (
+                _LOCK_NOT_AVAILABLE
+            ):
+                raise OwnerLockBusy(statement) from error
+            raise
+        # Later statements keep the transaction's own lock wait.
+        await session.execute(
+            text("SELECT set_config('lock_timeout', :previous, true)").bindparams(
+                previous=previous
+            )
+        )
+        return result
+
+    async def lock_owner_under_host(
+        self, session: AsyncSession, project_id: str
+    ) -> ProjectOwnershipRow | None:
+        """``FOR UPDATE`` one ownership row, bounded while the host is held."""
+        result = await self.lock_owners_under_host(
+            session,
+            select(ProjectOwnershipRow)
+            .where(ProjectOwnershipRow.project_id == project_id)
+            .with_for_update()
+            .execution_options(populate_existing=True),
+        )
+        return result.scalar_one_or_none()
+
+    async def write_after_owners(
+        self, attempt: Callable[[AsyncSession], Awaitable[_T]]
+    ) -> _T:
+        """Run ``attempt`` in a coordination write, retrying busy owner locks.
+
+        ``attempt`` takes the host row and then its ownership rows through
+        ``lock_owners_under_host``. When an owner is busy the whole transaction
+        rolls back (nothing was committed, so a retry replays no effect), the
+        ownership lock is awaited in a transaction that holds nothing else, and
+        ``attempt`` runs again from fresh reads.
+        """
+        for remaining in range(OWNER_LOCK_ATTEMPTS - 1, -1, -1):
+            try:
+                async with self._write() as session:
+                    return await attempt(session)
+            except OwnerLockBusy as busy:  # diagnostic-expected: a busy owner is awaited without the host row and retried.
+                statement = busy.statement
+            if not remaining:
+                break
+            async with self._write() as session:
+                # Waits as long as the execution transaction runs, then
+                # releases at once; the host row stays free meanwhile.
+                await session.execute(statement)
+        raise CoordinationConflict(
+            "A project's execution worker kept its ownership row busy; retry"
+        )
+
     async def _insert_absent(self, session, row, values, keys) -> None:
         statement = (
             pg_insert
@@ -698,7 +797,8 @@ class RuntimeCoordination:
 
     async def claim_project(self, project_id: str, runtime_id: str) -> ProjectLease:
         _identifier(project_id, "project_id")
-        async with self._write() as session:
+
+        async def attempt(session):
             host = await session.get(
                 DeploymentHostRow,
                 "host",
@@ -718,7 +818,12 @@ class RuntimeCoordination:
             # FOR UPDATE waits for every transaction of a previous owner, which
             # holds this row key-shared until it commits; on SQLite the writer
             # lock is already held. Read the clock after the lock, not before.
-            await self._lock_owner(session, project_id)
+            await self.lock_owners_under_host(
+                session,
+                select(ProjectOwnershipRow.project_id)
+                .where(ProjectOwnershipRow.project_id == project_id)
+                .with_for_update(),
+            )
             still_admitting = await session.scalar(
                 select(ProjectOwnershipRow.project_id).where(
                     ProjectOwnershipRow.project_id == project_id,
@@ -756,6 +861,8 @@ class RuntimeCoordination:
             if token is None:
                 raise CoordinationConflict("project still has a live execution owner")
             return ProjectLease(project_id, runtime_id, token)
+
+        return await self.write_after_owners(attempt)
 
     @staticmethod
     async def _lock_owner(session: AsyncSession, project_id: str) -> None:

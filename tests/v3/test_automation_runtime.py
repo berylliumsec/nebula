@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3 import automation_runtime, tool_results
+from nebula.v3 import automation_runtime, tool_results, workspace_provenance
 from nebula.v3.automation_runtime import (
     AutomationRuntimeManager,
     AutomationPolicyDenied,
@@ -201,6 +201,20 @@ class FakeSession(RuntimeBackendSession):
             await process.terminate()
 
 
+async def on_boundary(manager, engagement_id):
+    """Opt a test project into on_boundary; new projects default to never."""
+    current = await manager.project_policy(engagement_id)
+    await manager.update_project_policy(
+        engagement_id,
+        approval_policy=AutomationApprovalPolicy.ON_BOUNDARY,
+        network_enabled=current.network_enabled,
+        runner_profile_id=current.runner_profile_id,
+        vpn_profile_id=current.vpn_profile_id,
+        max_timeout_ms=current.max_timeout_ms,
+        expected_revision=current.revision,
+    )
+
+
 async def runtime(tmp_path: Path, *, workspace_parent: Path | None = None):
     store = NebulaStore(tmp_path / "nebula.db")
     artifacts = ArtifactStore(tmp_path / "artifacts")
@@ -324,6 +338,7 @@ def command_hook(
     name: str = "command-policy",
     block: bool = False,
     inherit_to_descendants: bool = False,
+    events: tuple[str, ...] = ("tool.before", "tool.after"),
 ) -> None:
     directory = workspace / ".agents" / "hooks" / name
     directory.mkdir(parents=True)
@@ -347,7 +362,7 @@ def command_hook(
             {
                 "version": 1,
                 "name": name,
-                "events": ["tool.before", "tool.after"],
+                "events": list(events),
                 "command": ["run.py"],
                 "timeout_seconds": 5,
                 "side_effects": "none",
@@ -476,6 +491,79 @@ async def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_pa
     (await scenario())
 
 
+async def test_before_only_tool_hook_takes_no_unfinished_workspace_baseline(
+    tmp_path, monkeypatch
+):
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
+        workspace = tmp_path / "workspaces" / engagement.id
+        log = tmp_path / "command-hooks.jsonl"
+        command_hook(workspace, log, events=("tool.before",))
+        snapshots: list[Path] = []
+        original = workspace_provenance.snapshot
+
+        def counted(path, **kwargs):
+            snapshots.append(path)
+            return original(path, **kwargs)
+
+        monkeypatch.setattr(workspace_provenance, "snapshot", counted)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        await broker.execute(
+            tool_invocation(
+                engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
+            ),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
+        )
+
+        [event] = [json.loads(line) for line in log.read_text().splitlines()]
+        assert event["event"] == "tool.before"
+        receipt = event["workspace_provenance"]
+        assert receipt["schema"] == "nebula.workspace-provenance/v1"
+        assert receipt["actor_id"] == "chat:chat-1"
+        assert receipt["supported"] is False
+        assert receipt["unsupported_reason"] == "no_tool_after_hook"
+        # Nothing would ever finish the baseline, so none is hashed or stored.
+        assert snapshots == []
+        assert (await store.list_entities(WorkspaceProvenanceObservation)) == []
+
+    (await scenario())
+
+
+async def test_after_only_tool_hook_still_receives_a_finished_observation(tmp_path):
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = await runtime(tmp_path)
+        (await create_tool_chat(store, engagement))
+        workspace = tmp_path / "workspaces" / engagement.id
+        log = tmp_path / "command-hooks.jsonl"
+        command_hook(workspace, log, events=("tool.after",))
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        await broker.execute(
+            tool_invocation(
+                engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
+            ),
+            (await store.get(ScopePolicy, f"scope:{engagement.id}")),
+        )
+
+        [event] = [json.loads(line) for line in log.read_text().splitlines()]
+        assert event["event"] == "tool.after"
+        receipt = event["workspace_provenance"]
+        assert receipt["unsupported_reason"] != "tool_baseline_is_missing"
+        assert receipt["status"] == "complete"
+        [observation] = await store.list_entities(WorkspaceProvenanceObservation)
+        assert observation.status == "complete"
+
+    (await scenario())
+
+
 async def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
     async def scenario():
         manager, store, artifacts, engagement, sessions = await runtime(tmp_path)
@@ -582,7 +670,7 @@ async def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known
             f"grep -R needle {projects_root}",
         )
         for step, command in enumerate(broad_searches, start=1):
-            with pytest.raises(PolicyDenied, match="required project hook"):
+            with pytest.raises(PolicyDenied, match="required project hook") as denied:
                 await broker.execute(
                     tool_invocation(
                         engagement,
@@ -599,6 +687,9 @@ async def test_inherited_shared_search_hook_blocks_broad_search_and_allows_known
             assert execution.status != "complete"
             assert "repo_search_guard (run_command)" in execution.stderr
             assert "capability_search" in execution.stderr
+            # The manifest's routing target, not the hook's output, names the
+            # tool the denial sends the model to.
+            assert denied.value.route_to == ("capability_search",)
             assert sessions == []
             assert (await store.list_entities(CommandExecution)) == []
 
@@ -1222,6 +1313,7 @@ async def test_binary_output_is_truncated_for_models_and_retained_as_raw_artifac
 async def test_network_boundary_prompts_once_and_enables_whole_project_scope(tmp_path):
     async def scenario():
         manager, store, _artifacts, engagement, sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         request = RunCommandRequest(
             command="curl https://example.test",
             network=AutomationNetworkMode.PROJECT_SCOPE,
@@ -1456,6 +1548,7 @@ async def test_network_request_fails_closed_when_disabled_or_scope_is_url_only(
 async def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
     async def scenario():
         manager, _store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         launches = []
 
         async def launch(configuration):
@@ -1486,6 +1579,7 @@ async def test_cidr_only_scope_keeps_ports_on_cidr_rules(tmp_path):
 async def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
     async def scenario():
         manager, store, _artifacts, engagement, _sessions = await runtime(tmp_path)
+        await on_boundary(manager, engagement.id)
         scope = await store.get(ScopePolicy, engagement.scope_policy_id)
         (
             await store.update(
@@ -1605,7 +1699,7 @@ async def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             headers=headers,
         )
         assert policy.status_code == 200
-        assert policy.json()["approval_policy"] == "on_boundary"
+        assert policy.json()["approval_policy"] == "never"
 
         command = await client.post(
             f"/api/v1/engagements/{engagement.id}/automation-sessions/api/"
@@ -2864,6 +2958,53 @@ async def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
             "call", "run_command", SimpleNamespace(execution_id=truncated.id)
         )
     ).output_preview == []
+
+
+async def test_large_text_command_output_gets_a_partial_preview(tmp_path):
+    from types import SimpleNamespace
+
+    from nebula.v3.tool_results import MAX_EXCERPT_BYTES, model_result_bytes
+
+    manager, store, artifacts, engagement, _ = await runtime(tmp_path)
+    raw = b"".join(b"row %05d ok\n" % n for n in range(1, 5_001)) + (
+        b"done: token=abcdefghijklmnop\n"
+    )
+    out = await store.create(
+        artifacts.put_bytes(
+            raw,
+            engagement_id=engagement.id,
+            filename="stdout",
+            media_type="text/plain",
+        )
+    )
+    execution = await store.create(
+        CommandExecution(
+            engagement_id=engagement.id,
+            session_id="session",
+            process_id="process",
+            command="synthetic fixture only",
+            command_sha256="a" * 64,
+            runtime_digest="sha256:" + "b" * 64,
+            policy_revision=1,
+            status=CommandExecutionStatus.COMPLETED,
+            exit_code=0,
+            stdout_artifact_id=out.id,
+            observed_stdout_bytes=out.size,
+        )
+    )
+    receipt = await AutomationBroker(
+        manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
+    )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
+
+    (preview,) = receipt.output_preview
+    assert preview.artifact_id == out.id and preview.partial
+    assert preview.text.startswith("row 00001 ok\n")
+    assert preview.text.endswith("done: token=[REDACTED]\n")
+    assert preview.total_lines == 5_001
+    assert preview.omitted is not None and preview.omitted.start_line > 1
+    assert "tool_output.read" in receipt.next_actions
+    assert receipt.warnings == ["Process output is available through artifact tools."]
+    assert model_result_bytes(receipt.as_model_result()) <= MAX_EXCERPT_BYTES
 
 
 async def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):

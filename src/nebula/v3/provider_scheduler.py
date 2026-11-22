@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select, update
 
+from .work_priority import is_high
 from .database import EntityRow, ProviderTurnQueueRow
 from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
@@ -281,7 +282,7 @@ class ProviderScheduler:
         self._invalidate_positions()
 
     async def _wait_for_capacity(
-        self, turn: ChatTurn, deferred
+        self, turn: ChatTurn, deferred, pressure_gated: bool, high: bool = False
     ) -> ProviderAdmission | None:
         async def acquire() -> ProviderAdmission:
             performance = self.store.database.performance
@@ -314,6 +315,7 @@ class ProviderScheduler:
                         "provider:" + admission.lease_owner,
                         demands,
                         on_wait=deferred,
+                        high=high,
                     )
                     await admission.host_slot.__aenter__()
             except BaseException:
@@ -324,7 +326,7 @@ class ProviderScheduler:
                 raise
             return admission
 
-        if self.host_load is None or turn.status != ChatTurnStatus.QUEUED:
+        if self.host_load is None or not pressure_gated:
             return await acquire()
         # Retain the semaphore waiter across healthy samples for FIFO ordering.
         # When pressure rises, abort it and release any partial acquisition.
@@ -354,9 +356,18 @@ class ProviderScheduler:
             await finish_cleanup(discard())
             raise
 
-    async def admit(self, turn_id: str) -> ProviderAdmission:
+    async def admit(
+        self, turn_id: str, *, automatic_recovery: bool = False
+    ) -> ProviderAdmission:
         turn = await self.store.get(ChatTurn, turn_id)
         lane = turn.capacity_lane
+        # A turn Core resumed on its own after a restart returns in a running
+        # status, yet holds no capacity. It waits out host pressure like a new
+        # turn, so a recovery backlog cannot overload a host that is busy.
+        pressure_gated = automatic_recovery or turn.status == ChatTurnStatus.QUEUED
+        # Operator-marked high-priority chats and projects are admitted first
+        # wherever turns wait for shared capacity.
+        high = await is_high(self.store, turn.engagement_id, turn.session_id)
         performance = self.store.database.performance
         admission: ProviderAdmission | None = None
 
@@ -369,18 +380,20 @@ class ProviderScheduler:
 
         try:
             while True:
-                if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+                if self.host_load is not None and pressure_gated:
                     with performance.span("provider.host_load_wait"):
-                        await self.host_load.wait(deferred)
+                        await self.host_load.wait(deferred, high=high)
                 latest = await self.store.get(ChatTurn, turn_id)
                 if latest.status == ChatTurnStatus.CANCELLED:
                     raise asyncio.CancelledError
-                admission = await self._wait_for_capacity(turn, deferred)
+                admission = await self._wait_for_capacity(
+                    turn, deferred, pressure_gated, high
+                )
                 if admission is None:
                     continue
                 # Pressure can change while provider capacity is occupied. Release
                 # both slots before returning to a pressure wait.
-                if self.host_load is not None and turn.status == ChatTurnStatus.QUEUED:
+                if self.host_load is not None and pressure_gated:
                     if (await self.host_load.snapshot()).busy:
                         await admission.release(turn_id)
                         admission = None
