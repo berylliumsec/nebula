@@ -310,7 +310,10 @@ def test_snapshot_reuses_fingerprints_of_unchanged_dirty_files(tmp_path, monkeyp
     # Only the rewritten file is read again; the others reuse their fingerprint.
     assert hashed == ["artifact-1.bin"]
     assert second.paths["artifact-0.bin"] == first.paths["artifact-0.bin"]
-    assert second.paths["artifact-1.bin"]["sha256"] != first.paths["artifact-1.bin"]["sha256"]
+    assert (
+        second.paths["artifact-1.bin"]["sha256"]
+        != first.paths["artifact-1.bin"]["sha256"]
+    )
     assert second.paths["artifact-1.bin"]["size"] == len(b"changed")
 
 

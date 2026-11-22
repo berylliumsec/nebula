@@ -107,7 +107,9 @@ async def _write_continuation(store, approval_id, plan):
     raise AssertionError("continuation write attempts are exhausted")
 
 
-async def record_delivery(store, approval_id, turn_id, status, detail=None):
+async def record_delivery(
+    store, approval_id, turn_id, status, detail=None, *, sent=True
+):
     async def plan(current):
         if current.continuation and current.continuation.harness_turn_id != turn_id:
             raise ConflictError("approval continuation belongs to another turn")
@@ -122,10 +124,19 @@ async def record_delivery(store, approval_id, turn_id, status, detail=None):
             if continuation.status == "delivered":
                 changes["status"] = "delivered"
             if continuation.adapter_status == "pending":
-                changes["adapter_status"] = "unknown"
-                changes["adapter_detail"] = (
-                    "Adapter handoff was not acknowledged. No work was replayed."
-                )
+                if sent:
+                    changes["adapter_status"] = "unknown"
+                    changes["adapter_detail"] = (
+                        "Adapter handoff was not acknowledged. No work was replayed."
+                    )
+                else:
+                    # Core knows the decision never reached the adapter: there
+                    # was no waiter to hand it to. Nothing is left to confirm.
+                    changes["adapter_status"] = "failed"
+                    changes["adapter_detail"] = (
+                        "Not sent: no request was waiting for this decision. "
+                        "No work was replayed."
+                    )
         return continuation, changes
 
     return await _write_continuation(store, approval_id, plan)

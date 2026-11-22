@@ -1444,7 +1444,7 @@ proof that a chat made the edit.
 
 # Project tool approval policy
 
-Project approval policy `never` grants permission bypass for every enabled
+New projects start with approval policy `never`. Project approval policy `never` grants permission bypass for every enabled
 Core-managed tool: provider, native harness gateway, MCP, SSH and browser tools.
 It overrides approval requirements, scope restrictions and explicit policy denies.
 Authentication, disabled capabilities, input validation, execution resource limits,

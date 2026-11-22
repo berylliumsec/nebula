@@ -35,7 +35,7 @@ group so timeout, cancellation, and session cleanup terminate descendants.
 
 ## Approval policy
 
-Projects choose one execution policy:
+Projects choose one execution policy. New projects start with `never`.
 
 - `always` requires approval for every new command.
 - `on_boundary` runs workspace-only commands automatically and prompts once when

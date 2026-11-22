@@ -339,6 +339,7 @@ from .integration_settings import (
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
+    HarnessTurnStatus,
     ENTITY_MODEL_BY_KIND,
     AgentAttempt,
     AgentRun,
@@ -1283,7 +1284,9 @@ class NotebookFileIndexRequest(NebulaModel):
 class AutomationPolicyUpdateRequest(NebulaModel):
     execution_mode: Literal["docker", "host"] | None = None
     host_access_acknowledged: bool = False
-    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
+    # Omitted keeps the project's current policy; a default here would
+    # silently reset it whenever a client changed another field.
+    approval_policy: AutomationApprovalPolicy | None = None
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
     vpn_profile_id: str | None = Field(default=None, max_length=200)
@@ -7635,6 +7638,29 @@ def create_execution_kernel(
             else None
         )
         harness_turn = await approval_harness_turn(store, approval)
+        if harness_turn is not None and harness_turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            # The harness turn that asked has ended: no decision can reach it.
+            # Recording one would leave a delivery nobody can confirm, which
+            # pins the project at every handoff. Retire the card instead.
+            await store.update(
+                Approval,
+                approval.id,
+                {
+                    "status": ApprovalStatus.EXPIRED,
+                    "decided_by": "system",
+                    "decided_at": utc_now(),
+                    "decision_note": "The harness turn that asked for this "
+                    "approval has ended; no decision can reach it.",
+                },
+                expected_revision=approval.revision,
+            )
+            raise HTTPException(
+                status_code=410,
+                detail="The harness request has ended; start a new response.",
+            )
         if harness_turn is not None and request.edited_arguments is not None:
             raise HTTPException(
                 status_code=422,
@@ -9376,7 +9402,7 @@ def create_execution_kernel(
         try:
             return await automation_runtime.update_project_policy(
                 engagement_id,
-                approval_policy=request.approval_policy,
+                approval_policy=request.approval_policy or current.approval_policy,
                 execution_mode=request.execution_mode,
                 host_access_acknowledged=request.host_access_acknowledged,
                 network_enabled=request.network_enabled,
