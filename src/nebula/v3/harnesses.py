@@ -11619,7 +11619,7 @@ class HarnessRuntimeService:
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         # Refused before the chat, its message or its turn is saved.
-        hold = await active_hold(self.store, engagement_id)
+        hold = await active_hold(self.store, engagement_id, chat_session_id)
         if hold is not None:
             raise ProjectHeld(held_detail(hold))
         project_workspace_path = (
