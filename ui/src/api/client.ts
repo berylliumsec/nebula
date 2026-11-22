@@ -2157,6 +2157,7 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
     assistantDefaults: value.assistant_defaults ? mapAssistantDefaults(value.assistant_defaults) : undefined,
+    priority: value.metadata?.priority === "high" ? "high" : undefined,
   };
 }
 
@@ -3571,6 +3572,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     pinned: value.metadata?.pinned === true,
     flagColor: ["red", "orange", "yellow", "green", "blue", "purple"].includes(String(value.metadata?.flag_color))
       ? value.metadata?.flag_color as ChatSessionSummary["flagColor"] : undefined,
+    priority: value.metadata?.priority === "high" ? "high" : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
@@ -6153,6 +6155,14 @@ export class ApiClient {
     return mapEngagement(await this.request<WireEngagement>(path, {
       method: "PATCH",
       body: JSON.stringify({ changes: { status: archived ? "archived" : "active" }, expected_revision: current.revision }),
+    }));
+  }
+
+  /** Mark a whole project high or normal priority; every chat in it inherits it. */
+  async setEngagementPriority(id: string, priority: "high" | "normal"): Promise<EngagementSummary> {
+    return mapEngagement(await this.request<WireEngagement>(`engagements/${encodeURIComponent(id)}/priority`, {
+      method: "PUT",
+      body: JSON.stringify({ priority }),
     }));
   }
 
@@ -9806,8 +9816,8 @@ export class ApiClient {
 
   setChatSessionPriority(
     sessionId: string,
-    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null },
-    expectedRevision: number,
+    changes: { pinned?: boolean; flagColor?: ChatSessionSummary["flagColor"] | null; priority?: "high" | "normal" },
+    expectedRevision?: number,
   ): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>(
       `chat-sessions/${encodeURIComponent(sessionId)}`,
@@ -9816,6 +9826,7 @@ export class ApiClient {
         body: JSON.stringify({
           ...(changes.pinned !== undefined ? { pinned: changes.pinned } : {}),
           ...(changes.flagColor !== undefined ? { flag_color: changes.flagColor } : {}),
+          ...(changes.priority !== undefined ? { priority: changes.priority } : {}),
           expected_revision: expectedRevision,
         }),
       },

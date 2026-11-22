@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
-import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Plus, Search, X } from "lucide-react";
+import { Archive, Trash2, RotateCcw, Check, ChevronDown, ChevronUp, LockKeyhole, Plus, Search, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, projectSwitchDestination } from "../resourceRoutes";
@@ -39,6 +39,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     engagements,
     archivedEngagements,
     setEngagementArchived,
+    setEngagementPriority,
     deleteArchivedEngagement,
   } = useWorkspace();
   const confirm = useConfirmation();
@@ -161,6 +162,22 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     }
   };
 
+  const changePriority = async (id: string, projectName: string, high: boolean) => {
+    if (updating) return;
+    setUpdating(true);
+    setProjectError(undefined);
+    setNotice(undefined);
+    try {
+      await setEngagementPriority(id, high);
+      setNotice(high ? `${projectName} is high priority: its chats' waiting work is taken first.` : `${projectName} is back to normal priority.`);
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.project_switcher.priority_failed", "The project priority could not be updated.", failure, "side_nav");
+      setProjectError(`Could not change the priority of ${projectName}. ${failure instanceof Error ? failure.message : "Core could not save the change."} Try again.`);
+    } finally {
+      setUpdating(false);
+    }
+  };
+
   const deleteArchived = async (id: string, projectName: string) => {
     if (updating) return;
     setUpdating(true);
@@ -238,6 +255,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
           {!creating && <div className="engagement-options">
             {visibleProjects.map((item) => <div className="project-switcher-row" key={item.id}>
               {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { if (item.id !== engagement?.id) navigate(projectSwitchDestination(location.pathname, location.search, item.id)); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
+              {!showArchived && <button className="project-switcher-action" type="button" data-priority={item.priority === "high" ? "high" : undefined} disabled={updating || coreState !== "online"} aria-pressed={item.priority === "high"} aria-label={`High priority for project ${item.name}`} title={item.priority === "high" ? "High priority: click for normal" : "Mark high priority"} onClick={() => void changePriority(item.id, item.name, item.priority !== "high")}><ChevronUp size={16} aria-hidden="true" /></button>}
               <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
               {showArchived && <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`Delete project ${item.name}`} title="Delete permanently" onClick={() => void deleteArchived(item.id, item.name)}><Trash2 size={16} aria-hidden="true" /></button>}
             </div>)}

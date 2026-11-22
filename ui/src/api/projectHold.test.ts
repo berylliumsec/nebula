@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HELD_POLL_MS, OPEN_POLL_MS, ProjectHoldWatch, holdState, type ProjectHoldView } from "./projectHold";
+import { HELD_POLL_MS, OPEN_POLL_MS, ProjectHoldWatch, chatHoldFor, holdState, type ProjectHoldView } from "./projectHold";
 
 function view(status: "holding" | "held" | "released" | null, extra: Partial<ProjectHoldView> = {}): ProjectHoldView {
   return {
@@ -80,5 +80,46 @@ describe("ProjectHoldWatch", () => {
       expect.objectContaining({ method: "POST" }),
     );
     expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ held: false }));
+  });
+});
+
+
+describe("chat holds", () => {
+  const chatHold = (session: string, batch = "batch-1") => ({
+    id: `hold-${session}`, status: "held" as const, reason: "Priorities changed", grace_seconds: 180,
+    created_at: "2026-11-20T12:00:00Z", paused_goals: [], session_id: session, batch_id: batch,
+  });
+
+  it("lists chat holds while the project itself stays open", () => {
+    const state = holdState(view(null, { chat_holds: [chatHold("s1"), { ...chatHold("s2"), status: "released" }] }));
+    expect(state.held).toBe(false);
+    expect(state.chatHolds).toEqual([{ id: "hold-s1", sessionId: "s1", batchId: "batch-1", reason: "Priorities changed", createdAt: "2026-11-20T12:00:00Z" }]);
+  });
+
+  it("finds a chat's own hold or its parent's, without looping", () => {
+    const holds = holdState(view(null, { chat_holds: [chatHold("main")] })).chatHolds;
+    const parents: Record<string, string> = { subagent: "main", grandchild: "subagent", loop: "loop" };
+    expect(chatHoldFor(holds, "grandchild", (id) => parents[id])?.sessionId).toBe("main");
+    expect(chatHoldFor(holds, "other", (id) => parents[id])).toBeUndefined();
+    expect(chatHoldFor(holds, "loop", (id) => parents[id])).toBeUndefined();
+  });
+
+  it("places and releases chat holds through Core and publishes the new state", async () => {
+    const request = vi.fn(async (path: string) => {
+      if (path.endsWith("/holds")) return { ...view(null, { chat_holds: [chatHold("s1")] }), batch_id: "batch-1", holds: [chatHold("s1")] };
+      if (path.endsWith("/holds/release")) return view(null, { chat_holds: [] });
+      return view(null);
+    });
+    const watch = new ProjectHoldWatch(request as never);
+    const seen: number[] = [];
+    const stop = watch.subscribe("project-1", (state) => seen.push(state.chatHolds.length));
+    const placed = await watch.holdChats("project-1", { sessionIds: ["s1"] });
+    expect(placed).toEqual({ batchId: "batch-1", sessionIds: ["s1"] });
+    expect(request).toHaveBeenCalledWith("engagements/project-1/holds", { method: "POST", body: JSON.stringify({ session_ids: ["s1"], all_active: false }) });
+    await watch.releaseChats("project-1", { batchId: "batch-1" });
+    expect(JSON.parse((request.mock.calls.find(([path]) => path.endsWith("/release")) as unknown as [string, { body: string }])[1].body)).toMatchObject({ batch_id: "batch-1" });
+    expect(seen.at(-1)).toBe(0);
+    expect(seen).toContain(1);
+    stop();
   });
 });

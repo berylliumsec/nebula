@@ -210,3 +210,6 @@
   .side-nav .engagement-picker > .engagement-menu { width: calc(100vw - 24px); }
   .engagement-search { margin-right: 12px; margin-left: 12px; }
 }
+
+/* A high-priority project: its chats' waiting work is taken first. */
+.project-switcher-row > .project-switcher-action[data-priority="high"] { color: var(--blue); }

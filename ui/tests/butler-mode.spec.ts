@@ -532,7 +532,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       }).toPass({timeout: 60_000});
       await expect(proposal.getByRole("checkbox")).toHaveCount(0);
       await pausedCard.getByRole("checkbox", {name: `Select ${workTitle} to resume`}).check();
-      const selection = board.getByRole("region", {name: "Selected idle goals"});
+      const selection = board.getByRole("region", {name: "Selected goal chats"});
       await expect(selection).toContainText("1 selected");
       await expect(sectionHead("idle")).toContainText("1 selected");
       await selection.getByRole("button", {name: "Resume 1"}).click();

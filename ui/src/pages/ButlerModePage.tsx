@@ -1,8 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Pause, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { ALL_PROJECTS, SECTION_LABEL, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSection, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
+import { ALL_PROJECTS, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
@@ -124,6 +124,9 @@ export function ButlerModePage() {
   const [selecting, setSelecting] = useState<string>();
   const [resumeRun, setResumeRun] = useState<{ done: number; total: number }>();
   const [resumeSummary, setResumeSummary] = useState<{ text: string; failed: boolean }>();
+  // Chats just held, for Undo; holding never asks first because release restores exactly what was held.
+  const [heldUndo, setHeldUndo] = useState<{ placed: PlacedHold[]; count: number }>();
+  const [holdBusy, setHoldBusy] = useState(false);
 
   const [threads, setThreads] = useState<ButlerThread[]>([]);
   const [threadsError, setThreadsError] = useState("");
@@ -375,7 +378,7 @@ export function ButlerModePage() {
 
   const toggleGroup = (key: string) => setCollapsed((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
-  const toggleSection = (groupKey: string, value: ButlerBoardSection) => {
+  const toggleSection = (groupKey: string, value: BoardViewSection) => {
     const next = toggleBoardSection(sectionOpen, groupKey, value);
     setSectionOpen(next);
     writeStorage(SECTIONS_KEY, JSON.stringify(next));
@@ -538,6 +541,74 @@ export function ButlerModePage() {
       confirmLabel: `Resume ${items.length}`,
     });
     if (approved) await runResume(items);
+  };
+  const refreshBoard = () => { boardEtag.current = undefined; boardPoll.current?.poke(); };
+  const heldCount = (placed: PlacedHold[]) => placed.reduce((sum, entry) => sum + entry.sessionIds.length, 0);
+  const finishHold = (placed: PlacedHold[], failed: Array<{ error: string }>) => {
+    const count = heldCount(placed);
+    const held = new Set(placed.flatMap((entry) => entry.sessionIds));
+    setSelected((current) => new Map([...current].filter(([id]) => !held.has(id))));
+    setHeldUndo(count ? { placed, count } : undefined);
+    if (failed.length) {
+      void logCaughtDiagnostic("interface.butler_mode.hold_refused", "Core did not hold some goal chats.", new Error(failed[0].error), "butler_mode");
+      setResumeSummary({ text: `${count ? `Held ${count}. ` : ""}${failed[0].error}`, failed: true });
+    } else if (!count) setResumeSummary({ text: "Nothing was running to hold.", failed: false });
+    refreshBoard();
+  };
+  // Hold acts at once: Undo or Release resumes exactly the goals each hold paused.
+  const runHold = async (items: ButlerBoardItem[]) => {
+    const chosen = items.filter(isHoldable);
+    if (!api || !chosen.length || holdBusy) return;
+    setHoldBusy(true); setResumeSummary(undefined);
+    try {
+      const { placed, failed } = await holdBoardChats(api, chosen);
+      finishHold(placed, failed);
+    } finally { setHoldBusy(false); }
+  };
+  const holdEveryActive = async () => {
+    if (!api || !board || holdBusy) return;
+    const projects = board.projects.filter((project) => project.counts.active > 0).map((project) => project.id);
+    if (!projects.length) return;
+    setHoldBusy(true); setResumeSummary(undefined);
+    try {
+      const { placed, failed } = await holdAllActive(api, projects);
+      finishHold(placed, failed);
+    } finally { setHoldBusy(false); }
+  };
+  const release = async (releases: Array<{ projectId: string; batchId?: string; sessionIds?: string[] }>, count: number) => {
+    if (!api || holdBusy || !releases.length) return;
+    setHoldBusy(true); setResumeSummary(undefined);
+    try {
+      await releaseBoardHolds(api, releases);
+      setHeldUndo(undefined);
+      setResumeSummary({ text: `Released ${count} ${count === 1 ? "chat" : "chats"}; ${count === 1 ? "its goal resumes" : "their goals resume"} from saved progress.`, failed: false });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.release_failed", "Butler mode could not release held goal chats.", caught, "butler_mode");
+      setResumeSummary({ text: `${caught instanceof Error ? caught.message : "Core could not release the chats."} Retry Release.`, failed: true });
+    } finally { setHoldBusy(false); refreshBoard(); }
+  };
+  const releaseItems = (items: ButlerBoardItem[]) => void release(
+    [...new Map(items.map((item) => [`${item.project.id}:${item.hold?.batchId ?? item.sessionId}`, item.hold?.batchId
+      ? { projectId: item.project.id, batchId: item.hold.batchId }
+      : { projectId: item.project.id, sessionIds: [item.sessionId] }])).values()],
+    items.length,
+  );
+  const undoHold = () => heldUndo && void release(heldUndo.placed.map((entry) => ({ projectId: entry.projectId, batchId: entry.batchId, sessionIds: entry.batchId ? undefined : entry.sessionIds })), heldUndo.count);
+  useEffect(() => {
+    if (!heldUndo) return;
+    const timer = window.setTimeout(() => setHeldUndo(undefined), 15_000);
+    return () => window.clearTimeout(timer);
+  }, [heldUndo]);
+  const setPriority = async (item: ButlerBoardItem, high: boolean) => {
+    if (!api) return;
+    try {
+      await api.setChatSessionPriority(item.sessionId, { priority: high ? "high" : "normal" }, item.sessionRevision);
+      setActionNote((current) => { const next = { ...current }; delete next[item.sessionId]; return next; });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.priority_failed", "Butler mode could not change a chat's priority.", caught, "butler_mode");
+      setActionNote((current) => ({ ...current, [item.sessionId]: `${caught instanceof Error ? caught.message : "Core could not change the priority."} Retry.` }));
+    }
+    refreshBoard();
   };
   useEffect(() => {
     if (!selected.size) return;
@@ -718,21 +789,29 @@ export function ButlerModePage() {
   };
 
   const states = board?.states;
-  const card = (item: ButlerBoardItem) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} selectable={isResumableIdle(item)} selected={selected.has(item.sessionId)} selectDisabled={Boolean(resumeRun)} onSelect={() => toggleSelected(item)} />;
+  const selectedItems = [...selected.values()];
+  const selectedResumable = selectedItems.filter(isResumableIdle);
+  const selectedHoldable = selectedItems.filter(isHoldable);
+  const card = (item: ButlerBoardItem) => <BoardCard key={item.sessionId} item={item} clock={clock} expanded={expanded === item.sessionId} approval={approval} deciding={deciding === item.sessionId} note={actionNote[item.sessionId]} onToggle={() => openBrief(item.sessionId)} onDecide={(decision) => void decide(item, decision)} onStop={() => void stopChat(item)} onAsk={() => askAbout(item)} onOpen={() => openPopup(item.sessionId, item.title, item.project.id)} showProject={grouping !== "project"} selectable={isResumableIdle(item) || isHoldable(item)} selected={selected.has(item.sessionId)} selectDisabled={Boolean(resumeRun) || holdBusy} onSelect={() => toggleSelected(item)} onRelease={() => releaseItems([item])} onPriority={(high) => void setPriority(item, high)} releaseDisabled={holdBusy} />;
   // One section of a project (or of every project, grouped by status): Completed starts collapsed.
   const sectionView = (group: ButlerBoardGroup, entry: ButlerBoardSectionGroup) => {
     const open = boardSectionOpen(sectionOpen, group.key, entry.section);
     const page = entry.section === "completed" ? completed[group.key] : undefined;
-    const groupSelected = entry.section === "idle" ? [...selected.values()].filter((item) => group.key === ALL_PROJECTS || item.project.id === group.key).length : 0;
+    const groupSelected = [...selected.values()].filter((item) => item.section === entry.section && !item.hold && (group.key === ALL_PROJECTS || item.project.id === group.key)).length;
+    const hold = entry.section === "held" ? entry.items.find((item) => item.hold)?.hold : undefined;
     return <div key={entry.section} className={styles.boardSection} data-section={entry.section}>
       <div className={styles.sectionBar}>
         <button type="button" className={styles.sectionHead} aria-expanded={open} onClick={() => toggleSection(group.key, entry.section)}>
           {open ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
           <i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />
-          <span className={styles.sectionLabel}>{SECTION_LABEL[entry.section]}</span>
+          <span className={styles.sectionLabel}>{VIEW_SECTION_LABEL[entry.section]}</span>
           <span className={styles.muted}>{entry.count.toLocaleString()}</span>
           {groupSelected > 0 && <span className={styles.muted}>· {groupSelected.toLocaleString()} selected</span>}
+          {hold && <span className={styles.muted}>· {hold.reason} · {boardElapsed(hold.createdAt, clock) ?? "just now"}</span>}
         </button>
+        {entry.section === "held" && open && <button type="button" className={styles.secondary} disabled={holdBusy} onClick={() => releaseItems(entry.items)}>
+          <Play size={13} aria-hidden="true" /> Release all
+        </button>}
         {entry.section === "idle" && open && entry.count > 0 && <label className={styles.selectAll}>
           <input type="checkbox" checked={allSelectedIn(group.key)} disabled={selecting !== undefined || Boolean(resumeRun)} onChange={() => void toggleSelectAll(group.key)} aria-label={group.label ? `Select all paused or blocked goals in ${group.label}` : "Select all paused or blocked goals"} />
           {selecting === group.key ? "Selecting…" : "Select all"}
@@ -765,6 +844,9 @@ export function ButlerModePage() {
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && search) { event.preventDefault(); setSearch(""); } }} placeholder="Search projects and chats" aria-label="Search projects and chats" />
         {searching && <button type="button" className={styles.clearSearch} aria-label="Clear search" title="Clear search" onClick={() => setSearch("")}><X size={14} aria-hidden="true" /></button>}
       </label>
+      {(board?.counts.active ?? 0) > 0 && <button type="button" className={styles.secondary} disabled={holdBusy || Boolean(resumeRun)} onClick={() => void holdEveryActive()}>
+        <Pause size={13} aria-hidden="true" /> {holdBusy ? "Holding…" : "Hold all active"}
+      </button>}
       {(board?.counts.idle ?? 0) > 0 && <button type="button" className={styles.secondary} disabled={selecting !== undefined || Boolean(resumeRun)} onClick={() => void resumeAllIdle()}>
         <Play size={13} aria-hidden="true" /> {selecting === ALL_PROJECTS ? "Reading idle goals…" : "Resume all idle"}
       </button>}
@@ -786,18 +868,26 @@ export function ButlerModePage() {
           <span className={styles.groupLabel}>{group.label}</span>
           <span className={styles.muted}>{group.total.toLocaleString()} {group.total === 1 ? "goal" : "goals"}</span>
           <span className={styles.groupCounts}>
-            {sections.map((entry) => <span key={entry.section} data-section={entry.section}><i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />{entry.count.toLocaleString()} {SECTION_LABEL[entry.section].toLowerCase()}</span>)}
+            {sections.map((entry) => <span key={entry.section} data-section={entry.section}><i className={styles.sectionDot} data-section={entry.section} aria-hidden="true" />{entry.count.toLocaleString()} {VIEW_SECTION_LABEL[entry.section].toLowerCase()}</span>)}
           </span>
         </button>
         {open && sections.map((entry) => sectionView(group, entry))}
       </div>;
     })}
-    {selected.size > 0 && <div className={styles.selectionBar} role="region" aria-label="Selected idle goals">
+    {selected.size > 0 && <div className={styles.selectionBar} role="region" aria-label="Selected goal chats">
       <span className={styles.selectionCount}>{selected.size.toLocaleString()} selected</span>
-      <button type="button" className={styles.link} disabled={Boolean(resumeRun)} onClick={clearSelected}>Clear</button>
-      <button type="button" className={styles.primary} disabled={Boolean(resumeRun)} onClick={() => void runResume([...selected.values()])}>
-        <Play size={13} aria-hidden="true" /> {resumeRun ? `Resuming ${resumeRun.done} of ${resumeRun.total}…` : `Resume ${selected.size.toLocaleString()}`}
-      </button>
+      <button type="button" className={styles.link} disabled={Boolean(resumeRun) || holdBusy} onClick={clearSelected}>Clear</button>
+      {selectedResumable.length > 0 && <button type="button" className={selectedHoldable.length > selectedResumable.length ? styles.secondary : styles.primary} disabled={Boolean(resumeRun) || holdBusy} onClick={() => void runResume(selectedResumable)}>
+        <Play size={13} aria-hidden="true" /> {resumeRun ? `Resuming ${resumeRun.done} of ${resumeRun.total}…` : `Resume ${selectedResumable.length.toLocaleString()}`}
+      </button>}
+      {selectedHoldable.length > 0 && <button type="button" className={selectedHoldable.length > selectedResumable.length ? styles.primary : styles.secondary} disabled={Boolean(resumeRun) || holdBusy} onClick={() => void runHold(selectedHoldable)}>
+        <Pause size={13} aria-hidden="true" /> {holdBusy ? "Holding…" : `Hold ${selectedHoldable.length.toLocaleString()}`}
+      </button>}
+    </div>}
+    {!selected.size && heldUndo && <div className={styles.selectionBar} role="status" aria-label="Held chats">
+      <span className={styles.selectionCount}>Held {heldUndo.count.toLocaleString()} {heldUndo.count === 1 ? "chat" : "chats"}</span>
+      <button type="button" className={styles.link} disabled={holdBusy} onClick={undoHold}>Undo</button>
+      <button type="button" className={styles.iconButton} aria-label="Dismiss" title="Dismiss" onClick={() => setHeldUndo(undefined)}><X size={14} aria-hidden="true" /></button>
     </div>}
   </section>;
 
@@ -1046,7 +1136,7 @@ export function ButlerModePage() {
   </div>;
 }
 
-function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, onDecide, onStop, onAsk, onOpen, showProject, selectable, selected, selectDisabled, onSelect }: {
+function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, onDecide, onStop, onAsk, onOpen, showProject, selectable, selected, selectDisabled, onSelect, onRelease, onPriority, releaseDisabled }: {
   item: ButlerBoardItem;
   clock: number;
   expanded: boolean;
@@ -1063,24 +1153,32 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   selected: boolean;
   selectDisabled: boolean;
   onSelect: () => void;
+  onRelease: () => void;
+  onPriority: (high: boolean) => void;
+  releaseDisabled: boolean;
 }) {
   const elapsed = boardElapsed(item.section !== "active" || item.state === "idle" || item.state === "failed" ? item.updatedAt : item.turnStartedAt ?? item.updatedAt, clock);
   const runtime = [showProject ? item.project.name : undefined, item.model, item.isSubagent ? "Subagent" : undefined, item.proposedBy ? "Proposed by Butler" : item.startedBy ? "Started by Butler" : undefined].filter(Boolean).join(" · ");
   const goal = item.goal ? `Goal ${Math.min(item.goal.currentStep + 1, Math.max(item.goal.planLength, 1))}/${Math.max(item.goal.planLength, 1)} · ${item.goal.status}` : undefined;
   const pendingApproval = item.attention?.kind === "approval" && approval?.id === item.attention.actionId ? approval : undefined;
   // The section's name is in the label too: the dot's colour and shape are not the only cue.
-  return <article className={styles.card} data-section={item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} aria-label={`${item.title}: ${boardStatusLabel(item)}, ${SECTION_LABEL[item.section]}`}>
+  const high = item.priority === "high";
+  const held = Boolean(item.hold);
+  const resumable = isResumableIdle(item);
+  return <article className={styles.card} data-section={held ? "held" : item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} data-priority={high ? "high" : undefined} aria-label={`${item.title}: ${held ? "Held" : boardStatusLabel(item)}, ${held ? "Held" : SECTION_LABEL[item.section]}${high ? ", high priority" : ""}`}>
     <div className={styles.cardRow}>
-    {selectable && <label className={styles.cardSelect} title={selected ? "Deselect" : "Select to resume"}>
-      <input type="checkbox" checked={selected} disabled={selectDisabled} onChange={onSelect} aria-label={`Select ${item.title} to resume`} />
+    {selectable && <label className={styles.cardSelect} title={selected ? "Deselect" : resumable ? "Select to resume" : "Select to hold"}>
+      <input type="checkbox" checked={selected} disabled={selectDisabled} onChange={onSelect} aria-label={`Select ${item.title} to ${resumable ? "resume" : "hold"}`} />
     </label>}
     <button type="button" className={styles.cardSummary} aria-expanded={expanded} onClick={onToggle}>
-      <span className={styles.cardHead}><i className={styles.sectionDot} data-section={item.section} data-goal={item.goal?.status} aria-hidden="true" /><span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
+      <span className={styles.cardHead}><i className={styles.sectionDot} data-section={held ? "held" : item.section} data-goal={item.goal?.status} aria-hidden="true" />{high && <ChevronUp className={styles.priorityMark} size={14} aria-hidden="true" />}<span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
       {runtime && <span className={styles.cardMeta}>{runtime}</span>}
       {item.now && <span className={styles.cardNow} data-state={item.state}>{item.now}</span>}
       {goal && !expanded && <span className={styles.cardMeta}>{goal}</span>}
+      {held && item.hold && <span className={styles.cardMeta}>On hold · {item.hold.reason}</span>}
       {note && !expanded && <span className={styles.cardNote} role="status" data-failed={note.startsWith("Not resumed") ? "true" : undefined}>{note}</span>}
     </button>
+    {held && <button type="button" className={styles.iconButton} disabled={releaseDisabled} aria-label={`Release ${item.title}`} title="Release" onClick={onRelease}><Play size={14} aria-hidden="true" /></button>}
     </div>
     {expanded && <div className={styles.cardDetail}>
       {item.goal && <p className={styles.cardMeta}>{goal} · {item.goal.objective}</p>}
@@ -1099,6 +1197,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
       <div className={styles.actions}>
         <button type="button" className={styles.secondary} onClick={onOpen}>Open chat <ExternalLink size={13} aria-hidden="true" /></button>
         <button type="button" className={styles.secondary} onClick={onAsk}>Ask Butler about this</button>
+        <button type="button" className={styles.secondary} aria-pressed={high} onClick={() => onPriority(!high)}><ChevronUp size={13} aria-hidden="true" /> {high ? "Clear high priority" : "High priority"}</button>
         {item.state === "working" && item.turnId && <button type="button" className={styles.secondary} onClick={onStop}>Stop</button>}
       </div>
     </div>}
