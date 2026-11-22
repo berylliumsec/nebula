@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from sqlalchemy import and_, case, delete, func, or_, select
 
+from .work_priority import high_project_ids
 from .database import (
     DeploymentHostRow,
     DeploymentOperationRow,
@@ -235,6 +236,10 @@ class RuntimeAutoAdmission:
         async with self._serial:
             supervisor = self.supervisor
             await self._recover_legacy_chat_starts()
+            # Operator-marked high-priority projects get a worker first and
+            # are not the ones retired to make room.
+            high = list(await high_project_ids(supervisor.store))
+            high_first = case((ProjectOwnershipRow.project_id.in_(high), 0), else_=1)
             async with supervisor.coordinator.database.session() as session:
                 host = await session.get(DeploymentHostRow, "host")
                 if host is None or host.shutdown_requested:
@@ -412,7 +417,7 @@ class RuntimeAutoAdmission:
                                 ProjectOwnershipRow.retirement_requested.is_(False),
                                 active_demand,
                             )
-                            .order_by(ProjectOwnershipRow.project_id)
+                            .order_by(high_first, ProjectOwnershipRow.project_id)
                             .limit(8)
                         )
                     )
@@ -423,6 +428,7 @@ class RuntimeAutoAdmission:
                 demands = list(
                     await session.execute(
                         demand_query.order_by(
+                            high_first,
                             case((active_demand, 0), else_=1),
                             ProjectOwnershipRow.project_id,
                         ).limit(16)
@@ -535,7 +541,11 @@ class RuntimeAutoAdmission:
                         # what the operator uses to see the other projects.
                         ProjectOwnershipRow.project_id != BUTLER_HOME_PROJECT,
                         ProjectOwnershipRow.project_id.not_in(
-                            [*capacity_waiters, *(p for p, _r in idle_owners)]
+                            [
+                                *capacity_waiters,
+                                *(p for p, _r in idle_owners),
+                                *high,
+                            ]
                         ),
                         ~pending_chat_start,
                         ~legacy_chat_start,
