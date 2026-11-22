@@ -4634,7 +4634,7 @@ class SubagentService:
             or (await self.chat._goal_time_wait_due(latest, utc_now()))
         ):
             return
-        if await is_held(self.store, latest.engagement_id):
+        if await is_held(self.store, latest.engagement_id, latest.session_id):
             # The turn keeps waiting; releasing the hold resumes it.
             return
         # Subagents that finish together each deliver, and each delivery tries

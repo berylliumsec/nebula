@@ -751,7 +751,6 @@ class ButlerCapabilities:
         result: dict[str, Any] | None = None,
         error: BaseException | None = None,
     ) -> None:
-
         assert self._background_case_id is not None
         async with self._store.transaction(immediate=True) as transaction:
             case = await self._locked_background_case(transaction)
@@ -1225,6 +1224,16 @@ class ButlerCapabilities:
                 raise ValueError("this operation is unavailable to background Butler")
             if change:
                 (await self._check_background_change_reason(case, name, payload))
+            from .control_assistant_work import HOLD_OPERATIONS
+
+            if (
+                change
+                and name == "nebula.global.work_change"
+                and payload.get("operation") in HOLD_OPERATIONS
+            ):
+                # Holds follow the operator's priorities; background Butler
+                # never freezes or releases work on its own.
+                raise ValueError("only the operator's Butler can hold or release work")
             if change and name in {
                 "nebula.work.set_chat_settings",
                 "nebula.work.message_chat",

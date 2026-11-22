@@ -3906,10 +3906,16 @@ class ProjectHold(Entity):
     its release. ``holding`` lets running turns finish for ``grace_seconds``;
     after that Core stops what is left and the hold becomes ``held`` once no
     turn is active. Release resumes exactly the goals it paused.
+
+    A chat hold sets ``session_id``: it covers that chat and the subagent and
+    goal-child chats under it, and the rest of the project keeps working.
+    Holds placed together share a ``batch_id`` so they release together.
     """
 
     entity_kind: ClassVar[str] = "project_holds"
     engagement_id: str = Field(min_length=1, max_length=200)
+    session_id: str | None = Field(default=None, max_length=200)
+    batch_id: str | None = Field(default=None, max_length=200)
     status: Literal["holding", "held", "released"] = "holding"
     reason: str = Field(min_length=1, max_length=500)
     deployment_id: str | None = Field(default=None, max_length=200)

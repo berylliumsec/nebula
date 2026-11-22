@@ -905,7 +905,11 @@ class MissionService:
             )
         if not run.supervisor_provider_id:
             raise MissionStateError("approval run has no provider profile")
-        hold = await active_hold(self.store, run.engagement_id)
+        hold = await active_hold(
+            self.store,
+            run.engagement_id,
+            run.metadata.get("supervisor_chat_session_id"),
+        )
         if hold is not None:
             # The decision stays recorded; posting it again after the hold
             # is released resumes the Mission.

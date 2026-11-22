@@ -441,6 +441,46 @@ UPDATE_CHAT_SCHEMA: dict[str, Any] = {
     },
     "required": ["session_id", "expected_revision"],
 }
+HOLD_CHATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 200,
+        },
+        "all_active": {"type": "boolean"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+RELEASE_CHATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "batch_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "session_ids": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1, "maxLength": 200},
+            "maxItems": 200,
+        },
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+HOLD_PROJECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
+RELEASE_PROJECT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "reason": {"type": "string", "minLength": 1, "maxLength": 500},
+    },
+}
 CHAT_MESSAGES_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -3860,6 +3900,91 @@ class ControlAssistantWork:
             "status": observed.status.value if observed else "idle",
         }
 
+    def _holds_path(self, project_id: str) -> str:
+        return f"/api/v1/engagements/{quote(project_id, safe='')}"
+
+    async def holds(self, project_id: str) -> dict[str, Any]:
+        view = await self._request("GET", f"{self._holds_path(project_id)}/hold", {})
+        return _hold_summary(project_id, view)
+
+    async def hold_chats(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        session_ids = arguments.get("session_ids") or []
+        all_active = arguments.get("all_active") is True
+        if not all_active and not session_ids:
+            raise ValueError("pass session_ids, or all_active=true for every busy chat")
+        for session_id in session_ids:
+            await self._chat(project_id, session_id)
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/holds",
+            {
+                "session_ids": session_ids,
+                "all_active": all_active,
+                "reason": _text(
+                    arguments.get("reason") or "Priorities changed", "reason", 500
+                ),
+            },
+        )
+        return {
+            "batch_id": view.get("batch_id"),
+            "held_chats": [hold["session_id"] for hold in view.get("holds", [])],
+            **_hold_summary(project_id, view),
+            "result": "held; running steps get a short grace period, then stop. New chats and goals in this project still start.",
+        }
+
+    async def release_chats(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not arguments.get("batch_id") and not arguments.get("session_ids"):
+            raise ValueError("pass the batch_id or session_ids to release")
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/holds/release",
+            {
+                key: arguments[key]
+                for key in ("batch_id", "session_ids", "reason")
+                if arguments.get(key)
+            },
+        )
+        released = view.get("released", [])
+        return {
+            "released_chats": [hold["session_id"] for hold in released],
+            "restored_goals": [
+                item for hold in released for item in hold.get("restored_goals", [])
+            ],
+            **_hold_summary(project_id, view),
+        }
+
+    async def hold_project(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/hold",
+            {
+                "reason": _text(
+                    arguments.get("reason") or "Held through Butler", "reason", 500
+                )
+            },
+        )
+        return _hold_summary(project_id, view)
+
+    async def release_project(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        current = await self._request("GET", f"{self._holds_path(project_id)}/hold", {})
+        hold = current.get("hold") or {}
+        if not current.get("held") or not hold.get("id"):
+            return {**_hold_summary(project_id, current), "released": False}
+        view = await self._request(
+            "POST",
+            f"{self._holds_path(project_id)}/hold/{quote(hold['id'], safe='')}/release",
+            {"reason": arguments.get("reason") or "Released through Butler"},
+        )
+        return {**_hold_summary(project_id, view), "released": True}
+
     async def _request(
         self,
         method: str,
@@ -4303,6 +4428,36 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         True,
     ),
     (
+        "nebula.work.holds",
+        "Read this project's holds: whether the whole project is held, and which chats are on hold, by batch.",
+        {"type": "object", "additionalProperties": False, "properties": {}},
+        True,
+    ),
+    (
+        "nebula.work.hold_chats",
+        "Put listed chats on hold at once, or all_active=true for every chat with a running goal or response. A hold pauses each chat's goal, its subagents, queued follow-ups and schedules; running steps get a short grace period, then stop. New chats and goals in the project still start, so use this when priorities shift. Act when the operator asks; no confirmation is needed. Returns a batch_id for releasing them together.",
+        HOLD_CHATS_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.release_chats",
+        "Release held chats by batch_id or session_ids. Core resumes exactly the goals the hold paused; stopped steps are not replayed, each goal continues from its saved progress.",
+        RELEASE_CHATS_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.hold_project",
+        "Hold the whole project: nothing starts in it, including new chats, until released. For a priority shift inside a project, use hold_chats instead.",
+        HOLD_PROJECT_SCHEMA,
+        False,
+    ),
+    (
+        "nebula.work.release_project",
+        "Release the project-wide hold and resume exactly the goals it paused.",
+        RELEASE_PROJECT_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.stop_chat",
         "Stop the selected assistant chat's active turn only. Queued follow-ups are separate.",
         CHAT_TARGET_SCHEMA,
@@ -4423,6 +4578,40 @@ WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
 )
+
+
+# Hold controls follow the operator's priorities: interactive Butler uses them
+# at once, background Butler never does.
+HOLD_OPERATIONS = frozenset(
+    {
+        "nebula.work.hold_chats",
+        "nebula.work.release_chats",
+        "nebula.work.hold_project",
+        "nebula.work.release_project",
+    }
+)
+
+
+def _hold_summary(project_id: str, view: dict[str, Any]) -> dict[str, Any]:
+    hold = view.get("hold") or {}
+    return {
+        "project_id": project_id,
+        "project_held": bool(view.get("held")),
+        "project_hold": (
+            {key: hold.get(key) for key in ("id", "status", "reason", "grace_until")}
+            if view.get("held")
+            else None
+        ),
+        "chat_holds": [
+            {
+                key: item.get(key)
+                for key in ("id", "session_id", "batch_id", "status", "reason")
+            }
+            for item in view.get("chat_holds", [])
+        ],
+        "active_turns": view.get("active_turns"),
+        "running_goals": view.get("running_goals"),
+    }
 
 
 async def dispatch_work_tool(
@@ -4547,6 +4736,16 @@ async def dispatch_work_tool(
         return await work.message_chat(project_id, arguments)
     if name == "nebula.work.await_chat_result":
         return await work.await_chat_result(project_id, arguments)
+    if name == "nebula.work.holds":
+        return await work.holds(project_id)
+    if name == "nebula.work.hold_chats":
+        return await work.hold_chats(project_id, arguments)
+    if name == "nebula.work.release_chats":
+        return await work.release_chats(project_id, arguments)
+    if name == "nebula.work.hold_project":
+        return await work.hold_project(project_id, arguments)
+    if name == "nebula.work.release_project":
+        return await work.release_project(project_id, arguments)
     if name == "nebula.work.stop_chat":
         return await work.stop_chat(project_id, arguments.get("session_id"))
     if name == "nebula.work.start_mission":

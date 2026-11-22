@@ -652,7 +652,7 @@ class ChatQueueService:
         self._wake.set()
 
     async def step(self, queue, recovering=False):
-        if await is_held(self.store, queue.engagement_id):
+        if await is_held(self.store, queue.engagement_id, queue.session_id):
             # Items stay queued, unclaimed and unreviewed; release wakes them.
             return
         # Older releases classified deliberate stops as failures needing review,

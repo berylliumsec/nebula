@@ -47,6 +47,28 @@ and then pausing them one by one. It did not hold:
 | Delegated Mission synthesis | Waits for release instead of ending the Mission. |
 | Mission resume after an approval decision | Refused (409). The decision stays recorded; posting it again after release resumes the Mission. |
 
+## Chat holds
+
+When priorities shift inside a project, the operator holds the research in
+progress and keeps starting new work in the same project. A chat hold is a
+`ProjectHold` with `session_id` set.
+
+| Step | What Core does |
+|---|---|
+| Place | `POST /api/v1/engagements/{project}/holds` with `session_ids` or `all_active: true`, optional `reason` and `grace_seconds`. One hold per chat, all sharing a returned `batch_id`. `all_active` holds the top chat of every chat with a running goal or active turn. Holding a held chat again returns its hold. No confirmation step. |
+| Coverage | The chat and every subagent or goal-child chat beneath it (walking `parent_session_id` through those links only). Forks and chats started later are not covered, so new chats and goals start normally. |
+| Holding | The same contract as a project hold, limited to covered chats: their goals pause with the hold's mark (children before parents, so release restores both), their turns get the grace period and are then stopped, and their subagent reports, follow-ups, schedules and callbacks wait. Sending to a held chat answers 409 `project_held`. |
+| Read | `GET .../hold` lists active `chat_holds`; `GET /api/v1/chat-sessions/{id}/hold` says whether a chat is held and by which hold. |
+| Release | `POST /api/v1/engagements/{project}/holds/release` with `batch_id` and/or `session_ids`. A goal another active hold still covers (a project hold placed meanwhile, say) moves to that hold instead of resuming or losing its mark. |
+
+Interactive Butler has the same controls as `nebula.work.holds`,
+`hold_chats`, `release_chats`, `hold_project` and `release_project`, and uses
+them without confirmation when the operator asks. Background Butler never
+holds or releases work.
+
+Callers that do not know the chat (Butler oversight, harness analysis, a
+Mission starting without a supervisor chat) see only project-wide holds.
+
 ## Limits
 
 - Placing a hold and creating a turn are not one transaction. A turn that

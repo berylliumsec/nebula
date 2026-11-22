@@ -615,7 +615,11 @@ class DelegatedMissionService:
                         # A child may have finished after the parent response. A
                         # fresh supervisor turn incorporates those late reports.
                         if children and not run.metadata.get("synthesis_started"):
-                            if await is_held(self.store, run.engagement_id):
+                            if await is_held(
+                                self.store,
+                                run.engagement_id,
+                                run.metadata.get("supervisor_chat_session_id"),
+                            ):
                                 # Synthesis waits for the project hold's
                                 # release instead of failing the Mission.
                                 await asyncio.sleep(HELD_RECHECK_SECONDS)
