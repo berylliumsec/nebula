@@ -100,6 +100,42 @@
       "status": "supported"
     },
     {
+      "id": "chat.high_priority",
+      "entry_point": "Conversation menu High priority, the list's bulk actions, or a Butler board card's expanded actions",
+      "ui_calls": [
+        "ui/src/pages/SessionsPage.tsx::setChatSessionPriority",
+        "ui/src/pages/chatBulkActions.ts::setChatSessionPriority",
+        "ui/src/pages/ButlerModePage.tsx::setChatSessionPriority"
+      ],
+      "core_owner": "ChatService chat session metadata and work_priority admission",
+      "butler": {
+        "discover": "nebula.work.chats",
+        "read": "nebula.work.chat",
+        "change": "nebula.work.set_priority"
+      },
+      "authority": "Selected project, listed main chat; no confirmation because priority only reorders waiting work",
+      "observed_result_test": "tests/v3/test_work_priority.py::test_operator_and_butler_mark_priority_and_the_board_leads_with_it",
+      "result": "Core saved metadata.priority agrees with the chat list marker and the Butler board order",
+      "status": "supported"
+    },
+    {
+      "id": "project.priority",
+      "entry_point": "Project switcher: the chevron button on a project's row",
+      "ui_calls": [
+        "ui/src/state/WorkspaceContext.tsx::setEngagementPriority"
+      ],
+      "core_owner": "Core project store and work_priority admission",
+      "butler": {
+        "discover": "nebula.work.overview",
+        "read": "nebula.work.overview",
+        "change": "nebula.work.set_priority"
+      },
+      "authority": "Exact project; no confirmation because priority only reorders waiting work",
+      "observed_result_test": "tests/v3/test_work_priority.py::test_operator_and_butler_mark_priority_and_the_board_leads_with_it",
+      "result": "Core saved project metadata.priority agrees with the project switcher after refresh",
+      "status": "supported"
+    },
+    {
       "id": "chat.fork",
       "entry_point": "Conversation toolbar: fork a saved main chat",
       "ui_calls": [
@@ -5464,6 +5500,10 @@
       "count": 1
     },
     {
+      "key": "ui/src/pages/ButlerModePage.tsx::setChatSessionPriority",
+      "count": 1
+    },
+    {
       "key": "ui/src/pages/ButlerModePage.tsx::streamChat",
       "count": 1
     },
@@ -6125,6 +6165,10 @@
     },
     {
       "key": "ui/src/state/WorkspaceContext.tsx::setEngagementArchived",
+      "count": 1
+    },
+    {
+      "key": "ui/src/state/WorkspaceContext.tsx::setEngagementPriority",
       "count": 1
     },
     {
