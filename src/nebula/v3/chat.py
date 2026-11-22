@@ -283,6 +283,7 @@ from .chat_turn_outcomes import (
     turn_outcome_metadata,
     turn_outcome_text,
 )
+from .work_priority import is_high
 from .project_hold_gate import active_hold, held_detail, is_held
 from .storage import (
     REVISE_ATTEMPTS,
@@ -1185,6 +1186,8 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "side_chat",
         "butler_initiated",
         "control_assistant",
+        # A fork starts at normal priority; the operator marks it if wanted.
+        "priority",
     }
 )
 
@@ -12714,7 +12717,12 @@ class ChatService:
                     "Tool capacity requires the exact project execution context"
                 )
             async with self.runtime_capacity.slot(
-                lease, "tool:" + invocation.id, {"tool": 1}
+                lease,
+                "tool:" + invocation.id,
+                {"tool": 1},
+                high=await is_high(
+                    self.store, invocation.engagement_id, invocation.chat_session_id
+                ),
             ):
                 return await invoke()
 
