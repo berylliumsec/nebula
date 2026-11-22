@@ -468,6 +468,10 @@ def test_product_search_finds_work_stages_and_their_butler_tools(monkeypatch):
         "Do subprojects use their parent project's Work stages?"
     )
     assert any("nearest parent's" in str(item["text"]) for item in inherited)
+    rollup = search_product_knowledge(
+        "How many subprojects reached each stage on a parent project?"
+    )
+    assert any("Subprojects by stage" in str(item["text"]) for item in rollup)
 
 
 def test_product_search_finds_butler_chat_rewind_guidance(monkeypatch):

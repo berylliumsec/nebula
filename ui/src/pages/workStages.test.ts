@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_STAGE_KEY, OTHER_STAGE_KEY, effectiveStages, hasStageGap, stageCells, stageColumns, stageKeyFor, type StagedItem } from "./workStages";
+import { NO_STAGE_KEY, OTHER_STAGE_KEY, effectiveStages, hasStageGap, stageCells, stageColumns, stageKeyFor, stageRollup, type StagedItem } from "./workStages";
 
 const stages = [
   { key: "draft", label: "Draft", flagWhenEmpty: true },
@@ -65,5 +65,20 @@ describe("work stages", () => {
     expect(effectiveStages(byId.get("own"), byId)).toEqual({ stages: own, from: undefined });
     expect(effectiveStages(byId.get("a"), byId)).toEqual({ stages: [] });
     expect(effectiveStages(undefined, byId)).toEqual({ stages: [] });
+  });
+
+  it("counts subprojects, not items, per stage across a parent's subprojects", () => {
+    const at = (id: string, project: string, status: StagedItem["status"], stage: string | null) => ({ ...item(id, status, stage), engagement_id: project });
+    const cells = stageRollup(stages, ["a", "b", "c"], [
+      at("1", "a", "in_progress", "draft"), at("2", "a", "blocked", "draft"), at("3", "b", "done", "draft"),
+      at("4", "b", "ready", "ship"), at("5", "outside", "in_progress", "review"), at("6", "c", "in_progress", null),
+    ]);
+    expect(cells.map((cell) => [cell.key, [...cell.reached].sort(), cell.state, cell.detail])).toEqual([
+      ["draft", ["a", "b"], "blocked", "1 blocked"],
+      ["review", [], "gap", ""],
+      ["ship", ["b"], "normal", "1 not started"],
+    ]);
+    expect(cells[0].total).toBe(3);
+    expect(stageRollup(stages, ["b"], [at("3", "b", "done", "draft")])[0]).toMatchObject({ state: "normal", detail: "All done" });
   });
 });

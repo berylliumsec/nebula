@@ -104,6 +104,16 @@ subprojects' stage cells, not its own, and never lists it as missing a stage.
 This keeps one write on the parent instead of one per subproject, each of
 which is a project command that starts that project's worker.
 
+A parent's Work page shows **Subprojects by stage**: for each of its stages,
+how many direct subprojects have any item in that stage, and how many of those
+are blocked, active (in progress or in review) or not started, or that all are
+done. A flagged stage that no subproject has reached reads None yet. Counts are
+subprojects, not items. Selecting a stage filters the Subprojects list to the
+subprojects that reached it, or with Not yet to those that have not; the URL
+holds the choice (`substage`, `subreach=missing`), so it survives reload. The
+roll-up reads Core's shared item listing (`GET /api/v1/work/items`), which
+wakes no subproject's worker.
+
 An item's optional `stage` is set on create, by `PATCH` (null clears it), or
 by a check-in's `stage`, which moves the item with the update and is recorded
 on it. Agent `work_list` results include the project's effective stages, and
