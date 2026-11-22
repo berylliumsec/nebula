@@ -3481,7 +3481,7 @@ class ChatService:
                 continue
             if self.has_active_provider_turn(waiting_turn.id):
                 continue
-            if await is_held(self.store, latest.engagement_id):
+            if await is_held(self.store, latest.engagement_id, latest.session_id):
                 # Materializing would leave the turn neither waiting nor
                 # resumable; it stays waiting until the hold is released.
                 continue
@@ -3717,7 +3717,7 @@ class ChatService:
             or saved.status != ChatTurnStatus.INTERRUPTED
         ):
             return False
-        if await is_held(self.store, saved.engagement_id):
+        if await is_held(self.store, saved.engagement_id, saved.session_id):
             # Left interrupted and untouched; a pass after release resumes it.
             return False
         recovery_subagent: ChatSubagent | None = None
@@ -4806,10 +4806,9 @@ class ChatService:
                 queue = await session.get(ProviderTurnQueueRow, turn_id)
                 if queue is None or queue.state != "queued":
                     continue
-            if await is_held(
-                self.store, (await self.store.get(ChatTurn, turn_id)).engagement_id
-            ):
-                # Parked turns stay parked while the project is held.
+            parked = await self.store.get(ChatTurn, turn_id)
+            if await is_held(self.store, parked.engagement_id, parked.session_id):
+                # Parked turns stay parked while the project or chat is held.
                 continue
             await self.start_provider_turn(await self.prepare_resume(turn_id))
 
@@ -5552,7 +5551,7 @@ class ChatService:
     ) -> None:
         from .storage import NotFoundError
 
-        if await is_held(self.store, schedule.engagement_id):
+        if await is_held(self.store, schedule.engagement_id, schedule.session_id):
             # The occurrence stays due and fires on the first pass after the
             # hold is released, instead of being skipped as a paused goal.
             return
@@ -6338,8 +6337,9 @@ class ChatService:
                     "chat session does not belong to the requested engagement"
                 )
             engagement_id = session.engagement_id
-        # Refused before any goal, skill or session write below.
-        await self.require_project_open(engagement_id)
+        # Refused before any goal, skill or session write below. A new chat has
+        # no session yet, so only a project-wide hold refuses it.
+        await self.require_project_open(engagement_id, request.session_id)
         if session is not None:
             if (await self.pending_turn(session.id)) is not None:
                 raise ChatHistoryConflict(
@@ -14501,18 +14501,19 @@ class ChatService:
             CommandExecutionStatus.INTERRUPTED,
         }
 
-    async def require_project_open(self, engagement_id: str | None) -> None:
-        """Refuse new or resumed chat work while the project is held."""
+    async def require_project_open(
+        self, engagement_id: str | None, session_id: str | None = None
+    ) -> None:
+        """Refuse new or resumed chat work while the project or chat is held."""
 
-        hold = await active_hold(self.store, engagement_id)
+        hold = await active_hold(self.store, engagement_id, session_id)
         if hold is not None:
             raise ProjectHeld(held_detail(hold))
 
     async def prepare_resume(self, turn_id: str) -> PreparedChat:
         # Refused before reconciling effects or reactivating the turn.
-        await self.require_project_open(
-            (await self.store.get(ChatTurn, turn_id)).engagement_id
-        )
+        held_turn = await self.store.get(ChatTurn, turn_id)
+        await self.require_project_open(held_turn.engagement_id, held_turn.session_id)
         turn = await self.reconcile_recorded_effects(turn_id)
         final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
         final_answer_recovery: dict[str, Any] | None = (
