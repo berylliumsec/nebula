@@ -535,7 +535,13 @@ async def run_project_tool_hooks(
         for item in catalog
         if event_name in item.manifest.events
     ]
-    if not snapshots:
+    # The tool.before baseline exists only for a tool.after hook to compare
+    # against. Without one, nothing ever finishes it, so hashing the dirty
+    # checkout would delay every call for an observation no hook can use.
+    takes_baseline = event_name == "tool.before" and any(
+        "tool.after" in item.manifest.events for item in catalog
+    )
+    if not snapshots and not takes_baseline:
         return []
     actor_id = await actor_id_for(
         store,
@@ -551,6 +557,13 @@ async def run_project_tool_hooks(
                 "schema": PROVENANCE_SCHEMA,
                 "supported": False,
                 "unsupported_reason": "tool_call_id_is_missing",
+                "actor_id": actor_id,
+            }
+        elif event_name == "tool.before" and not takes_baseline:
+            workspace_receipt = {
+                "schema": PROVENANCE_SCHEMA,
+                "supported": False,
+                "unsupported_reason": "no_tool_after_hook",
                 "actor_id": actor_id,
             }
         elif event_name == "tool.before":
@@ -619,7 +632,7 @@ async def run_project_tool_hooks(
             and snapshot.manifest.failure_policy == "block"
             and outcome.status != "complete"
         ):
-            if event_name == "tool.before" and scope_id:
+            if takes_baseline and scope_id:
                 try:
                     await provenance.finish(
                         workspace,

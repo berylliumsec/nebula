@@ -14,7 +14,9 @@ import hashlib
 import os
 import stat
 import subprocess
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -149,6 +151,69 @@ def _dirty_entries(output: bytes, *, deadline: float) -> dict[str, str]:
     return entries
 
 
+_FileIdentity = tuple[str, int, int, int, int, int]
+
+
+class _FingerprintCache:
+    """Process-local SHA-256 results keyed by a file's full stat identity.
+
+    Most dirty files in a checkout (untracked artifacts) never change between
+    observed tool calls. Reusing their fingerprints keeps repeated snapshots
+    proportional to what changed, and lets a snapshot that ran out of time
+    keep the files it finished for the next attempt. Any rewrite changes
+    ``st_ctime_ns``, even when size and mtime are restored, so a cached
+    entry never stands in for altered content.
+    """
+
+    def __init__(self, maximum: int) -> None:
+        self._maximum = maximum
+        self._entries: OrderedDict[_FileIdentity, tuple[str, int]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, identity: _FileIdentity) -> tuple[str, int] | None:
+        with self._lock:
+            fingerprint = self._entries.get(identity)
+            if fingerprint is not None:
+                self._entries.move_to_end(identity)
+            return fingerprint
+
+    def put(self, identity: _FileIdentity, fingerprint: tuple[str, int]) -> None:
+        with self._lock:
+            self._entries[identity] = fingerprint
+            self._entries.move_to_end(identity)
+            while len(self._entries) > self._maximum:
+                self._entries.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_FINGERPRINTS = _FingerprintCache(maximum=200_000)
+
+
+def _file_identity(path: Path, file_state: os.stat_result) -> _FileIdentity:
+    return (
+        str(path),
+        file_state.st_dev,
+        file_state.st_ino,
+        file_state.st_size,
+        file_state.st_mtime_ns,
+        file_state.st_ctime_ns,
+    )
+
+
+def _hash_file(path: Path, deadline: float) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            _remaining(deadline)
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
+
+
 def _path_state(
     root: Path, relative: str, status: str, *, deadline: float
 ) -> dict[str, Any]:
@@ -164,17 +229,18 @@ def _path_state(
             data = os.readlink(path).encode("utf-8", "surrogateescape")
             kind = "symlink"
         elif stat.S_ISREG(file_state.st_mode):
-            digest = hashlib.sha256()
-            size = 0
-            with path.open("rb") as handle:
-                while chunk := handle.read(1024 * 1024):
-                    _remaining(deadline)
-                    digest.update(chunk)
-                    size += len(chunk)
+            identity = _file_identity(path, file_state)
+            fingerprint = _FINGERPRINTS.get(identity)
+            if fingerprint is None:
+                fingerprint = _hash_file(path, deadline)
+                # Keep only a result whose file did not change while it was read.
+                if _file_identity(path, os.lstat(path)) == identity:
+                    _FINGERPRINTS.put(identity, fingerprint)
+            sha256, size = fingerprint
             return {
                 "status": status,
                 "kind": "file",
-                "sha256": digest.hexdigest(),
+                "sha256": sha256,
                 "size": size,
             }
         else:
