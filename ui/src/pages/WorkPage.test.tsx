@@ -634,4 +634,31 @@ describe("Work stages", () => {
     expect(dialog).toHaveTextContent("Documentation portal uses Portfolio's stages.");
     expect(within(dialog).getByRole("textbox", { name: "Stage 1 name" })).toHaveValue("Draft");
   });
+
+  it("counts a parent's subprojects by stage and lists those that did or did not reach one", async () => {
+    const user = userEvent.setup();
+    workspace.engagements = [
+      { id: "portfolio", name: "Portfolio", status: "active", workEnabled: true, workStages: stages, revision: 7 },
+      staged({ workStages: [], parentEngagementId: "portfolio" }),
+      { id: "project-2", name: "Release notes", status: "active", workEnabled: true, parentEngagementId: "portfolio" },
+    ] as typeof workspace.engagements;
+    render(<MemoryRouter initialEntries={["/projects/portfolio/work"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+    const rollup = await screen.findByRole("list", { name: "Subprojects by stage" });
+    // The roll-up reads Core's shared listing, so a parent's page never waits on each subproject's worker.
+    expect(workspace.api.request).toHaveBeenCalledWith("work/items?offset=0&limit=500", expect.any(Object));
+    const draft = await within(rollup).findByRole("link", { name: "Draft: 1 of 2 subprojects, 1 blocked" });
+    expect(within(rollup).getByRole("link", { name: "Review: 0 of 2 subprojects" })).toHaveTextContent("None yet");
+    const subprojects = screen.getByRole("region", { name: "Subprojects" });
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Documentation portal"), expect.stringContaining("Release notes")]);
+
+    await user.click(draft);
+    expect(draft).toHaveAttribute("aria-current", "true");
+    expect(within(subprojects).getByRole("button", { name: "Reached Draft 1" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Documentation portal")]);
+    await user.click(within(subprojects).getByRole("button", { name: "Not yet 1" }));
+    expect(within(subprojects).getAllByRole("link").map((link) => link.textContent)).toEqual([expect.stringContaining("Release notes")]);
+    await user.click(within(subprojects).getByRole("button", { name: "Show all subprojects" }));
+    expect(within(subprojects).getAllByRole("link")).toHaveLength(2);
+    expect(within(rollup).getByRole("link", { name: /^Draft:/ })).not.toHaveAttribute("aria-current");
+  });
 });

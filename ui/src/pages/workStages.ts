@@ -121,3 +121,45 @@ export function effectiveStages<T extends StageOwner>(project: T | undefined, by
   }
   return { stages: [] };
 }
+
+/** One stage across a parent's subprojects: which reached it and how their work there stands. */
+export interface StageRollupCell {
+  key: string;
+  label: string;
+  total: number;
+  /** Subprojects with any item in this stage. */
+  reached: Set<string>;
+  open: number;
+  active: number;
+  blocked: number;
+  state: StageCellState;
+  detail: string;
+}
+
+/** Per stage, how many of the given subprojects reached it; counts are subprojects, not items. */
+export function stageRollup<T extends StagedItem & { engagement_id: string }>(stages: WorkStage[], projectIds: readonly string[], items: readonly T[]): StageRollupCell[] {
+  const members = new Set(projectIds);
+  const byStage = new Map<string, Map<string, T[]>>();
+  for (const item of items) {
+    if (!item.stage || !members.has(item.engagement_id)) continue;
+    const projects = byStage.get(item.stage) ?? new Map<string, T[]>();
+    projects.set(item.engagement_id, [...(projects.get(item.engagement_id) ?? []), item]);
+    byStage.set(item.stage, projects);
+  }
+  return stages.map((stage) => {
+    const projects = byStage.get(stage.key) ?? new Map<string, T[]>();
+    let open = 0, active = 0, blocked = 0;
+    for (const stageItems of projects.values()) {
+      const pending = stageItems.filter((item) => item.status !== "done");
+      if (pending.length) open += 1;
+      if (pending.some((item) => item.status === "blocked")) blocked += 1;
+      else if (pending.some((item) => item.status === "in_progress" || item.status === "review")) active += 1;
+    }
+    const reached = new Set(projects.keys());
+    const state: StageCellState = !reached.size ? (stage.flagWhenEmpty ? "gap" : "empty") : blocked ? "blocked" : active ? "active" : "normal";
+    const detail = !reached.size ? "" : blocked ? `${blocked.toLocaleString()} blocked`
+      : active ? `${active.toLocaleString()} active`
+        : open ? `${open.toLocaleString()} not started` : "All done";
+    return { key: stage.key, label: stage.label, total: members.size, reached, open, active, blocked, state, detail };
+  });
+}

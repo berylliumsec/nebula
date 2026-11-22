@@ -402,6 +402,23 @@ test("work hub stages: subprojects inherit the parent's stages", async ({ page }
     await expect.poll(async () => (await (await api.get(`engagements/${siteId}/work/${copyId}`)).json() as { stage?: string }).stage, { timeout: 30_000 }).toBe("ship");
     expect((await (await api.get(`engagements/${siteId}`)).json() as { work_stages: unknown[] }).work_stages).toEqual([]);
     expect((await new AxeBuilder({ page }).include(".work-page").analyze()).violations).toEqual([]);
+
+    // The parent's page counts its subprojects per stage and lists which reached one; the URL keeps the choice.
+    await page.goto(`${core.origin}/projects/${parentId}/work`);
+    const rollup = page.getByRole("list", { name: "Subprojects by stage" });
+    await expect(rollup.getByRole("link", { name: "Ship: 1 of 2 subprojects, 1 active" })).toBeVisible({ timeout: 20_000 });
+    await expect(rollup.getByRole("link", { name: "Draft: 0 of 2 subprojects" })).toContainText("None yet");
+    await rollup.getByRole("link", { name: /^Ship:/ }).click();
+    const subprojects = page.getByRole("region", { name: "Subprojects" });
+    await expect(subprojects.getByRole("link", { name: /Website refresh/ })).toBeVisible();
+    await expect(subprojects.getByRole("link", { name: /Docs cleanup/ })).toHaveCount(0);
+    await subprojects.getByRole("button", { name: /^Not yet/ }).click();
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Subprojects" }).getByRole("link", { name: /Docs cleanup/ })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("region", { name: "Subprojects" }).getByRole("link", { name: /Website refresh/ })).toHaveCount(0);
+    expect(new URL(page.url()).searchParams.get("substage")).toBe("ship");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".work-page").analyze()).violations).toEqual([]);
     await testInfo.attach("work-stage-inheritance", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), parentId, siteId }), contentType: "application/json" });
   } finally {
     await api.dispose();

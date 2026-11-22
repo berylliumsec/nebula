@@ -9,7 +9,7 @@ import { projectRoot, projectSurface, resourcePath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useOptionalChrome } from "../state/ChromeContext";
 import { WorkStageEditor } from "./WorkStageEditor";
-import { effectiveStages, hasStageGap, stageCells, stageColumns, type StageCell } from "./workStages";
+import { effectiveStages, hasStageGap, stageCells, stageColumns, stageRollup, type StageCell, type StageRollupCell } from "./workStages";
 import "./WorkPage.css";
 
 type Status = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done";
@@ -76,6 +76,17 @@ function ProjectStageStrip({ projectId, projectName, cells }: { projectId: strin
   </li>)}</ol>;
 }
 
+/** A parent's stages counted across its subprojects; each cell lists the subprojects that reached that stage. */
+function SubprojectStageRollup({ cells, href, selected }: { cells: StageRollupCell[]; href: (key: string) => string; selected: string | null }) {
+  return <ol className="work-stage-strip" aria-label="Subprojects by stage">{cells.map((cell) => <li key={cell.key}>
+    <Link className="work-stage-cell" data-state={cell.state} aria-current={selected === cell.key ? "true" : undefined} to={href(cell.key)} aria-label={`${cell.label}: ${cell.reached.size.toLocaleString()} of ${cell.total.toLocaleString()} subprojects${cell.detail ? `, ${cell.detail}` : ""}`}>
+      <span className="work-stage-cell-name"><i aria-hidden="true" />{cell.label}</span>
+      <strong>{cell.state === "gap" ? "None yet" : cell.reached.size.toLocaleString()}</strong>
+      <small>{cell.reached.size ? `of ${cell.total.toLocaleString()} · ${cell.detail}` : ""}</small>
+    </Link>
+  </li>)}</ol>;
+}
+
 export function projectInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? "").slice(0, 2);
@@ -89,6 +100,8 @@ export function WorkPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [items, setItems] = useState<WorkItem[]>([]);
+  // Every project's items, read only on a parent's page to count its subprojects by stage.
+  const [familyItems, setFamilyItems] = useState<WorkItem[]>([]);
   const [recent, setRecent] = useState<WorkUpdate[]>([]);
   const [itemUpdates, setItemUpdates] = useState<WorkUpdate[]>([]);
   const [sessionTitles, setSessionTitles] = useState<Record<string, string>>({});
@@ -135,6 +148,7 @@ export function WorkPage() {
     return children;
   }, [activeProjects, projectById]);
   const directChildren = childrenByParent.get(projectId ?? "") ?? [];
+  const hasChildren = directChildren.length > 0;
   // The URL owns which grouping and stage are shown, so a stage link and reload land on the same view.
   // A subproject without its own stages uses its nearest parent's.
   const { stages: projectStages, from: stagesFrom } = effectiveStages(selectedProject, projectById);
@@ -143,6 +157,10 @@ export function WorkPage() {
   const editingStages = Boolean(projectId) && searchParams.get("stages") === "edit";
   const anyStages = activeProjects.some((project) => (project.workStages ?? []).length > 0);
   const projectsView: "stages" | "status" = anyStages && searchParams.get("view") !== "status" ? "stages" : "status";
+  const subStageParam = searchParams.get("substage");
+  useEffect(() => {
+    if (subStageParam) document.getElementById("work-subprojects")?.scrollIntoView?.({ block: "nearest" });
+  }, [subStageParam]);
   useEffect(() => {
     if (!groupByStage || !focusedStage || loading) return;
     document.getElementById(`work-stage-column-${focusedStage}`)?.closest("section")?.scrollIntoView({ block: "nearest", inline: "start" });
@@ -163,20 +181,33 @@ export function WorkPage() {
     if (!api) return;
     // A project's board reads its worker: while it starts, stay loading and read again when it answers.
     const projectRead = <T,>(read: () => Promise<T>) => readWhenProjectReady(api.projectRuntime, read, signal);
+    // Core's shared listing of every project's items, read in pages.
+    const readAllItems = async () => {
+      const all: WorkItem[] = [];
+      for (let offset = 0; ; offset += workPageSize) {
+        const page = await api.request<WorkItem[]>(`work/items?offset=${offset}&limit=${workPageSize}`, { signal });
+        all.push(...page);
+        if (page.length < workPageSize) break;
+      }
+      return all;
+    };
     try {
       let loaded: WorkItem[];
       if (projectId) {
         loaded = await projectRead(() => api.request<WorkItem[]>(`engagements/${encodeURIComponent(projectId)}/work`, { signal }));
       } else {
-        loaded = [];
-        for (let offset = 0; ; offset += workPageSize) {
-          const page = await api.request<WorkItem[]>(`work/items?offset=${offset}&limit=${workPageSize}`, { signal });
-          loaded.push(...page);
-          if (page.length < workPageSize) break;
-        }
+        loaded = await readAllItems();
       }
       if (signal?.aborted) return;
       setItems(loaded);
+      // A parent's stage roll-up reads every project's items from Core's shared listing, which wakes no project worker.
+      if (projectId && hasChildren) {
+        const family = await readAllItems();
+        if (signal?.aborted) return;
+        setFamilyItems(family);
+      } else {
+        setFamilyItems([]);
+      }
       if (projectId && itemId) {
         const updates = await projectRead(() => api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal }));
         if (signal?.aborted) return;
@@ -211,7 +242,7 @@ export function WorkPage() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [api, projectId, itemId]);
+  }, [api, projectId, itemId, hasChildren]);
 
   useEffect(() => { setEnabled(selectedProject?.workEnabled ?? false); }, [projectId, selectedProject?.workEnabled]);
   useEffect(() => { setSummaryView(projectId ? "working" : null); }, [projectId]);
@@ -369,6 +400,21 @@ export function WorkPage() {
     .slice(0, visibleProjectLimit)
     .map((project) => ({ project, depth: 0 })), [projectsView, stageFilter, visibleProjects, activeProjects, cellsByProject, blockedProjects, projectQuery]);
   const boardColumns = useMemo(() => stageColumns(projectStages, items), [projectStages, items]);
+  // The URL owns the subproject stage filter: `substage` names the stage, `subreach=missing` lists those that have not reached it.
+  const subStage = searchParams.get("substage");
+  const subMissing = searchParams.get("subreach") === "missing";
+  const rollup = useMemo(() => hasChildren && projectStages.length ? stageRollup(projectStages, directChildren.map((child) => child.id), familyItems) : [], [hasChildren, projectStages, directChildren, familyItems]);
+  const rollupFilter = rollup.find((cell) => cell.key === subStage);
+  const listedChildren = useMemo(() => directChildren
+    .filter((child) => !rollupFilter || rollupFilter.reached.has(child.id) !== subMissing)
+    .filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())), [directChildren, rollupFilter, subMissing, projectQuery]);
+  const subStageHref = (key: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (key) next.set("substage", key); else next.delete("substage");
+    next.delete("subreach");
+    const query = next.toString();
+    return `${projectSurface(projectId ?? "", "work")}${query ? `?${query}` : ""}`;
+  };
   const stageLabel = (key: string | null | undefined) => key ? projectStages.find((stage) => stage.key === key)?.label ?? key : "No stage";
   const createTarget = engagements.find((project) => project.id === (projectId ?? createProjectId));
   const createStages = effectiveStages(createTarget, projectById).stages;
@@ -612,6 +658,9 @@ export function WorkPage() {
           {!recent.length && <p className="work-empty-inline">No check-ins yet. Agents can post updates from their project tools.</p>}
         </section>
       </> : <>
+        {rollup.length > 0 && <section className="work-panel work-stage-rollup" aria-labelledby="work-stage-rollup-title"><div className="work-panel-head"><h2 id="work-stage-rollup-title">Subprojects by stage</h2>{loading && !familyItems.length ? <LoaderCircle className="spin" size={15} aria-label="Loading subproject stages" /> : <span>{directChildren.length.toLocaleString()}</span>}</div>
+          <SubprojectStageRollup cells={rollup} selected={subStage} href={(key) => subStageHref(key === subStage ? null : key)} />
+        </section>}
         <div className={`work-project-layout${itemId ? " has-detail" : ""}`}>
           <div className="work-board-tools">
             <div className="work-segmented" role="group" aria-label="Group items"><button type="button" aria-pressed={!groupByStage} onClick={() => { setParam("group", null); setParam("stage", null); }}>Status</button><button type="button" aria-pressed={groupByStage} onClick={() => setParam("group", "stage")}>Stage</button></div>
@@ -655,7 +704,12 @@ export function WorkPage() {
             </> : <div role="alert" className="work-empty-inline">This item is unavailable. <Link to={projectSurface(projectId, "work")}>Return to board</Link></div>}
           </aside>}
         </div>
-        {directChildren.length > 0 && <section className="work-panel work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{directChildren.length}</span></div><div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{directChildren.filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())).slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}</div>{directChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing up to {visibleProjectLimit} matches. Search to narrow the list.</p>}</section>}
+        {hasChildren && <section className="work-panel work-subprojects" id="work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{listedChildren.length.toLocaleString()}</span></div>
+          {rollupFilter && <div className="work-subproject-filter">
+            <div className="work-segmented" role="group" aria-label={`${rollupFilter.label} filter`}><button type="button" aria-pressed={!subMissing} onClick={() => setParam("subreach", null)}>Reached {rollupFilter.label} <span>{rollupFilter.reached.size.toLocaleString()}</span></button><button type="button" aria-pressed={subMissing} onClick={() => setParam("subreach", "missing")}>Not yet <span>{(rollupFilter.total - rollupFilter.reached.size).toLocaleString()}</span></button></div>
+            <button type="button" className="icon-button work-filter-clear" title="Show all subprojects" aria-label="Show all subprojects" onClick={() => setSearchParams((current) => { const next = new URLSearchParams(current); next.delete("substage"); next.delete("subreach"); return next; }, { replace: true })}><X size={15} /></button>
+          </div>}
+          <div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{listedChildren.slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}{!listedChildren.length && <p className="work-empty-inline">No subprojects match.</p>}</div>{listedChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} of {listedChildren.length.toLocaleString()}. Search to narrow the list.</p>}</section>}
       </>}
     </>}
     {editingStages && selectedProject && <WorkStageEditor key={selectedProject.id} project={selectedProject} inherited={stagesFrom ? { from: stagesFrom.name, stages: projectStages } : undefined} itemCounts={Object.fromEntries(boardColumns.map((column) => [column.key, column.open.length]))} save={saveStages} close={() => setParam("stages", null)} />}
