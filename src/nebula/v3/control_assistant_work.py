@@ -5,6 +5,7 @@ This is a project-bound control plane over Core's chat and mission services.
 
 from __future__ import annotations
 
+from .work_priority import marked_high
 from .async_utils import resolve_workspace
 
 import asyncio
@@ -424,6 +425,15 @@ ANSWER_QUESTION_SCHEMA: dict[str, Any] = {
         "response": {"type": "object", "maxProperties": 32},
     },
     "required": ["action_id", "expected_revision", "action"],
+}
+SET_PRIORITY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "session_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "priority": {"type": "string", "enum": ["high", "normal"]},
+    },
+    "required": ["priority"],
 }
 UPDATE_CHAT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1451,7 +1461,11 @@ class ControlAssistantWork:
             limit=50,
         )
         return {
-            "project": {"id": project.id, "name": project.name},
+            "project": {
+                "id": project.id,
+                "name": project.name,
+                "priority": "high" if marked_high(project.metadata) else "normal",
+            },
             "chats": [
                 {
                     "id": item.id,
@@ -1465,10 +1479,15 @@ class ControlAssistantWork:
                     "archived": isinstance(item.metadata.get("archived_at"), str),
                     "pinned": item.metadata.get("pinned") is True,
                     "flag_color": item.metadata.get("flag_color"),
+                    "priority": "high" if marked_high(item.metadata) else "normal",
                     "turn_id": pending[item.id].id if item.id in pending else None,
                     "url": _chat_url(project_id, item.id),
                 }
-                for item in chats[:30]
+                # High-priority chats first: Butler reviews and unblocks them
+                # before the rest.
+                for item in sorted(
+                    chats[:30], key=lambda chat: not marked_high(chat.metadata)
+                )
             ],
             "subagents": [
                 (await self._subagent_summary(item)) for item in subagents[:30]
@@ -1514,6 +1533,7 @@ class ControlAssistantWork:
                 "revision": item.revision,
                 "archived": isinstance(item.metadata.get("archived_at"), str),
                 "pinned": item.metadata.get("pinned") is True,
+                "priority": "high" if marked_high(item.metadata) else "normal",
                 "flag_color": item.metadata.get("flag_color"),
                 "url": _chat_url(project_id, item.id),
             }
@@ -1805,6 +1825,7 @@ class ControlAssistantWork:
             "revision": session.revision,
             "archived": isinstance(session.metadata.get("archived_at"), str),
             "pinned": session.metadata.get("pinned") is True,
+            "priority": "high" if marked_high(session.metadata) else "normal",
             "flag_color": session.metadata.get("flag_color"),
             "task_plans": [
                 item.model_dump(mode="json")
@@ -3198,6 +3219,38 @@ class ControlAssistantWork:
             "url": _chat_url(project_id, saved.id),
         }
 
+    async def set_priority(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        priority = arguments.get("priority")
+        if priority not in ("high", "normal"):
+            raise ValueError("priority must be high or normal")
+        if arguments.get("session_id"):
+            session = await self._chat(project_id, arguments["session_id"])
+            await self._request(
+                "PATCH",
+                f"/api/v1/chat-sessions/{quote(session.id, safe='')}",
+                {"priority": priority},
+            )
+            saved = await self._chat(project_id, session.id)
+            return {
+                "session_id": saved.id,
+                "priority": "high" if marked_high(saved.metadata) else "normal",
+                "url": _chat_url(project_id, saved.id),
+                "result": "saved; waiting work from this chat and its subagents is now taken first",
+            }
+        await self._request(
+            "PUT",
+            f"/api/v1/engagements/{quote(project_id, safe='')}/priority",
+            {"priority": priority},
+        )
+        project = await self.store.get(Engagement, project_id)
+        return {
+            "project_id": project_id,
+            "priority": "high" if marked_high(project.metadata) else "normal",
+            "result": "saved; waiting work from every chat in this project is now taken first",
+        }
+
     async def rewind_chat(
         self, project_id: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -4524,6 +4577,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.set_priority",
+        "Mark one chat (session_id) or, without session_id, the whole project as high or normal priority. High-priority work, including its subagents, is taken first wherever it waits for provider, tool, Host command or worker capacity; nothing running is interrupted. Act when the operator asks; no confirmation is needed. Review and unblock high-priority chats before others.",
+        SET_PRIORITY_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.rewind_chat",
         "Retract one exact saved user message and every later message in the same main chat after explicit operator instruction. Read nebula.work.chat_messages and pass its current revision. Core refuses active responses and stale revisions. Sending edited text is a separate nebula.work.message_chat action; verify each result separately. Interactive Butler only.",
         REWIND_CHAT_SCHEMA,
@@ -4768,6 +4827,8 @@ async def dispatch_work_tool(
         return await work.answer_question(project_id, arguments)
     if name == "nebula.work.update_chat":
         return await work.update_chat(project_id, arguments)
+    if name == "nebula.work.set_priority":
+        return await work.set_priority(project_id, arguments)
     if name == "nebula.work.rewind_chat":
         return await work.rewind_chat(project_id, arguments)
     if name == "nebula.work.fork_chat":

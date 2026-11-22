@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import aliased
 
+from .work_priority import marked_high
 from .stored_entities import decode_stored
 from .chat_subagents import is_subagent_session
 from .chat_turn_headers import (
@@ -250,7 +251,21 @@ class _GoalChats:
     def rows(self, section: BoardSection) -> Any:
         """A section's chats, goals and project names, newest activity first."""
 
-        order: list[Any] = []
+        # Operator-marked high-priority chats, or chats in a high-priority
+        # project, lead every section.
+        order: list[Any] = [
+            case(
+                (
+                    or_(
+                        EntityRow.payload["metadata"]["priority"].as_string() == "high",
+                        self.project.payload["metadata"]["priority"].as_string()
+                        == "high",
+                    ),
+                    0,
+                ),
+                else_=1,
+            )
+        ]
         if section == "idle":
             # Butler's proposals wait for the operator, so they lead Idle.
             order.append(case((self.status == ChatGoalStatus.DRAFT.value, 0), else_=1))
@@ -426,6 +441,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 key=lambda item: (item[0].updated_at, item[0].id), reverse=True
             )
             entries["active"].sort(key=lambda item: _STATE_ORDER[item[3]])
+            entries["active"].sort(key=lambda item: not marked_high(item[0].metadata))
 
         truncated = False
         next_offset = None
@@ -735,6 +751,7 @@ async def _item(
         "provider_profile_id": session.provider_profile_id,
         "harness_profile_id": session.harness_profile_id,
         "model": session.model,
+        "priority": "high" if marked_high(session.metadata) else "normal",
         "parent_session_id": session.parent_session_id,
         "is_subagent": is_subagent_session(session),
         "turn_id": header.id if header else None,

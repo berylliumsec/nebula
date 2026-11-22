@@ -8,6 +8,7 @@ Nebula tools.
 
 from __future__ import annotations
 
+from .work_priority import is_high
 from .async_utils import finish_cleanup, MaybeAsync
 
 from .async_utils import call_async, resolve_workspace
@@ -1895,6 +1896,12 @@ class AutomationRuntimeManager:
                     execution_id=execution.id,
                     process_id=process_id,
                     background=request.background,
+                    # High-priority chats and projects are admitted first.
+                    priority=(
+                        "high"
+                        if await is_high(self.store, engagement_id, chat_session_id)
+                        else None
+                    ),
                 ),
             )
         extra_env = (

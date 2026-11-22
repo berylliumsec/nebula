@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from sqlalchemy import ColumnElement, and_, case, exists, func, or_, select, update
 
+from .work_priority import is_high
 from .database import EntityRow, ProviderTurnQueueRow
 from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
@@ -281,7 +282,7 @@ class ProviderScheduler:
         self._invalidate_positions()
 
     async def _wait_for_capacity(
-        self, turn: ChatTurn, deferred, pressure_gated: bool
+        self, turn: ChatTurn, deferred, pressure_gated: bool, high: bool = False
     ) -> ProviderAdmission | None:
         async def acquire() -> ProviderAdmission:
             performance = self.store.database.performance
@@ -314,6 +315,7 @@ class ProviderScheduler:
                         "provider:" + admission.lease_owner,
                         demands,
                         on_wait=deferred,
+                        high=high,
                     )
                     await admission.host_slot.__aenter__()
             except BaseException:
@@ -363,6 +365,9 @@ class ProviderScheduler:
         # status, yet holds no capacity. It waits out host pressure like a new
         # turn, so a recovery backlog cannot overload a host that is busy.
         pressure_gated = automatic_recovery or turn.status == ChatTurnStatus.QUEUED
+        # Operator-marked high-priority chats and projects are admitted first
+        # wherever turns wait for shared capacity.
+        high = await is_high(self.store, turn.engagement_id, turn.session_id)
         performance = self.store.database.performance
         admission: ProviderAdmission | None = None
 
@@ -377,12 +382,12 @@ class ProviderScheduler:
             while True:
                 if self.host_load is not None and pressure_gated:
                     with performance.span("provider.host_load_wait"):
-                        await self.host_load.wait(deferred)
+                        await self.host_load.wait(deferred, high=high)
                 latest = await self.store.get(ChatTurn, turn_id)
                 if latest.status == ChatTurnStatus.CANCELLED:
                     raise asyncio.CancelledError
                 admission = await self._wait_for_capacity(
-                    turn, deferred, pressure_gated
+                    turn, deferred, pressure_gated, high
                 )
                 if admission is None:
                     continue

@@ -838,8 +838,9 @@ class MemoryBudgetService:
     async def _host_command_order(session) -> tuple[list[MemoryJobRow], int]:
         """Fresh queued Host commands in fair admission order, and running count.
 
-        The next command comes from the project with the fewest running (and
-        already ordered) Host commands; within a project, the oldest first.
+        High-priority commands (a ``priority`` label of ``high``) come first.
+        Then the next command comes from the project with the fewest running
+        (and already ordered) Host commands; within a project, the oldest first.
         """
         running_rows = await session.execute(
             select(MemoryJobRow.project_id, func.count())
@@ -868,7 +869,12 @@ class MemoryBudgetService:
         while queued:
             pick = min(
                 queued,
-                key=lambda row: (load.get(row.project_id, 0), row.created_at, row.id),
+                key=lambda row: (
+                    (row.labels or {}).get("priority") != "high",
+                    load.get(row.project_id, 0),
+                    row.created_at,
+                    row.id,
+                ),
             )
             queued.remove(pick)
             ordered.append(pick)

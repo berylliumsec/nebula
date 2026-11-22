@@ -85,6 +85,7 @@ from pydantic import Field, StringConstraints, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .work_priority import is_high
 from .project_hold_gate import active_hold, held_detail, is_held
 from .chat import (
     ChatError,
@@ -13899,7 +13900,12 @@ class HarnessRuntimeService:
                         )
                     )
 
-            await self.host_load.wait(deferred)
+            await self.host_load.wait(
+                deferred,
+                high=await is_high(
+                    self.store, turn.engagement_id, turn.chat_session_id
+                ),
+            )
             turn = await self.store.get(HarnessTurn, turn_id)
             if turn.status != HarnessTurnStatus.QUEUED:
                 return
