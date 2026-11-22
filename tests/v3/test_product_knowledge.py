@@ -1277,7 +1277,9 @@ def test_product_help_explains_high_priority_chats_and_projects(monkeypatch):
     matches = search_product_knowledge(
         "How do I mark a chat or project high priority so its work goes first?"
     )
-    assert any(item["heading"] == "High-priority chats and projects" for item in matches)
+    assert any(
+        item["heading"] == "High-priority chats and projects" for item in matches
+    )
     text = "\n".join(str(item["text"]) for item in matches)
     assert "**High priority**" in text and "nebula.work.set_priority" in text
 
