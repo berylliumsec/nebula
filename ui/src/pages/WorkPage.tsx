@@ -666,7 +666,7 @@ export function WorkPage() {
             <div className="work-segmented" role="group" aria-label="Group items"><button type="button" aria-pressed={!groupByStage} onClick={() => { setParam("group", null); setParam("stage", null); }}>Status</button><button type="button" aria-pressed={groupByStage} onClick={() => setParam("group", "stage")}>Stage</button></div>
             <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}><Columns3 size={15} aria-hidden="true" /> Stages</button>
           </div>
-          {groupByStage ? <section className="work-board work-stage-board" aria-label="Project board by stage">
+          {groupByStage ? <section className="work-board work-stage-board" aria-label="Project board by stage" tabIndex={0}>
             {stagesFrom && <p className="work-stage-inherited">Using {stagesFrom.name}'s stages.</p>}
             {!projectStages.length && <p className="work-empty-inline">This project has no stages yet. <button type="button" className="button quiet" onClick={() => setParam("stages", "edit")}>Define stages</button></p>}
             {boardColumns.map((column) => <section className="work-column" key={column.key} data-focused={focusedStage === column.key || undefined} aria-labelledby={`work-stage-column-${column.key}`}>
@@ -677,7 +677,7 @@ export function WorkPage() {
                 <span className="work-card-time"><Clock3 size={13} /> {time(item.last_update_at)}</span>
               </Link>)}{!column.open.length && <p className="work-column-empty">No open items</p>}{column.done > 0 && <p className="work-column-done">{column.done} done</p>}</div>
             </section>)}
-          </section> : <section className="work-board" aria-label="Project board">
+          </section> : <section className="work-board" aria-label="Project board" tabIndex={0}>
             {columns.map((column) => <section className="work-column" key={column.id} aria-labelledby={`work-column-${column.id}`}>
               <header><h2 id={`work-column-${column.id}`}>{column.label}</h2><span>{counts[column.id]}</span></header>
               <div className="work-column-items">{items.filter((item) => item.status === column.id).map((item) => <Link key={item.id} className={`work-card${item.id === itemId ? " selected" : ""}`} to={projectSurface(projectId, "work", item.id)}>

@@ -370,7 +370,8 @@ test("work hub stages: subprojects inherit the parent's stages", async ({ page }
 
     // Stages are saved once, on the parent.
     await pairBrowser(page, core, "Work stage inheritance browser");
-    await page.goto(`${core.origin}/projects/${parentId}/work?stages=edit`);
+    // The freshly paired shell can still be loading or redirecting, which aborts a navigation started now; retry it.
+    await expect(async () => { await page.goto(`${core.origin}/projects/${parentId}/work?stages=edit`); }).toPass({ timeout: 30_000 });
     const editor = page.getByRole("dialog", { name: "Work stages" });
     await expect(editor).toBeVisible({ timeout: 20_000 });
     for (const [index, name] of ["Draft", "Ship"].entries()) {
