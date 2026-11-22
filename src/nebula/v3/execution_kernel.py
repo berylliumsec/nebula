@@ -254,6 +254,8 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database, DatabaseBusyError
+from .work_priority import forget as forget_work_priority
+from .work_priority import set_project_priority as set_work_priority
 from .work import (
     WorkAgentActivity,
     WorkCheckIn,
@@ -1010,6 +1012,8 @@ class ChatSessionUpdateRequest(NebulaModel):
     flag_color: Literal["red", "orange", "yellow", "green", "blue", "purple"] | None = (
         None
     )
+    # High-priority work is taken first wherever it waits for capacity.
+    priority: Literal["high", "normal"] | None = None
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     excluded_mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     mcp_context_mode: Literal["on_demand", "always_loaded"] | None = None
@@ -1031,6 +1035,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.archived is None
             and self.pinned is None
             and "flag_color" not in self.model_fields_set
+            and self.priority is None
             and self.mcp_server_ids is None
             and self.excluded_mcp_server_ids is None
             and self.mcp_context_mode is None
@@ -1045,7 +1050,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.subagent_model is None
         ):
             raise ValueError(
-                "Provide a title, archived state, pin, flag, or assistant settings"
+                "Provide a title, archived state, pin, flag, priority, or assistant settings"
             )
         for name, values in (
             ("MCP server", self.mcp_server_ids),
@@ -1055,6 +1060,10 @@ class ChatSessionUpdateRequest(NebulaModel):
             if values is not None and len(values) != len(set(values)):
                 raise ValueError(f"{name} selection contains duplicates")
         return self
+
+
+class ProjectPriorityWrite(NebulaModel):
+    priority: Literal["high", "normal"]
 
 
 class ChatAssistantConfigWrite(NebulaModel):
@@ -8310,6 +8319,17 @@ def create_execution_kernel(
             engagement_id, body.enabled, expected_revision=body.expected_revision
         )
 
+    @app.put(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/priority",
+        response_model=Engagement,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_project_priority(
+        engagement_id: str, body: ProjectPriorityWrite
+    ) -> Engagement:
+        return await set_work_priority(store, engagement_id, body.priority)
+
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work/stages",
         response_model=Engagement,
@@ -12807,6 +12827,12 @@ def create_execution_kernel(
                 metadata.pop("flag_color", None)
             else:
                 metadata["flag_color"] = request.flag_color
+        if request.priority is not None:
+            if request.priority == "high":
+                metadata["priority"] = "high"
+            else:
+                metadata.pop("priority", None)
+            forget_work_priority()
         if request.mcp_server_ids is not None:
             for profile_id in request.mcp_server_ids:
                 profile = await store.get(McpServerProfile, profile_id)
