@@ -10,7 +10,10 @@ const getChatGoal = vi.fn();
 const confirm = vi.fn();
 const listChatMessages = vi.fn(async () => []);
 const getPendingChatTurn = vi.fn(async () => null);
-const api = { requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn };
+const holdChats = vi.fn();
+const releaseChats = vi.fn();
+const setChatSessionPriority = vi.fn();
+const api = { requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn, setChatSessionPriority, projectHolds: { holdChats, releaseChats } };
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: undefined, engagements: [], providers: [], harnesses: [], selectEngagement: vi.fn() }),
 }));
@@ -138,17 +141,17 @@ it("resumes the idle goals the operator ticks and keeps Core's refusal on the ca
   mount();
   const board = screen.getByRole("region", { name: "Status board" });
   const paused = await within(board).findByRole("article", { name: "Paused triage: Paused, Idle" });
-  // Active cards cannot be ticked; paused and blocked ones can.
-  expect(within(within(board).getByRole("article", { name: "Fuzz parser: Working, Active" })).queryByRole("checkbox")).not.toBeInTheDocument();
+  // Active cards are ticked to hold them; paused and blocked ones to resume (or hold).
+  expect(within(within(board).getByRole("article", { name: "Fuzz parser: Working, Active" })).getByRole("checkbox", { name: "Select Fuzz parser to hold" })).toBeVisible();
   await userEvent.click(within(paused).getByRole("checkbox", { name: "Select Paused triage to resume" }));
-  const bar = within(board).getByRole("region", { name: "Selected idle goals" });
+  const bar = within(board).getByRole("region", { name: "Selected goal chats" });
   expect(within(bar).getByText("1 selected")).toBeVisible();
   expect(paused).toHaveAttribute("data-selected", "true");
 
   await userEvent.click(within(bar).getByRole("button", { name: "Resume 1" }));
   await within(board).findByText("Resumed 1 goal.");
   expect(writeChatGoal).toHaveBeenCalledWith("Paused triage", { expectedRevision: 1, action: "resume" });
-  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+  expect(within(board).queryByRole("region", { name: "Selected goal chats" })).not.toBeInTheDocument();
 
   writeChatGoal.mockRejectedValueOnce(Object.assign(new Error("goal budget is spent"), { status: 409 }));
   await userEvent.click(within(paused).getByRole("checkbox", { name: "Select Paused triage to resume" }));
@@ -158,7 +161,7 @@ it("resumes the idle goals the operator ticks and keeps Core's refusal on the ca
   // A refused goal stays ticked so the operator can retry it.
   expect(paused).toHaveAttribute("data-selected", "true");
   await userEvent.keyboard("{Escape}");
-  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+  expect(within(board).queryByRole("region", { name: "Selected goal chats" })).not.toBeInTheDocument();
 });
 
 it("Resume all idle reads Core's full idle list, confirms, and skips proposed goals", async () => {
@@ -198,9 +201,9 @@ it("Select all in a project ticks every resumable idle goal Core lists there", a
   await userEvent.click(selectAll);
   await waitFor(() => expect(selectAll).toBeChecked());
   expect(requestIfChanged).toHaveBeenCalledWith("butler/board?section=idle&project_id=p1&limit=200", undefined, { signal: undefined });
-  expect(within(within(board).getByRole("region", { name: "Selected idle goals" })).getByText("1 selected")).toBeVisible();
+  expect(within(within(board).getByRole("region", { name: "Selected goal chats" })).getByText("1 selected")).toBeVisible();
   await userEvent.click(selectAll);
-  expect(within(board).queryByRole("region", { name: "Selected idle goals" })).not.toBeInTheDocument();
+  expect(within(board).queryByRole("region", { name: "Selected goal chats" })).not.toBeInTheDocument();
 });
 
 describe("asking about a chat while the open thread is answering", () => {
@@ -261,4 +264,85 @@ describe("the All projects link", () => {
     await userEvent.click(within(sheet).getByRole("link", { name: "All projects" }));
     expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
   });
+});
+
+
+it("holds ticked chats at once, with no confirmation, and Undo releases the batch", async () => {
+  holdChats.mockResolvedValue({ batchId: "batch-1", sessionIds: ["Fuzz parser"] });
+  releaseChats.mockResolvedValue({});
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const fuzz = await within(board).findByRole("article", { name: "Fuzz parser: Working, Active" });
+  await userEvent.click(within(fuzz).getByRole("checkbox", { name: "Select Fuzz parser to hold" }));
+  const bar = within(board).getByRole("region", { name: "Selected goal chats" });
+  // Only a resumable idle selection offers Resume; this one offers Hold.
+  expect(within(bar).queryByRole("button", { name: /^Resume/ })).not.toBeInTheDocument();
+
+  await userEvent.click(within(bar).getByRole("button", { name: "Hold 1" }));
+  expect(confirm).not.toHaveBeenCalled();
+  expect(holdChats).toHaveBeenCalledWith("p1", { sessionIds: ["Fuzz parser"], allActive: undefined });
+  const toast = await within(board).findByRole("status", { name: "Held chats" });
+  expect(within(toast).getByText("Held 1 chat")).toBeVisible();
+
+  await userEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+  await within(board).findByText(/Released 1 chat/);
+  expect(releaseChats).toHaveBeenCalledWith("p1", expect.objectContaining({ batchId: "batch-1" }));
+  expect(within(board).queryByRole("status", { name: "Held chats" })).not.toBeInTheDocument();
+});
+
+it("Hold all active holds every busy project's running chats without asking", async () => {
+  holdChats.mockImplementation(async (projectId: string) => ({ batchId: `b-${projectId}`, sessionIds: [projectId === "p1" ? "Fuzz parser" : "Install driver"] }));
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  await within(board).findByRole("article", { name: "Fuzz parser: Working, Active" });
+  await userEvent.click(within(board).getByRole("button", { name: "Hold all active" }));
+  await within(board).findByText("Held 2 chats");
+  expect(confirm).not.toHaveBeenCalled();
+  expect(holdChats.mock.calls.map(([id, choice]) => [id, choice.allActive]).sort()).toEqual([["p1", true], ["p2", true]]);
+});
+
+it("shows held chats under Held with their reason, and releases one or all", async () => {
+  releaseChats.mockResolvedValue({});
+  const hold = { id: "h1", batch_id: "batch-9", reason: "Priorities changed", created_at: "2026-11-20T09:00:00Z" };
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    return { value: { ...poll, items: [
+      ...poll.items.slice(0, 2),
+      { ...wire("Old research", research, "idle", "idle", "paused", "Paused"), hold },
+    ] }, etag: '"h"' };
+  });
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const held = await within(board).findByRole("article", { name: "Old research: Held, Held" });
+  expect(held).toHaveAttribute("data-section", "held");
+  expect(within(held).getByText("On hold · Priorities changed")).toBeVisible();
+  // A held chat is neither resumable nor holdable again from the board.
+  expect(within(held).queryByRole("checkbox")).not.toBeInTheDocument();
+  const projectGroup = board.querySelector('[data-project="p1"]') as HTMLElement;
+  expect(within(projectGroup).getByRole("button", { name: /^Held.*Priorities changed/ })).toHaveAttribute("aria-expanded", "true");
+  // Core counted it as idle; the board shows it under Held instead.
+  expect(within(projectGroup).queryByRole("button", { name: /^Idle/ })).not.toBeInTheDocument();
+
+  await userEvent.click(within(held).getByRole("button", { name: "Release Old research" }));
+  await within(board).findByText(/Released 1 chat/);
+  expect(releaseChats).toHaveBeenLastCalledWith("p1", expect.objectContaining({ batchId: "batch-9" }));
+  await userEvent.click(within(projectGroup).getByRole("button", { name: "Release all" }));
+  await waitFor(() => expect(releaseChats).toHaveBeenCalledTimes(2));
+});
+
+it("lists high-priority chats first with a chevron and toggles priority from the card", async () => {
+  setChatSessionPriority.mockResolvedValue({});
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    return { value: { ...poll, items: [
+      wire("Fuzz parser", research, "active", "working", "running", "Working"),
+      { ...wire("New direction", research, "active", "working", "running", "Working"), priority: "high", session_revision: 4 },
+    ] }, etag: '"p"' };
+  });
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const urgent = await within(board).findByRole("article", { name: "New direction: Working, Active, high priority" });
+  const cards = within(board.querySelector('[data-project="p1"]') as HTMLElement).getAllByRole("article");
+  expect(cards[0]).toBe(urgent);
+  expect(urgent).toHaveAttribute("data-priority", "high");
 });

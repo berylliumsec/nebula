@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_PROJECTS, boardElapsed, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
+import { ALL_PROJECTS, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
 import type { ApiClient } from "./client";
 
 function item(overrides: Partial<ButlerBoardItem>): ButlerBoardItem {
@@ -174,5 +174,42 @@ describe("resuming idle goals", () => {
     expect(writeChatGoal).toHaveBeenCalledWith("fresh", { expectedRevision: 5, action: "resume" });
     expect(writeChatGoal.mock.calls.filter(([id]) => id === "held")).toHaveLength(1);
     expect(progress).toEqual([1, 2, 3]);
+  });
+});
+
+
+describe("Butler board holds and priority", () => {
+  const hold = { id: "h1", batchId: "b1", reason: "Priorities changed", createdAt: "2026-11-20T10:00:00Z" };
+
+  it("moves held chats to a Held section and leads each section with high priority", () => {
+    const [group] = groupButlerBoard([
+      item({ title: "Routine", state: "waiting" }),
+      item({ title: "Urgent", state: "working", priority: "high" }),
+      item({ title: "Set aside", section: "idle", state: "idle", goal: { objective: "x", status: "paused", currentStep: 0, planLength: 1 }, hold }),
+      item({ title: "Paused", section: "idle", state: "idle", goal: { objective: "x", status: "paused", currentStep: 0, planLength: 1 } }),
+    ], "project", { projects: [{ id: "p1", name: "Research", counts: { active: 2, idle: 2, completed: 0 } }] });
+    expect(group.sections.map((entry) => [entry.section, entry.items.map((value) => value.title), entry.count])).toEqual([
+      ["active", ["Urgent", "Routine"], 2],
+      ["held", ["Set aside"], 1],
+      ["idle", ["Paused"], 1],
+      ["completed", [], 0],
+    ]);
+  });
+
+  it("holds and resumes only what fits: no proposals, nothing already held", () => {
+    expect(isHoldable(item({}))).toBe(true);
+    expect(isHoldable(item({ hold }))).toBe(false);
+    expect(isHoldable(item({ section: "idle", attention: { kind: "proposal", summary: "x" } }))).toBe(false);
+    expect(isHoldable(item({ section: "completed" }))).toBe(false);
+    expect(isResumableIdle(item({ section: "idle", goal: { objective: "x", status: "paused", currentStep: 0, planLength: 1 }, hold }))).toBe(false);
+  });
+
+  it("places one hold batch per project", async () => {
+    const holdChats = vi.fn(async (projectId: string, choice: { sessionIds?: string[] }) => ({ batchId: `b-${projectId}`, sessionIds: choice.sessionIds ?? [] }));
+    const api = { projectHolds: { holdChats } } as unknown as ApiClient;
+    const result = await holdBoardChats(api, [item({ title: "a" }), item({ title: "b", project: bounty }), item({ title: "c" })]);
+    expect(holdChats.mock.calls.map(([projectId, choice]) => [projectId, choice.sessionIds])).toEqual([["p1", ["a", "c"]], ["p2", ["b"]]]);
+    expect(result.placed.map((entry) => entry.batchId).sort()).toEqual(["b-p1", "b-p2"]);
+    expect(result.failed).toEqual([]);
   });
 });

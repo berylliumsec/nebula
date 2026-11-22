@@ -132,6 +132,8 @@ export interface EngagementSummary {
   updatedAt: string;
   scopeAssetCount: number;
   assistantDefaults?: AssistantDefaults;
+  /** Operator-set: every chat in this project is high priority. */
+  priority?: "high";
 }
 
 export interface StorageSource {
@@ -2344,6 +2346,8 @@ export interface ChatSessionSummary {
   archivedAt?: string;
   pinned?: boolean;
   flagColor?: "red" | "orange" | "yellow" | "green" | "blue" | "purple";
+  /** Operator-set: this chat's waiting work is taken first (subagents inherit it). */
+  priority?: "high";
   createdAt: string;
   updatedAt: string;
   revision: number;

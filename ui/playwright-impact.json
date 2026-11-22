@@ -54,6 +54,7 @@
     {"name": "runtime-usage", "patterns": ["src/nebula/v3/runtime_usage.py", "ui/src/components/RuntimeUsagePanel*", "ui/src/settingsCatalog.ts"], "areas": ["runtime-usage"]},
     {"name": "chat-subagents", "patterns": ["ui/src/components/chat-subagents/*", "ui/src/chat-subagents.css", "src/nebula/v3/chat_subagents.py"], "areas": ["chat-subagents", "chat-subagent-result-collapse", "chat-subagent-result-real-core"]},
     {"name": "subagent-sidebar", "patterns": ["ui/src/pages/conversationSidebar.ts"], "areas": ["subagent-sidebar"]},
+    {"name": "chat-holds-priority", "patterns": ["ui/src/api/projectHold.ts", "ui/src/pages/chatBulkActions.ts"], "areas": ["chat-holds-priority"]},
     {"name": "conversation-details", "patterns": ["ui/src/components/ChatWorkspaceDrawer.tsx", "ui/src/components/ProviderGoalChildren.tsx"], "areas": ["conversation-details"]},
     {"name": "working-context", "patterns": ["ui/src/components/WorkingContextPanel*", "ui/src/components/ProviderRequestInputDetails*"], "areas": ["working-context", "provider-request-breakdown-core"]},
     {"name": "conversation-panel-sizing", "patterns": ["ui/src/components/useResizableSidePanel*", "ui/src/components/ChatWorkspaceDrawer.tsx"], "areas": ["conversation-panel-sizing"]},
@@ -1427,6 +1428,16 @@
       {"area":"subagent-sidebar","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
       {"area":"subagent-sidebar","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
       {"area":"subagent-sidebar","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core nests durable subagent conversations","runtime":"real-core","shard":"1/1"}
+    ],
+    "chat-holds-priority": [
+      {"area":"chat-holds-priority","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"},
+      {"area":"chat-holds-priority","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade conversation menu holds a chat and marks it high priority","runtime":"mock","shard":"1/1"}
     ],
     "side-chat": [
       {"area":"side-chat","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},

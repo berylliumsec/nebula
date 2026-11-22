@@ -74,6 +74,11 @@
 .sectionDot[data-section="idle"] { border: 2px solid var(--orange); background: transparent; }
 .sectionDot[data-section="completed"] { background: var(--green); }
 .sectionDot[data-section="completed"][data-goal="cancelled"] { background: var(--muted); }
+/* Held: set aside by a chat hold; a quiet hollow dot, not an alert. */
+.sectionDot[data-section="held"] { border: 2px solid var(--muted); background: transparent; }
+.card[data-section="held"] .cardTitle { color: var(--muted); }
+/* High priority: the operator's chats taken first wherever work waits. */
+.priorityMark { flex: none; color: var(--blue); }
 
 .iconButton {
   display: inline-grid;

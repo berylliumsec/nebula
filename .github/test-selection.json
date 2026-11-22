@@ -1,39 +1,37 @@
 {
-  "change_digest": "06df04e271436c121d300f65d075a82bf86e750f18e9dade97eb312abddf6728",
-  "reviewed_by": "Claude Code, fixing goal pause failing the goal's in-flight turn",
-  "reason": "Pausing a running goal cleared its execution claim while its turn still ran, so the turn's next ownership check discarded its output as stale and failed it; a quick resume was then left paused by that failure. ChatGoalService.write now keeps the claim on pause while a live (not ended) turn holds it, so the turn finishes and releases it and a still-paused goal starts no next step. A claim no live turn holds is released as before, so settle-time pauses after a failed or interrupted turn are unchanged. A chat or project hold's pause keeps the claim as #1289 made it. Selected: test_chat_goals.py (new regressions for pause, pause-then-resume and the released-claim case), test_chat_holds.py (hold pause keeps the claim), plus the suites that pause goals or reconcile claims: recovery controls, project holds, goal execution waiting, goal revision races, subagent lifecycle, harness chat goals and orphan recovery.",
-  "exclusions": "No UI, native or Playwright change: the goal API's response shape is unchanged and only the claim fields on a paused goal differ while a turn runs. Three PostgreSQL cases in test_recovery_controls.py are left out because they fail identically on origin/main and on every main commit back to #1264 (0fb872c), with or without this change: test_pause_and_stop_run_while_recovery_is_blocked[postgresql], test_held_worker_activates_only_after_blockers_resolve[postgresql] and test_held_target_that_ran_a_control_and_then_failed_exits[postgresql] (the held-recovery pause command fails in the worker with 503 before saving). Their SQLite variants are selected. Locally 194 passed and 63 skipped (PostgreSQL cases); CI runs them.",
+  "change_digest": "8e29fd6c4dc9c54b953bbb5c7a2f75e4667d92923d246016100d833a84f4adf7",
+  "reviewed_by": "Claude Code, building the approved chat holds and high-priority mockup (Figma page 217:2)",
+  "reason": "UI for chat holds (#1289) and high priority (#1290). Butler board: Active and Idle cards are selectable for Hold N (no confirmation), Hold all active beside the search, a Held section per project with the hold's reason, age, Release all and a per-card Release button, an Undo bar after holding, blue chevrons and high-first order for high-priority cards, and a priority toggle in a card's actions. Chats: High priority (menuitemcheckbox) and Hold chat / Release chat in the conversation menu, bulk high/normal priority, list markers, a 'This chat is on hold' notice with Release, and Release and send replacing Send. Project switcher: a per-project priority toggle. ProjectHoldWatch places and releases chat holds and reads chat_holds. Settings-assistant guidance, Butler mode destination aliases, the product knowledge passages and the Butler workflow registry (chat.high_priority, project.priority) are updated. Selected: the board, board-grouping, hold client, bulk action, hold notice, destination, SideNav and sidebar unit tests; the product-knowledge digest and guidance tests; and the new area:chat-holds-priority journey on all 8 mock profiles.",
+  "exclusions": "Rebased onto main after #1289, #1290 and #1293 merged. src/pages/ButlerModePage.send.test.tsx is not selected: 'shows the message and clears the composer before Core reserves the thread' fails intermittently under the same parallel run on origin/main. tests/v3/test_butler_workflow_registry.py::test_reviewed_workflow_registry_matches_ui_api_calls fails identically on origin/main (2 unreviewed useProjectViewLease signatures). Real-Core coverage was a LAN journey on a disposable Core (API 16 checks; browser desktop Chromium 1440, Chromium 390 and WebKit 390, 12 checks each), not a committed real-core spec.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 254,
-    "frontend": 0,
+    "python": 4,
+    "frontend": 90,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_holds.py",
-    "tests/v3/test_recovery_controls.py::test_goal_pause_is_control_and_start_resume_are_work",
-    "tests/v3/test_recovery_controls.py::test_pause_and_stop_run_while_recovery_is_blocked[sqlite]",
-    "tests/v3/test_recovery_controls.py::test_stale_owner_cannot_claim_a_control[sqlite]",
-    "tests/v3/test_recovery_controls.py::test_stale_owner_cannot_claim_a_control[postgresql]",
-    "tests/v3/test_recovery_controls.py::test_held_worker_activates_only_after_blockers_resolve[sqlite]",
-    "tests/v3/test_recovery_controls.py::test_restart_recovery_keeps_operator_recovery_pause_and_stop",
-    "tests/v3/test_recovery_controls.py::test_restart_recovery_keeps_an_operator_recovery_stop",
-    "tests/v3/test_recovery_controls.py::test_held_target_that_ran_a_control_and_then_failed_exits[sqlite]",
-    "tests/v3/test_project_holds.py",
-    "tests/v3/test_goal_execution_waiting.py",
-    "tests/v3/test_goal_revision_races.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_runtime_orphan_recovery.py"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_resuming_idle_goals_from_butler_board",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_holding_chats_when_priorities_shift",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_high_priority_chats_and_projects"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/api/projectHold.test.ts",
+    "ui/src/pages/chatBulkActions.test.ts",
+    "ui/src/components/ProjectHoldNotice.test.tsx",
+    "ui/src/assistantDestinations.test.ts",
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/pages/conversationSidebar.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "area:chat-holds-priority"
+  ]
 }

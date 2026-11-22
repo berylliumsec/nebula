@@ -6,6 +6,17 @@ export type ButlerBoardState = "waiting" | "working" | "failed" | "idle";
 export type ButlerBoardSection = "active" | "idle" | "completed";
 export const BOARD_SECTIONS: readonly ButlerBoardSection[] = ["active", "idle", "completed"];
 export const SECTION_LABEL: Record<ButlerBoardSection, string> = { active: "Active", idle: "Idle", completed: "Completed" };
+/** What the board shows: Core's sections plus Held, the chats set aside by a chat hold. */
+export type BoardViewSection = ButlerBoardSection | "held";
+export const VIEW_SECTION_LABEL: Record<BoardViewSection, string> = { ...SECTION_LABEL, held: "Held" };
+
+/** The chat hold that set a card's chat aside. */
+export interface BoardChatHold {
+  id: string;
+  batchId?: string;
+  reason: string;
+  createdAt: string;
+}
 
 export interface ButlerBoardItem {
   sessionId: string;
@@ -32,6 +43,10 @@ export interface ButlerBoardItem {
   /** "butler" when Butler proposed this chat; a draft until the operator starts it. */
   proposedBy?: "butler";
   sessionRevision?: number;
+  /** Operator-set: this chat (or its project) is taken first wherever work waits. */
+  priority?: "high";
+  /** Set when a chat hold covers this chat; it shows under Held. */
+  hold?: BoardChatHold;
 }
 
 export type ButlerBoardCounts = Record<ButlerBoardSection, number>;
@@ -71,6 +86,8 @@ interface WireItem {
   started_by?: string | null;
   proposed_by?: string | null;
   session_revision?: number | null;
+  priority?: string | null;
+  hold?: { id: string; batch_id?: string | null; reason: string; created_at: string } | null;
 }
 
 interface WireBoard {
@@ -123,6 +140,13 @@ function mapItem(item: WireItem): ButlerBoardItem {
     startedBy: item.started_by === "butler" ? "butler" : undefined,
     proposedBy: item.proposed_by === "butler" ? "butler" : undefined,
     sessionRevision: item.session_revision ?? undefined,
+    priority: item.priority === "high" ? "high" : undefined,
+    hold: item.hold ? {
+      id: item.hold.id,
+      batchId: item.hold.batch_id ?? undefined,
+      reason: item.hold.reason,
+      createdAt: item.hold.created_at,
+    } : undefined,
   };
 }
 
@@ -171,7 +195,7 @@ export async function getButlerBoardIfChanged(
 export type ButlerBoardGrouping = "attention" | "project";
 
 export interface ButlerBoardSectionGroup {
-  section: ButlerBoardSection;
+  section: BoardViewSection;
   items: ButlerBoardItem[];
   /** Core's exact count while the search matches Core's, else the matched cards. */
   count: number;
@@ -212,12 +236,19 @@ export function groupButlerBoard(
   const completed = options.completed ?? {};
   const coreCounts = options.coreCounts ?? true;
   const rank = (item: ButlerBoardItem) => STATE_ORDER.indexOf(item.state);
+  const high = (item: ButlerBoardItem) => (item.priority === "high" ? 0 : 1);
   const build = (key: string, label: string | undefined, listed: readonly ButlerBoardItem[], done: readonly ButlerBoardItem[], counts: ButlerBoardCounts | undefined): ButlerBoardGroup => {
-    const sections = BOARD_SECTIONS.map((section) => {
-      const sectionItems = section === "completed" ? [...done] : listed.filter((item) => item.section === section);
-      if (section === "active") sectionItems.sort((a, b) => rank(a) - rank(b));
-      return { section, items: sectionItems, count: coreCounts && counts ? counts[section] : sectionItems.length };
+    // Held cards leave Active and Idle for their own section; Core's counts
+    // still include them, so those counts drop by the held cards shown.
+    const held = listed.filter((item) => item.hold && item.section !== "completed");
+    const sections: ButlerBoardGroup["sections"] = BOARD_SECTIONS.map((section) => {
+      const sectionItems = section === "completed" ? [...done] : listed.filter((item) => item.section === section && !item.hold);
+      sectionItems.sort((a, b) => (high(a) - high(b)) || (section === "active" ? rank(a) - rank(b) : 0));
+      const heldHere = held.filter((item) => item.section === section).length;
+      const count = coreCounts && counts ? Math.max(0, counts[section] - heldHere) : sectionItems.length;
+      return { section, items: sectionItems, count };
     });
+    if (held.length) sections.splice(1, 0, { section: "held", items: held.sort((a, b) => high(a) - high(b)), count: held.length });
     return { key, label, sections, total: sections.reduce((sum, entry) => sum + entry.count, 0) };
   };
   if (grouping === "attention") {
@@ -232,8 +263,9 @@ export function groupButlerBoard(
   for (const project of projects) names.set(project.id, project.name);
   for (const item of items) if (!names.has(item.project.id)) names.set(item.project.id, item.project.name);
   const counts = new Map(projects.map((project) => [project.id, project.counts]));
-  const waiting = (group: ButlerBoardGroup) => group.sections[0].items.filter((item) => item.state === "waiting").length
-    + group.sections[1].items.filter((item) => item.state === "waiting").length;
+  const waiting = (group: ButlerBoardGroup) => group.sections
+    .filter((entry) => entry.section === "active" || entry.section === "idle")
+    .reduce((sum, entry) => sum + entry.items.filter((item) => item.state === "waiting").length, 0);
   return [...names.entries()]
     .map(([id, name]) => build(id, name || "Untitled project", items.filter((item) => item.project.id === id), completed[id] ?? [], counts.get(id)))
     .filter((group) => group.total > 0)
@@ -253,7 +285,7 @@ export function boardStatusLabel(item: Pick<ButlerBoardItem, "section" | "state"
 export type BoardSectionOpenState = Record<string, boolean>;
 
 /** Completed starts collapsed; Active and Idle start open. */
-export function boardSectionOpen(state: BoardSectionOpenState, groupKey: string, section: ButlerBoardSection): boolean {
+export function boardSectionOpen(state: BoardSectionOpenState, groupKey: string, section: BoardViewSection): boolean {
   return state[`${groupKey}:${section}`] ?? section !== "completed";
 }
 
@@ -270,7 +302,7 @@ export function parseBoardSectionState(stored: string | null): BoardSectionOpenS
 }
 
 /** Toggle one section, keeping at most ``limit`` remembered choices (the newest). */
-export function toggleBoardSection(state: BoardSectionOpenState, groupKey: string, section: ButlerBoardSection, limit = 200): BoardSectionOpenState {
+export function toggleBoardSection(state: BoardSectionOpenState, groupKey: string, section: BoardViewSection, limit = 200): BoardSectionOpenState {
   const key = `${groupKey}:${section}`;
   const open = !boardSectionOpen(state, groupKey, section);
   const rest = Object.entries(state).filter(([entry]) => entry !== key);
@@ -364,8 +396,63 @@ export function goalChatProposalFromReceipt(receipt: Record<string, unknown> | u
 }
 
 /** An idle goal the operator can resume: paused or blocked. Proposed drafts start from their card instead. */
-export function isResumableIdle(item: Pick<ButlerBoardItem, "section" | "goal" | "attention">): boolean {
-  return item.section === "idle" && item.attention?.kind !== "proposal" && (item.goal?.status === "paused" || item.goal?.status === "blocked");
+export function isResumableIdle(item: Pick<ButlerBoardItem, "section" | "goal" | "attention"> & { hold?: BoardChatHold }): boolean {
+  return item.section === "idle" && !item.hold && item.attention?.kind !== "proposal" && (item.goal?.status === "paused" || item.goal?.status === "blocked");
+}
+
+/** A chat the operator can set aside with a chat hold: running or idle, not already held, not a proposal. */
+export function isHoldable(item: Pick<ButlerBoardItem, "section" | "attention" | "hold">): boolean {
+  return !item.hold && (item.section === "active" || item.section === "idle") && item.attention?.kind !== "proposal";
+}
+
+/** One project's chat holds placed together: release them together with Undo. */
+export interface PlacedHold {
+  projectId: string;
+  batchId?: string;
+  sessionIds: string[];
+}
+
+/**
+ * Hold chosen chats now, one batch per project. No confirmation: Undo (or
+ * Release) resumes exactly what each hold paused.
+ */
+export async function holdBoardChats(
+  api: ApiClient,
+  items: ReadonlyArray<Pick<ButlerBoardItem, "sessionId" | "project">>,
+): Promise<{ placed: PlacedHold[]; failed: Array<{ projectId: string; error: string }> }> {
+  const byProject = new Map<string, string[]>();
+  for (const item of items) byProject.set(item.project.id, [...(byProject.get(item.project.id) ?? []), item.sessionId]);
+  return placeHolds(api, [...byProject].map(([projectId, sessionIds]) => ({ projectId, sessionIds })));
+}
+
+/** Hold every chat with work running now, in each listed project. */
+export function holdAllActive(api: ApiClient, projectIds: readonly string[]) {
+  return placeHolds(api, projectIds.map((projectId) => ({ projectId, allActive: true })));
+}
+
+async function placeHolds(
+  api: ApiClient,
+  requests: Array<{ projectId: string; sessionIds?: string[]; allActive?: boolean }>,
+): Promise<{ placed: PlacedHold[]; failed: Array<{ projectId: string; error: string }> }> {
+  const placed: PlacedHold[] = [];
+  const failed: Array<{ projectId: string; error: string }> = [];
+  await Promise.all(requests.map(async (request) => {
+    try {
+      const result = await api.projectHolds.holdChats(request.projectId, { sessionIds: request.sessionIds, allActive: request.allActive });
+      if (result.sessionIds.length) placed.push({ projectId: request.projectId, ...result });
+    } catch (caught) { // diagnostic-expected: the board reports which projects Core refused
+      failed.push({ projectId: request.projectId, error: caught instanceof Error && caught.message ? caught.message : "Core did not hold these chats." });
+    }
+  }));
+  return { placed, failed };
+}
+
+/** Release whole batches (Undo, Release all) or single chats; Core resumes what each hold paused. */
+export async function releaseBoardHolds(
+  api: ApiClient,
+  releases: ReadonlyArray<{ projectId: string; batchId?: string; sessionIds?: string[] }>,
+): Promise<void> {
+  await Promise.all(releases.map((release) => api.projectHolds.releaseChats(release.projectId, release)));
 }
 
 /**
