@@ -43,7 +43,7 @@ from nebula.v3.supervisor import RuntimeSupervisor
 from tests.v3.test_deployment_lifecycle import manifest
 from tests.v3.test_runtime_coordination import location as location
 from tests.v3.test_runtime_processes import managed as managed, _TOKEN
-from tests.v3.test_runtime_work_batches import batch as batch
+from tests.v3.test_runtime_work_batches import SETTINGS, batch as batch
 
 pytestmark = pytest.mark.anyio
 FEATURES = ["project.handoff/v1", "project.participants/v1"]
@@ -125,7 +125,10 @@ async def recovery(batch):
             data_root=str(batch.host.data_root),
             operator_token=SecretStr("synthetic-recovery-token"),
             database=batch.location,
-            pool_settings=None,
+            # A supervisor always hands its workers its pool settings
+            # (RuntimeProcessHost); without them a PostgreSQL worker's own
+            # database would read budgets from the environment and fail.
+            pool_settings=asdict(SETTINGS),
         ),
         coordinator=coordinator,
         rpc=rpc_server,
