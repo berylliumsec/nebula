@@ -5,7 +5,7 @@ import path from "node:path";
 import {keyedCoreRequests} from "./fixtures/core-harness";
 import {startRealCore, stopRealCore, localNetworkIpv4} from "./fixtures/real-core";
 import {startLocalModelStub, stopLocalModelStub} from "./fixtures/model-stub";
-import {clickAssistantSettings, coreShell, clickWorkbenchTab, openRuntimeSettings, navigateOperatorPage} from "./fixtures/operator-ui";
+import {clickAssistantSettings, pairRealCoreBrowser, clickWorkbenchTab, openRuntimeSettings, navigateOperatorPage} from "./fixtures/operator-ui";
 const playwrightRequest = keyedCoreRequests(unkeyedRequest);
 
 // Every case has an independent database, port and browser context.
@@ -27,12 +27,17 @@ for (const runtime of ["provider", "harness"] as const) {
     {
       const fixture = path.join(core.dataDir, "stabilization_acp.py");
       if (runtime === "harness") await writeFile(fixture, await readFile(path.resolve(import.meta.dirname, "../../scripts/fixtures/stabilization_acp.py")), {mode: 0o700});
-      const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name}});
-      const pair = await pairing.json();
-      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
-      await page.getByLabel("Device name").fill(name);
-      await page.getByRole("button", {name: "Pair device", exact: true}).click();
-      await expect(coreShell(page, /Nebula Core (ready|degraded)/)).toBeVisible({timeout: 20_000});
+      // Chat requires a selected project. The optional bootstrap Scratch project
+      // may not exist, so this case owns and selects its own project explicitly.
+      const created = await api.post("engagements", {data: {
+        name: `${name} project`, status: "active", client_name: null,
+        tags: [], workspace_path: null, metadata: {},
+      }});
+      expect(created.ok(), await created.text()).toBe(true);
+      const project = await created.json() as {id: string};
+      await pairRealCoreBrowser(page, core, name);
+      await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat`);
+      await expect(page.locator(".connection-chip")).toHaveClass(/\b(ready|degraded)\b/, {timeout: 20_000});
       const settingsEntry = await openRuntimeSettings(page, runtime);
       await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
       const dialog = runtime === "provider"
@@ -99,6 +104,9 @@ for (const runtime of ["provider", "harness"] as const) {
       await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
       await expect(dialog).toHaveCount(0);
       await page.reload();
+      // The settings list renders before workspace bootstrap finishes. Its
+      // loading banner can move the entry during a mobile click.
+      await expect(page.locator(".connection-chip")).toHaveClass(/\b(ready|degraded)\b/, {timeout: 20_000});
       await expect(settingsEntry.or(card).filter({visible: true}).first()).toBeVisible();
       if (await settingsEntry.isVisible()) await settingsEntry.click();
       await expect(card).toBeVisible();
@@ -115,6 +123,7 @@ for (const runtime of ["provider", "harness"] as const) {
       await testInfo.attach("runtime-settings-durable", {body: JSON.stringify({origin: core.origin, runtime, model, durable}), contentType: "application/json"});
       await testInfo.attach("runtime-settings-saved", {body: await page.screenshot(), contentType: "image/png"});
       await navigateOperatorPage(page, "Workbench");
+      await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/workbench(?:\\?|$)`));
       if ((page.viewportSize()?.width ?? 1440) > 760) await clickWorkbenchTab(page, "Analyst chat");
       else await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat", exact: true}).click();
       await page.getByRole("button", {name: "New chat", exact: true}).click();
