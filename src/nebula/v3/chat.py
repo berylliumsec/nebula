@@ -3759,11 +3759,29 @@ class ChatService:
             # The operator stopped or paused this work while recovery was
             # held. It stays interrupted until the operator continues it.
             return False
-        if goal is not None and (
-            goal.status != ChatGoalStatus.PAUSED
-            or (
-                goal.time_budget_seconds is not None
-                and goal.elapsed_seconds >= goal.time_budget_seconds
+        # A goal left running past this turn's pending automatic retry was
+        # resumed by an earlier attempt (or from outside) whose turn then
+        # failed to start. Skipping it here deadlocked with the idle-goal
+        # reconciler, which skips goals that still have a pending turn: the
+        # conversation stayed interrupted while its goal read running.
+        retry_running_goal = (
+            goal is not None
+            and goal.status == ChatGoalStatus.RUNNING
+            and bool(recovery.get("automatic_retry_pending"))
+            and (
+                goal.time_budget_seconds is None
+                or goal.elapsed_seconds < goal.time_budget_seconds
+            )
+        )
+        if (
+            goal is not None
+            and not retry_running_goal
+            and (
+                goal.status != ChatGoalStatus.PAUSED
+                or (
+                    goal.time_budget_seconds is not None
+                    and goal.elapsed_seconds >= goal.time_budget_seconds
+                )
             )
         ):
             reason = _unresumed_goal_turn_reason(goal)
@@ -3799,7 +3817,7 @@ class ChatService:
                         recovery_subagent.id, prepared.turn
                     )
                 )
-            if goal is not None:
+            if goal is not None and not retry_running_goal:
                 # Resumed child goals keep charging the parent while it is
                 # resumed, so the resume is decided on its newest revision.
                 (
@@ -3817,7 +3835,7 @@ class ChatService:
                 exc,
                 stage="startup-recovery",
             )
-            (await self._retry_recovery_next_pass(saved.id))
+            (await self._retry_recovery_next_pass(saved.id, cause=exc))
             if goal is not None:
                 (
                     await self._pause_running_session_goal(
@@ -3827,7 +3845,9 @@ class ChatService:
                 )
         return False
 
-    async def _retry_recovery_next_pass(self, turn_id: str) -> ChatTurn | None:
+    async def _retry_recovery_next_pass(
+        self, turn_id: str, *, cause: BaseException | None = None
+    ) -> ChatTurn | None:
         """Leave a restart-recovery resume that could not start for the next pass.
 
         The turn is interrupted again with its automatic retry pending, unless
@@ -3860,8 +3880,13 @@ class ChatService:
             {
                 "status": ChatTurnStatus.INTERRUPTED,
                 "error": (
-                    "Automatic recovery could not start; Core will retry "
-                    "on the next recovery pass."
+                    "Automatic recovery could not start"
+                    + (
+                        f" ({type(cause).__name__}: {str(cause)[:300]})"
+                        if cause is not None
+                        else ""
+                    )
+                    + "; Core will retry on the next recovery pass."
                 ),
                 "request_snapshot": {
                     **current.request_snapshot,
@@ -4969,7 +4994,7 @@ class ChatService:
             ) or (not holds_admission and self.provider_scheduler.admitted(turn_id)):
                 return error
             if automatic_recovery:
-                retried = await self._retry_recovery_next_pass(turn_id)
+                retried = await self._retry_recovery_next_pass(turn_id, cause=error)
                 if retried is None:
                     return error
                 (await self.provider_scheduler.withdraw(turn_id))

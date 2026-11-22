@@ -403,3 +403,46 @@ async def test_restart_recovery_still_resumes_a_paused_goal_with_budget_left(tmp
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_restart_recovery_retries_a_goal_turn_its_last_attempt_left_running(
+    tmp_path,
+):
+    # Live Core: a resume attempt set the goal running, admission then failed,
+    # and the goal was not paused again. Every later pass skipped the turn
+    # because its goal was not paused, so the conversation stayed interrupted
+    # behind "Stop it to continue" for hours while the goal read running.
+    store = await _conversation(tmp_path)
+    goals = ChatGoalService(store)
+    goal = await goals.create(
+        "chat", GoalCreate(objective="Continue", completion_criteria=["Done"])
+    )
+    goal = await goals.write(
+        "chat", GoalWrite(expected_revision=goal.revision, action="start")
+    )
+    assert goal.status.value == "running"
+    (
+        await _interrupted_turn(
+            store,
+            {
+                "required": False,
+                "cause": "core_restart",
+                "automatic_retry_pending": True,
+                "auto_resume_attempted_at": None,
+            },
+            goal.id,
+        )
+    )
+    service = ChatService(store)
+    before = await store.get(ChatTurn, "turn")
+
+    (await service.resume_turns_stopped_by_core())
+
+    after = await store.get(ChatTurn, "turn")
+    # The pass acts on the turn instead of leaving it behind a running goal.
+    # With no provider here the resume cannot start, so the turn waits for
+    # the next pass again, and its error now says why.
+    assert after.revision > before.revision
+    assert after.error is not None
+    assert after.error.startswith("Automatic recovery could not start (")
+    assert after.request_snapshot["recovery"]["automatic_retry_pending"] is True
