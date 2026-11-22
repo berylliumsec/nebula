@@ -1,7 +1,7 @@
 {
-  "change_digest": "2fa60828903862d61325d957ac0ef4d463a9434e0c565dd3143d1beb96f4c874",
+  "change_digest": "efee73f69d1c5f8afaab21c21a39b8dfa1281c13ceca840e20066ce945fa09dc",
   "reviewed_by": "Claude Code, implementing the operator's request to hold individual chats when research priorities shift",
-  "reason": "A project hold froze a whole project, including new work. A ProjectHold can now name one chat (session_id) and covers that chat plus its subagent and goal-child chats, never forks or later chats. Holds placed together share a batch_id. Every hold gate that knows the chat (provider and harness turn creation, resume, callbacks, restart resume, parked restore, schedules, follow-up queue, subagent parent wake, goal start/resume, Mission approval resume and delegated synthesis) now passes it. Goal pause marks children before parents so release restores both; a goal released while another hold still covers it moves to that hold. New routes POST engagements/{id}/holds, holds/release and GET chat-sessions/{id}/hold. Interactive Butler gets nebula.work.holds, hold_chats, release_chats, hold_project, release_project with no confirmation; background Butler is refused. Selected: test_chat_holds.py (new: scoping, coverage, child goals, all_active, partial release, mark hand-off, turn stops, authenticated routes, Butler tools, background refusal), test_project_holds.py (existing project-hold contract), test_control_assistant_work.py (work tool registry) and the scheduled-Butler catalog test that enumerates every work action. The Butler board now marks each card whose chat is on a chat hold with that hold (id, batch, reason), so the UI can group held chats by batch; test_butler_goal_chat_proposals.py covers the board. ProjectHold gains session_id and batch_id, so runtime-compatibility.json records the new entity_fields_sha256 under the already declared storage.entity-field-additions/v1; test_runtime_bundle.py checks the manifest.",
+  "reason": "A project hold froze a whole project, including new work. A ProjectHold can now name one chat (session_id) and covers that chat plus its subagent and goal-child chats, never forks or later chats. Holds placed together share a batch_id. Every hold gate that knows the chat (provider and harness turn creation, resume, callbacks, restart resume, parked restore, schedules, follow-up queue, subagent parent wake, goal start/resume, Mission approval resume and delegated synthesis) now passes it. Goal pause marks children before parents so release restores both; a goal released while another hold still covers it moves to that hold. New routes POST engagements/{id}/holds, holds/release and GET chat-sessions/{id}/hold. Interactive Butler gets nebula.work.holds, hold_chats, release_chats, hold_project, release_project with no confirmation; background Butler is refused. Selected: test_chat_holds.py (new: scoping, coverage, child goals, all_active, partial release, mark hand-off, turn stops, authenticated routes, Butler tools, background refusal), test_project_holds.py (existing project-hold contract), test_control_assistant_work.py (work tool registry) and the scheduled-Butler catalog test that enumerates every work action. The Butler board now marks each card whose chat is on a chat hold with that hold (id, batch, reason), so the UI can group held chats by batch; test_butler_goal_chat_proposals.py covers the board. ProjectHold gains session_id and batch_id, so runtime-compatibility.json records the new entity_fields_sha256 under the already declared storage.entity-field-additions/v1; test_runtime_bundle.py checks the manifest. A hold's goal pause now keeps the goal's execution claim, so the in-flight turn finishes during the grace period instead of failing its next ownership check (found on the LAN Core: a quick hold and release failed the turn and left the goal paused without the hold mark); test_chat_goals.py covers the shared pause path.",
   "exclusions": "No UI change in this PR (the board, chat menu and Release and send come with the UI PR), so no frontend or Playwright tests. test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and two test_settings_assistant_tools.py tests fail identically on origin/main and are not selected. The product knowledge index does not read docs/design/project-holds.md. tests/v3/test_tolerant_entity_readers.py::test_a_new_entity_field_needs_a_reviewed_addition_flag fails identically on origin/main (the manifest already declares the addition flag) and is not selected.",
   "python_versions": [
     "3.12"
@@ -9,7 +9,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 75,
+    "python": 111,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -20,7 +20,8 @@
     "tests/v3/test_control_assistant_work.py",
     "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_reach_every_project_assistant_work_action",
     "tests/v3/test_butler_goal_chat_proposals.py",
-    "tests/v3/test_runtime_bundle.py"
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_chat_goals.py"
   ],
   "frontend": [],
   "native": [],

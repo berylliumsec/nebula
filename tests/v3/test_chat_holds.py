@@ -442,3 +442,67 @@ async def test_butler_board_marks_held_chats_with_their_batch(tmp_path):
     assert items["Old direction"]["hold"]["batch_id"] == batch
     assert items["Old direction"]["hold"]["reason"] == "Priorities changed"
     assert items["New direction"]["hold"] is None
+
+
+async def test_a_held_goal_keeps_its_running_turn_until_the_grace_ends(tmp_path):
+    """The hold's pause must not fail the goal's in-flight turn.
+
+    It used to clear the goal's execution claim, so the turn failed at its
+    next ownership check ("chat goal ownership changed") and, after a quick
+    release, paused the goal again with no hold mark.
+    """
+
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from nebula.v3.chat import PreparedChat
+
+    store, goals, service, _recorder = await _setup(tmp_path)
+    worker, claim, now = "worker-a", str(uuid4()), utc_now()
+    goal = await _goal(
+        store,
+        execution_owner_id=worker,
+        execution_claim_id=claim,
+        execution_claimed_at=now,
+    )
+    turn = await store.create(
+        ChatTurn(
+            engagement_id="project",
+            session_id="session",
+            goal_id=goal.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.ROUTING,
+            execution_owner_id=worker,
+            execution_claim_id=claim,
+            execution_claimed_at=now,
+        )
+    )
+    prepared = PreparedChat.__new__(PreparedChat)
+    prepared.turn = turn
+    prepared.execution_claim_id = claim
+
+    async def unchanged(latest):
+        return latest
+
+    # Only the ownership check runs; tool bookkeeping is not under test.
+    worker_view = SimpleNamespace(
+        store=store, worker_id=worker, _reconcile_tool_bookkeeping=unchanged
+    )
+
+    batch_id, _holds = await service.place_chats(
+        "project", ChatHoldPlace(session_ids=["session"], grace_seconds=600)
+    )
+
+    paused = await goals.get("session")
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert paused.execution_claim_id == claim
+    # The running turn passes its ownership check and may finish.
+    await ChatService._assert_execution_owner(worker_view, prepared)
+
+    await service.release_chats("project", ChatHoldRelease(batch_id=batch_id))
+
+    resumed = await goals.get("session")
+    assert resumed.status == ChatGoalStatus.RUNNING
+    assert HOLD_MARKER not in resumed.metadata
+    await ChatService._assert_execution_owner(worker_view, prepared)

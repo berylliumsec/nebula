@@ -930,6 +930,16 @@ class ChatGoalService:
             }
             if hold_id is not None:
                 changes["metadata"] = {**goal.metadata, HOLD_MARKER: hold_id}
+                # A hold lets the goal's running turn finish during its grace
+                # period, so the turn keeps its claim; clearing it would fail
+                # the turn at its next ownership check. The turn's settlement
+                # releases the claim, and a paused goal does not continue.
+                for field in (
+                    "execution_owner_id",
+                    "execution_claim_id",
+                    "execution_claimed_at",
+                ):
+                    del changes[field]
             if retain_execution_claim:
                 changes["metadata"] = marked
                 for field in (
