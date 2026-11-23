@@ -589,6 +589,13 @@ unchanged. In provider chat routing, a hook denial is a call that ran, so it
 resets the deviation count; the third denial by the same hook in one turn
 therefore stops routing on its own, through the same deviation-limit path,
 even with other calls running in between. Other hooks count separately.
+When the tool-free synthesis after such a stop is empty or reasoning only,
+Core does not spend final-answer recovery on it: the turn completes at once
+with a Core-written closing message naming the hook and the tools it refused,
+so a running goal continues with its next turn instead of retrying until the
+stall limit blocks it. A real answer from that synthesis is kept. Recovery
+receipts for empty answers record `http_status` and the routed
+`upstream_provider` (OpenRouter's `provider`) when the route reports them.
 
 G9 operator-workflow checkpoint (2026-09-18): provider Assistant settings discover
 project `.agents/hooks`, allow explicit per-turn selection, and send exact hook IDs

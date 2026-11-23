@@ -890,6 +890,8 @@ async def test_provider_chat_recovers_from_reasoning_only_output_exhaustion(
                 "content_characters": 0,
                 "finish_reason": "length",
                 "provider_request_id": None,
+                "http_status": None,
+                "upstream_provider": None,
                 "reason": "output_limit",
                 "reasoning_characters": 48,
             }

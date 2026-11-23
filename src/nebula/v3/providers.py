@@ -716,6 +716,11 @@ class ModelResponse(BaseModel):
     usage: ModelUsage = Field(default_factory=ModelUsage)
     finish_reason: str | None = None
     provider_request_id: str | None = None
+    # Where the reply came from, for diagnosing an empty or failed answer:
+    # the HTTP status the route answered with, and the upstream a router
+    # (OpenRouter's ``provider``) sent the request to. None when unknown.
+    http_status: int | None = None
+    upstream_provider: str | None = None
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
     raw_body: bytes | None = Field(default=None, exclude=True, repr=False)
     # What the route needs back when this response's calls are replayed:
@@ -1692,6 +1697,7 @@ async def _stream_with_retry(
     *,
     json: dict[str, Any],
     operation: str,
+    opened: dict[str, Any] | None = None,
 ) -> AsyncIterator[AsyncIterator[str]]:
     """Open a streaming provider response and hand over its SSE data frames,
     retrying before the first token.
@@ -1726,6 +1732,9 @@ async def _stream_with_retry(
                     leading, error = await _leading_frames(frames)
                     if error is None:
                         started = True
+                        if opened is not None:
+                            # The status the stream that answered opened with.
+                            opened["status_code"] = response.status_code
                         yield _replay_frames(leading, frames)
                         return
                     await frames.aclose()
@@ -3755,6 +3764,7 @@ class OpenAIResponsesProvider(ModelProvider):
             )
             or data.get("status"),
             provider_request_id=data.get("id"),
+            http_status=response.status_code,
             raw=data,
             raw_body=response.content,
             reasoning_state=_reasoning_state(
@@ -3854,7 +3864,24 @@ def _adapter_response(request: ModelRequest, **fields: Any) -> ModelResponse:
     tools, the same as the calls the route reported properly.
     """
 
+    if fields.get("upstream_provider") is None:
+        fields["upstream_provider"] = _upstream_provider(fields.get("raw"))
     return ModelResponse.model_validate(fields, context={_RESPONSE_REQUEST: request})
+
+
+def _bedrock_http_status(data: Any) -> int | None:
+    metadata = data.get("ResponseMetadata") if isinstance(data, dict) else None
+    status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+    return status if isinstance(status, int) and not isinstance(status, bool) else None
+
+
+def _upstream_provider(data: Any) -> str | None:
+    """The upstream a router names in its reply (OpenRouter's ``provider``)."""
+
+    name = data.get("provider") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return name.strip()[:120]
 
 
 def _tool_call(
@@ -4520,6 +4547,7 @@ class OpenAICompatibleProvider(ModelProvider):
             ),
             finish_reason=choice.get("finish_reason"),
             provider_request_id=data.get("id"),
+            http_status=response.status_code,
             raw=data,
             raw_body=response.content,
             reasoning_state=_reasoning_state(
@@ -4984,6 +5012,8 @@ async def _stream_openai_compatible(
     finish_reason: str | None = None
     response_id: str | None = None
     response_model = model
+    upstream_provider: str | None = None
+    opened: dict[str, Any] = {}
     terminated = False
     keepalives = 0
     try:
@@ -4995,6 +5025,7 @@ async def _stream_openai_compatible(
                 provider._path("/v1/chat/completions"),
                 json=payload,
                 operation="chat_completions_stream",
+                opened=opened,
             ) as frames:
                 async for frame in _frames_until_finished_close(
                     frames, lambda: finish_reason is not None, provider.config
@@ -5020,6 +5051,7 @@ async def _stream_openai_compatible(
                     # erase the id and model an earlier frame named.
                     response_id = data.get("id") or response_id
                     response_model = data.get("model") or response_model
+                    upstream_provider = _upstream_provider(data) or upstream_provider
                     chunk_usage = data.get("usage")
                     if chunk_usage:
                         usage = _openai_usage(
@@ -5111,6 +5143,8 @@ async def _stream_openai_compatible(
             usage=usage,
             finish_reason=finish_reason,
             provider_request_id=response_id,
+            http_status=opened.get("status_code"),
+            upstream_provider=upstream_provider,
             reasoning_state=_reasoning_state(
                 provider.config.id,
                 model,
@@ -5520,6 +5554,7 @@ class AnthropicProvider(ModelProvider):
             usage=_anthropic_usage(data.get("usage")),
             finish_reason=data.get("stop_reason"),
             provider_request_id=data.get("id"),
+            http_status=response.status_code,
             raw=data,
             reasoning_state=_reasoning_state(
                 self.config.id,
@@ -5947,6 +5982,7 @@ class GeminiProvider(ModelProvider):
             ),
             finish_reason=candidate.get("finishReason"),
             provider_request_id=data.get("responseId"),
+            http_status=response.status_code,
             raw=data,
             reasoning_state=_reasoning_state(self.config.id, model, {}, calls),
         )
@@ -6330,6 +6366,7 @@ class BedrockProvider(ModelProvider):
             usage=_bedrock_usage(usage),
             finish_reason=data.get("stopReason"),
             provider_request_id=(data.get("ResponseMetadata") or {}).get("RequestId"),
+            http_status=_bedrock_http_status(data),
             raw=data,
         )
 
