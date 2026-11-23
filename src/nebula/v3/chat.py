@@ -2080,12 +2080,12 @@ def _record_final_answer_fallback(
                 "stopped, and the final synthesis was empty."
             ),
             metadata={
-                "provider_id": response.provider_id,
-                "model": response.model,
+                "provider": response.provider_id,
+                "model_id": response.model,
                 "hook_id": hook_id,
-                "reason": problem,
+                "reason_code": problem,
                 "http_status": response.http_status,
-                "upstream_provider": response.upstream_provider,
+                "route": response.upstream_provider,
             },
         )
         return
@@ -2103,9 +2103,9 @@ def _record_final_answer_fallback(
             "call was malformed or refused upstream."
         ),
         metadata={
-            "provider_id": response.provider_id,
-            "model": response.model,
-            "answer_characters": len(_operator_answer_text(response.text)),
+            "provider": response.provider_id,
+            "model_id": response.model,
+            "count": len(_operator_answer_text(response.text)),
         },
     )
 
@@ -2190,8 +2190,9 @@ def _final_answer_response_record(
 ) -> dict[str, Any]:
     """Retain safe evidence about an invalid synthesis without storing raw text."""
 
-    return {
+    record: dict[str, Any] = {
         "reason": problem,
+        "model": response.model,
         "finish_reason": response.finish_reason,
         "content_characters": len(response.text.strip()),
         "reasoning_characters": len(response.reasoning.strip()),
@@ -2199,6 +2200,12 @@ def _final_answer_response_record(
         "http_status": response.http_status,
         "upstream_provider": response.upstream_provider,
     }
+    if response.reasoning_tool_markup:
+        record["reasoning_tool_markup"] = response.reasoning_tool_markup
+    if response.stream_trace:
+        # Frame shapes and lengths only: the adapter replaced model text.
+        record["stream"] = response.stream_trace
+    return record
 
 
 def _final_answer_backoff_seconds(attempts: int) -> float:
@@ -10851,6 +10858,31 @@ class ChatService:
                             stage="chat",
                             retryable=True,
                             safe_failure_cause="The provider returned an empty routing reply.",
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                                "vendor_request_id": response.provider_request_id,
+                                "status": response.finish_reason,
+                                "http_status": response.http_status,
+                                "route": response.upstream_provider,
+                                "reason_code": _final_answer_problem(response),
+                                "format": response.reasoning_tool_markup,
+                                **(
+                                    {
+                                        "chunk_count": response.stream_trace.get(
+                                            "frames"
+                                        ),
+                                        "finish_reasons": response.stream_trace.get(
+                                            "finish_reasons"
+                                        ),
+                                        "stream_frames": response.stream_trace.get(
+                                            "last_events"
+                                        ),
+                                    }
+                                    if response.stream_trace
+                                    else {}
+                                ),
+                            },
                         )
                         break
                     # Every call is sorted before any of them executes, so a
