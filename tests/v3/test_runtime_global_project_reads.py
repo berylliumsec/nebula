@@ -761,3 +761,86 @@ async def test_butler_case_stage_reaches_case_chats_and_goal_cards(project_reads
     assert set(later) == {blocked.id}
     assert later[blocked.id]["status"] == "needs_attention"
     assert utc_now() - resolved.updated_at < timedelta(hours=1)
+
+
+async def test_chat_work_stage_comes_from_its_newest_open_assigned_item(project_reads):
+    from nebula.v3.domain import ChatGoal, ChatGoalStatus, WorkItem, WorkStage
+
+    store = project_reads.store
+    project = await store.create(
+        Engagement(
+            name="Staged",
+            work_stages=[
+                WorkStage(key="recon", label="Recon"),
+                WorkStage(key="validation", label="Validation"),
+            ],
+        )
+    )
+
+    async def chat(title):
+        session = await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=session.id,
+                objective=f"Goal of {title}",
+                completion_criteria=["Report"],
+                status=ChatGoalStatus.RUNNING,
+            )
+        )
+        return session
+
+    async def item(session, stage, status="in_progress"):
+        return await store.create(
+            WorkItem(
+                engagement_id=project.id,
+                title=f"Item {stage} {status}",
+                assignee_session_id=session.id,
+                stage=stage,
+                status=status,
+            )
+        )
+
+    two = await chat("Two items")
+    await item(two, "recon")
+    newer = await item(two, "validation", status="blocked")
+    finished = await chat("Only done")
+    await item(finished, "validation", status="done")
+    unlisted = await chat("Unlisted stage")
+    await item(unlisted, "disposition")
+    unstaged = await chat("No stage")
+    await item(unstaged, None)
+    plain = await chat("Not assigned")
+
+    listed = await project_reads.client.get(
+        "/api/v1/chat-sessions", params={"engagement_id": project.id}, headers=AUTH
+    )
+    single = await project_reads.client.get(
+        f"/api/v1/chat-sessions/{two.id}", headers=AUTH
+    )
+    board = await project_reads.client.get("/api/v1/butler/board", headers=AUTH)
+    assert listed.status_code == single.status_code == board.status_code == 200
+    expected = {
+        "key": "validation",
+        "label": "Validation",
+        "item_id": newer.id,
+        "item_title": newer.title,
+        "item_status": "blocked",
+    }
+    metadata = {row["id"]: row["metadata"] for row in listed.json()}
+    assert metadata[two.id]["work_stage"] == expected
+    assert single.json()["metadata"]["work_stage"] == expected
+    for session in (finished, unlisted, unstaged, plain):
+        assert "work_stage" not in metadata[session.id], session.title
+    cards = {row["session_id"]: row for row in board.json()["items"]}
+    assert cards[two.id]["work_stage"] == expected
+    assert cards[plain.id]["work_stage"] is None
+    # Read time only: the chat itself is unchanged.
+    assert "work_stage" not in (await store.get(ChatSession, two.id)).metadata

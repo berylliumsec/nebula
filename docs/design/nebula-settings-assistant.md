@@ -1446,24 +1446,35 @@ sets priority when asked (`nebula.work.set_priority`) and reviews
 high-priority chats first; the operator does not need to tell Butler which
 chats matter.
 
-## Butler stage labels
+## Conversation stage labels
 
-Every Butler conversation shows its stage as a
-word with a shape, in the Workbench conversation list and beside the open
-chat's title. A **Butler check** (the chat Butler opens to investigate a
-blocked or stalled goal, a failed subagent or a scheduled check) follows its
-Core recovery case: **Investigating** (Butler is looking, or Core is checking
-its repair), **Needs you** (Butler could not repair it and needs a decision),
-**Uncertain** (Butler acted but Core could not confirm the repair),
-**Resolved** (Core verified recovery) or **Closed** (superseded). Butler checks
-nest under the project's Butler chat, without the "Butler check ·" prefix; a
-check that needs the operator puts that chat under **Needs you**. The
-project's Butler chat and Butler threads show **Active**, **Needs you** or
-**Idle** from their own activity. A board card whose goal has an open Butler
-check, or one resolved in the last 24 hours, shows **Butler · <stage>**, and
-its brief offers **Open Butler check**. The stage is read from Core on every
-list, chat and board read (`metadata.butler_case_status` on chat sessions,
-`butler_case` on board items); nothing extra is stored.
+A conversation's **stage** is its project's Work stage: the stage of the Work
+item assigned to that chat, named exactly as the project defines it on the
+Projects page (for example Recon, Simulation, Validation). It shows in the
+Workbench conversation list, beside the open chat's title, and on goal cards
+and briefs in Butler mode. Its dot uses the Projects page stage-tile colours for that
+item: green not started, blue in progress or in review, red blocked; the
+tooltip names the item. When several open items are assigned to one chat, the
+most recently updated one counts. A chat with no open assigned item, an item
+without a stage, or a stage the project no longer lists shows no stage. Core
+reads it on every chat, list and card read (`metadata.work_stage` on chat
+sessions, `work_stage` on card items); nothing extra is stored. To give a chat
+a stage, assign it a Work item and set the item's stage on the Work page.
+
+Butler's own status is a quieter **Butler · …** line, never the stage. A
+**Butler check** (the chat Butler opens to investigate a blocked or stalled
+goal, a failed subagent or a scheduled check) follows its recovery case:
+**Investigating** (Butler is looking, or Core is checking its repair), **Needs
+you** (Butler could not repair it and needs a decision), **Uncertain** (Butler
+acted but Core could not confirm the repair), **Resolved** (Core verified
+recovery) or **Closed** (superseded). Butler checks nest under the project's
+Butler chat without the "Butler check ·" prefix, and a check that needs the
+operator puts that chat under **Needs you**. The project's Butler chat and its
+parallel conversations show **Butler · Active**, **Needs you** or **Idle**. A
+goal card whose chat has an open Butler check, or one resolved in the last 24
+hours, shows **Butler · <status>** after its stage, and its brief offers **Open
+Butler check** (`butler_case` on card items, `metadata.butler_case_status` on
+chat sessions).
 
 ## Closing the desktop and shutting down Core
 

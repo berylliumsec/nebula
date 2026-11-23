@@ -10,7 +10,8 @@ exact. Listed chats are enriched with their turn state (working, waiting on
 the operator, or a failed last turn) from their own pending and newest turns,
 never from a scan of every project's turns. A card also carries Butler's newest open
 (or freshly resolved) recovery case about its chat, so the operator sees
-that Butler is investigating it or needs them. Chats without a goal, Butler's own
+that Butler is investigating it or needs them, and the project Work stage
+of the Work item assigned to it. Chats without a goal, Butler's own
 conversations, side chats, subagent chats and archived projects or chats are
 never listed. Both the supervisor's API worker and the single-process app
 mount this route.
@@ -30,6 +31,7 @@ from sqlalchemy.orm import aliased
 
 from .work_priority import marked_high
 from .butler_case_stage import cases_for_goal_chats
+from .chat_work_stage import work_stages_for_chats
 from .stored_entities import decode_stored
 from .chat_subagents import is_subagent_session
 from .chat_turn_headers import (
@@ -478,10 +480,11 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             [entry[0].id for _name, entry in shown if entry[3] == "waiting"],
         )
         async with store.database.session() as database:
-            cases = await cases_for_goal_chats(
-                database,
-                [entry[0].id for _name, entry in shown],
-                {entry[0].engagement_id for _name, entry in shown},
+            shown_ids = [entry[0].id for _name, entry in shown]
+            shown_projects = {entry[0].engagement_id for _name, entry in shown}
+            cases = await cases_for_goal_chats(database, shown_ids, shown_projects)
+            work_stages = await work_stages_for_chats(
+                database, shown_ids, shown_projects
             )
         items = await _with_holds(
             store,
@@ -493,6 +496,8 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
         for item in items:
             # Butler's newest open (or freshly resolved) case about this chat.
             item["butler_case"] = cases.get(item["session_id"])
+            # The project Work stage of the chat's assigned Work item.
+            item["work_stage"] = work_stages.get(item["session_id"])
         body = {
             "counts": totals,
             "states": states,
