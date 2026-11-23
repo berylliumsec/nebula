@@ -22003,7 +22003,10 @@ class HarnessRuntimeService:
                         "goal_completion_proposal"
                     )
                     if proposal is not None:
-                        from .chat_goal_tools import GoalCompletionProposal
+                        from .chat_goal_tools import (
+                            GoalCompletionProposal,
+                            agent_completion_changes,
+                        )
                         from .chat_goals import ChatGoalService
 
                         completion = GoalCompletionProposal.model_validate(proposal)
@@ -22019,24 +22022,15 @@ class HarnessRuntimeService:
                             raise ChatHistoryConflict(
                                 "the goal changed or still has working subagents before completion"
                             )
-                        now = utc_now()
+                        # A goal that requires closure review stops blocked
+                        # with the proposal instead of completing.
                         changes.update(
-                            {
-                                "status": ChatGoalStatus.COMPLETED,
-                                "completed_at": now,
-                                "completion_summary": completion.completion_summary,
-                                "completion_evidence": [
-                                    {
-                                        "kind": "agent_reported",
-                                        "detail": detail,
-                                        "turn_id": chat_turn.id,
-                                    }
-                                    for detail in completion.completion_evidence
-                                ],
-                                "active_since": None,
-                                "elapsed_seconds": goal.active_elapsed_seconds(now),
-                                "blocked_reason": None,
-                            }
+                            agent_completion_changes(
+                                goal.model_copy(update={"metadata": metadata}),
+                                completion,
+                                turn_id=chat_turn.id,
+                                now=utc_now(),
+                            )
                         )
                     if goal.status == ChatGoalStatus.RUNNING and proposal is None:
                         now = utc_now()
