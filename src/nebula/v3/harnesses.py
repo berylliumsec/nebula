@@ -1159,6 +1159,14 @@ def _harness_developer_instructions(
         )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
+            "Nebula command tools (run_command, process_io) are not available in this session "
+            "because the project's command runtime is unavailable; do not look for or retry them. "
+            "If the task needs commands or file writes that the remaining tools cannot do, "
+            "say so plainly and stop instead of working around it. "
+            if _command_runtime_unavailable_detail(session) is not None
+            else ""
+        )
+        + (
             "Use work.agents to see which conversations are working or waiting "
             "in this project and their linked open Work items. An unlinked "
             "conversation has no recorded task; a link is an assignment, not "
@@ -6497,6 +6505,36 @@ def _claude_commentary_events(text: str, sequence: int) -> list[HarnessEvent]:
     ]
 
 
+def _record_command_runtime_unavailable(
+    session: HarnessSession, *, stage: str, graph_tools: bool
+) -> None:
+    """One warning per session build whose project has no command runtime."""
+
+    record_diagnostic(
+        "warning",
+        "harnesses",
+        "harnesses.command_runtime.unavailable",
+        "A harness session started without command tools because the project command runtime is unavailable.",
+        outcome="degraded",
+        stage=stage,
+        metadata={
+            "entity_type": "harness_session",
+            "entity_id": session.id,
+            "project_id": session.engagement_id,
+            "execution_mode": session.metadata.get("execution_mode"),
+            "graph_tools": graph_tools,
+        },
+    )
+
+
+def _command_runtime_unavailable_detail(session: HarnessSession) -> str | None:
+    value = session.metadata.get("command_runtime_unavailable")
+    if not isinstance(value, dict):
+        return None
+    detail = value.get("detail")
+    return detail if isinstance(detail, str) and detail.strip() else None
+
+
 def _claude_background_result_event(message: Any) -> HarnessEvent:
     raw_result = getattr(message, "result", None)
     text = raw_result.strip() if isinstance(raw_result, str) else ""
@@ -10250,6 +10288,34 @@ class HarnessRuntimeService:
         RuntimeToolComponents | AutomationToolComponents | None,
         dict[str, Any] | None,
     ]:
+        components, resolved, _unavailable = await self._resolve_oci_components(
+            engagement_id=engagement_id,
+            model=model,
+            snapshot=snapshot,
+            include_browser=include_browser,
+        )
+        return components, resolved
+
+    async def _resolve_oci_components(
+        self,
+        *,
+        engagement_id: str,
+        model: str,
+        snapshot: dict[str, Any] | None = None,
+        include_browser: bool = False,
+    ) -> tuple[
+        RuntimeToolComponents | AutomationToolComponents | None,
+        dict[str, Any] | None,
+        str | None,
+    ]:
+        """Resolve the gateway tools and say why command tools are missing.
+
+        The third value is operator-facing text when the project's command
+        runtime is unavailable: graph and browser tools still resolve, but
+        the session has no ``run_command`` or ``process_io``.
+        """
+
+        unavailable: str | None = None
         include_browser = include_browser or bool(
             snapshot and snapshot.get("browser_runtime_enabled") is True
         )
@@ -10275,10 +10341,15 @@ class HarnessRuntimeService:
                     components = await self.automation_tool_platform.chat_components(
                         engagement_id=engagement_id
                     )
-                except AutomationRuntimeUnavailable:
+                except AutomationRuntimeUnavailable as exc:
                     # diagnostic-expected: unavailable optional commands do not disable graph-only tools.
-                    # Project graph access remains available without a command runtime.
+                    # Project graph access remains available without a command
+                    # runtime. The caller records one diagnostic per session
+                    # build and shows the operator why commands are missing.
                     components = None
+                    unavailable = await self.automation_tool_platform.command_runtime_unavailable_detail(
+                        engagement_id, exc
+                    )
             if include_browser:
                 if self.browser_automation_platform is None:
                     raise HarnessConfigurationError(
@@ -10299,7 +10370,7 @@ class HarnessRuntimeService:
             application_model_available = True
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
-                return None, None
+                return None, None, unavailable or _safe_error(exc)
             raise HarnessConfigurationError(
                 "could not restore the frozen harness command runtime: "
                 + _safe_error(exc)
@@ -10311,7 +10382,7 @@ class HarnessRuntimeService:
                 "could not resolve the harness command runtime: " + _safe_error(exc)
             ) from exc
         if components is None:
-            return None, None
+            return None, None, unavailable
         resolved = self._oci_snapshot(components)
         if include_browser:
             resolved["browser_runtime_enabled"] = True
@@ -10321,19 +10392,21 @@ class HarnessRuntimeService:
             raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"
             )
-        return components, resolved
+        return components, resolved, unavailable
 
     async def _ensure_oci_components(
         self, session: HarnessSession, *, validate_current: bool = False
     ) -> RuntimeToolComponents | AutomationToolComponents | None:
-        if session.metadata.get("command_runtime_enabled") is False:
+        if session.metadata.get(
+            "command_runtime_enabled"
+        ) is False and not session.metadata.get("command_runtime_unavailable"):
             return None
         cached = self._gateway_oci_components.get(session.id)
         if cached is not None and not validate_current:
             return cached
         raw_snapshot = session.metadata.get("command_runtime_snapshot")
         snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
-        components, resolved = await self._build_oci_components(
+        components, resolved, unavailable = await self._resolve_oci_components(
             engagement_id=session.engagement_id,
             model=session.model,
             snapshot=snapshot,
@@ -10343,19 +10416,39 @@ class HarnessRuntimeService:
             return None
         if snapshot is None and resolved is not None:
             latest = await self.store.get(HarnessSession, session.id)
-            (
-                await self.store.update(
-                    HarnessSession,
-                    latest.id,
-                    {
-                        "metadata": {
-                            **latest.metadata,
-                            "command_runtime_snapshot": resolved,
-                        }
-                    },
-                    expected_revision=latest.revision,
-                )
+            metadata = {
+                key: value
+                for key, value in latest.metadata.items()
+                if key
+                not in {"command_runtime_unavailable", "command_runtime_notice_turn_id"}
+            }
+            metadata["command_runtime_snapshot"] = resolved
+            metadata["command_runtime_enabled"] = unavailable is None
+            if unavailable is not None:
+                metadata["command_runtime_unavailable"] = {
+                    "detail": unavailable,
+                    "execution_mode": latest.metadata.get("execution_mode"),
+                }
+                if _command_runtime_unavailable_detail(latest) is not None:
+                    # Already reported for this session; keep its notice mark.
+                    notice_turn_id = latest.metadata.get(
+                        "command_runtime_notice_turn_id"
+                    )
+                    if notice_turn_id:
+                        metadata["command_runtime_notice_turn_id"] = notice_turn_id
+            saved = await self.store.update(
+                HarnessSession,
+                latest.id,
+                {"metadata": metadata},
+                expected_revision=latest.revision,
             )
+            if (
+                unavailable is not None
+                and _command_runtime_unavailable_detail(latest) is None
+            ):
+                _record_command_runtime_unavailable(
+                    saved, stage="session.resolve", graph_tools=True
+                )
         self._gateway_oci_components[session.id] = components
         return components
 
@@ -10546,15 +10639,15 @@ class HarnessRuntimeService:
         execution_mode = await self._project_execution_mode(
             engagement_id, transaction=transaction
         )
-        components, oci_snapshot = (
+        components, oci_snapshot, command_runtime_unavailable = (
             (
-                await self._build_oci_components(
+                await self._resolve_oci_components(
                     engagement_id=engagement_id,
                     model=selected_model,
                 )
             )
             if tools_enabled
-            else (None, None)
+            else (None, None, None)
         )
         if (
             tools_enabled
@@ -10580,7 +10673,19 @@ class HarnessRuntimeService:
             "harness_permission_mode": profile.permission_mode,
             "approval_policy": (await self._project_approval_policy(engagement_id)),
             "native_capabilities": native_capabilities.model_dump(mode="json"),
-            "command_runtime_enabled": oci_snapshot is not None,
+            "command_runtime_enabled": (
+                oci_snapshot is not None and command_runtime_unavailable is None
+            ),
+            **(
+                {
+                    "command_runtime_unavailable": {
+                        "detail": command_runtime_unavailable,
+                        "execution_mode": execution_mode,
+                    }
+                }
+                if command_runtime_unavailable is not None
+                else {}
+            ),
             **({"control_assistant": True} if control_assistant else {}),
             **(
                 {"settings_grok_home_version": 1}
@@ -10629,6 +10734,10 @@ class HarnessRuntimeService:
             created = session
         if components is not None:
             self._gateway_oci_components[created.id] = components
+        if command_runtime_unavailable is not None:
+            _record_command_runtime_unavailable(
+                created, stage="session.create", graph_tools=oci_snapshot is not None
+            )
         return created
 
     async def analyze_structured(
@@ -10709,6 +10818,7 @@ class HarnessRuntimeService:
                     **(
                         {
                             "command_runtime_enabled": False,
+                            "command_runtime_unavailable": None,
                             "browser_runtime_enabled": False,
                         }
                         if butler_recovery_case_id is not None
@@ -10857,6 +10967,11 @@ class HarnessRuntimeService:
 
         metadata.pop("workspace_binding_version", None)
         metadata.pop("command_runtime_snapshot", None)
+        if metadata.pop("command_runtime_unavailable", None) is not None:
+            # Resolve commands again for the new mode; the next gateway build
+            # records whether they are still unavailable.
+            metadata.pop("command_runtime_notice_turn_id", None)
+            metadata["command_runtime_enabled"] = True
         metadata.update(
             {
                 "execution_mode": execution_mode,
@@ -11359,12 +11474,62 @@ class HarnessRuntimeService:
         )
         return turn, replacement, notice
 
+    async def _command_runtime_notice(
+        self, turn: HarnessTurn, session: HarnessSession
+    ) -> tuple[HarnessSession, HarnessEvent | None]:
+        """Tell the operator once per session that command tools are missing.
+
+        The session stays usable for graph, browser and MCP tools. The notice
+        is a warning so it stays in the transcript, and the session records
+        which turn carried it so later turns do not repeat it.
+        """
+
+        detail = _command_runtime_unavailable_detail(session)
+        if detail is None or session.metadata.get("command_runtime_notice_turn_id"):
+            return session, None
+        for _attempt in range(2):
+            latest = await self.store.get(HarnessSession, session.id)
+            if latest.metadata.get("command_runtime_notice_turn_id"):
+                return latest, None
+            try:
+                session = await self.store.update(
+                    HarnessSession,
+                    latest.id,
+                    {
+                        "metadata": {
+                            **latest.metadata,
+                            "command_runtime_notice_turn_id": turn.id,
+                        }
+                    },
+                    expected_revision=latest.revision,
+                )
+                break
+            except ConflictError:
+                # diagnostic-expected: reread the session and mark it once more.
+                continue
+        return session, HarnessEvent(
+            type="notice",
+            origin=turn.origin,
+            harness_profile_id=session.harness_profile_id,
+            harness_session_id=session.id,
+            harness_turn_id=turn.id,
+            model=session.model,
+            title="Command tools unavailable",
+            summary=detail,
+            payload={
+                "severity": "warning",
+                "reason": "command_runtime_unavailable",
+                "detail": detail,
+                "execution_mode": session.metadata.get("execution_mode"),
+            },
+        )
+
     async def _replace_session_for_current_command_runtime(
         self, session: HarnessSession
     ) -> HarnessSession:
         """Preserve frozen capabilities while replacing only the command runtime."""
 
-        components, snapshot = await self._build_oci_components(
+        components, snapshot, unavailable = await self._resolve_oci_components(
             engagement_id=session.engagement_id,
             model=session.model,
             include_browser=session.metadata.get("browser_runtime_enabled") is True,
@@ -11374,9 +11539,21 @@ class HarnessRuntimeService:
                 "the current harness command runtime is unavailable for session recovery"
             )
         metadata = deepcopy(session.metadata)
+        metadata.pop("command_runtime_unavailable", None)
+        metadata.pop("command_runtime_notice_turn_id", None)
         metadata.update(
             {
-                "command_runtime_enabled": True,
+                "command_runtime_enabled": unavailable is None,
+                **(
+                    {
+                        "command_runtime_unavailable": {
+                            "detail": unavailable,
+                            "execution_mode": session.metadata.get("execution_mode"),
+                        }
+                    }
+                    if unavailable is not None
+                    else {}
+                ),
                 "command_runtime_snapshot": snapshot,
                 "runtime_rollover_from_session_id": session.id,
                 "runtime_rollover_reason": "command_runtime_changed",
@@ -11396,6 +11573,10 @@ class HarnessRuntimeService:
             )
         )
         self._gateway_oci_components[replacement.id] = components
+        if unavailable is not None:
+            _record_command_runtime_unavailable(
+                replacement, stage="session.rollover", graph_tools=True
+            )
         return replacement
 
     async def close_session(self, session_id: str) -> HarnessSession:
@@ -12262,6 +12443,7 @@ class HarnessRuntimeService:
                         **session.metadata,
                         "butler_recovery_case_id": butler_recovery_case_id,
                         "command_runtime_enabled": False,
+                        "command_runtime_unavailable": None,
                         "browser_runtime_enabled": False,
                         "native_capabilities": HarnessNativeCapabilities().model_dump(
                             mode="json"
@@ -14087,6 +14269,9 @@ class HarnessRuntimeService:
                     )
                 )
                 return
+            session, runtime_notice = await self._command_runtime_notice(turn, session)
+            if runtime_notice is not None:
+                yield (await self._persist_activity(turn, session, runtime_notice))
             yield (
                 await self._persist_activity(
                     turn,
