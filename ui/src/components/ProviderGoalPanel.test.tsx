@@ -543,3 +543,36 @@ it("sends a held completion back with the reviewer's feedback", async () => {
   }));
   await waitFor(() => expect(onWorkDispatched).toHaveBeenCalled());
 });
+
+it("adds a supervisor note to a running goal and says when the agent hears it", async () => {
+  const running: ChatGoal = { ...draft, status: "running", revision: 4, supervisorNotes: [] };
+  const note = { id: "note-1", text: "Prioritize the parser crash", author: "operator", createdAt: "2026-11-23T10:00:00Z" };
+  const noted: ChatGoal = { ...running, revision: 5, supervisorNotes: [note] };
+  const addChatGoalNote = vi.fn()
+    .mockRejectedValueOnce(new ApiError("Core is busy", 503))
+    .mockResolvedValueOnce({ goal: noted, noteId: "note-1", delivery: "next_step" });
+  const removeChatGoalNote = vi.fn().mockResolvedValue({ goal: { ...noted, revision: 6, supervisorNotes: [] }, noteId: "note-1", delivery: "next_step" });
+  const onChange = vi.fn();
+  const view = render(<DialogProvider><ProviderGoalPanel api={{ addChatGoalNote, removeChatGoalNote } as unknown as ApiClient} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add note" }));
+  const field = screen.getByLabelText("Supervisor note");
+  expect(field).toHaveAttribute("maxLength", "4000");
+  fireEvent.change(field, { target: { value: "  Prioritize the parser crash  " } });
+  const submit = within(document.querySelector(".chat-goal-note-form") as HTMLElement).getByRole("button", { name: "Add note" });
+  fireEvent.click(submit);
+  // A failure keeps the draft so the operator can retry.
+  expect(await screen.findByRole("alert")).toHaveTextContent("Core is busy");
+  expect(screen.getByLabelText("Supervisor note")).toHaveValue("  Prioritize the parser crash  ");
+  fireEvent.click(submit);
+  await waitFor(() => expect(addChatGoalNote).toHaveBeenLastCalledWith("session", "Prioritize the parser crash"));
+  expect(onChange).toHaveBeenCalledWith(noted);
+  expect(await screen.findByRole("status")).toHaveTextContent("before its next step");
+  expect(screen.queryByLabelText("Supervisor note")).toBeNull();
+
+  view.rerender(<DialogProvider><ProviderGoalPanel api={{ addChatGoalNote, removeChatGoalNote } as unknown as ApiClient} sessionId="session" goal={noted} onChange={onChange} /></DialogProvider>);
+  expect(screen.getByText("Supervisor notes · 1")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Remove note" }));
+  await waitFor(() => expect(removeChatGoalNote).toHaveBeenCalledWith("session", "note-1"));
+  expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ supervisorNotes: [] }));
+});

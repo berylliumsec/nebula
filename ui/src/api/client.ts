@@ -18,6 +18,7 @@ import type {
   ChatCitation,
   ChatCompletionRequest,
   ChatGoal,
+  GoalNoteResult,
   ChatCompletionResponse,
   ChatSessionRenameRequest,
   ChatSessionActivity,
@@ -3608,6 +3609,15 @@ function mapChatAssistantConfig(value: JsonObject): ChatAssistantConfig | undefi
   };
 }
 
+function mapGoalNoteResult(value: Record<string, any>): GoalNoteResult {
+  const delivery = value.delivery;
+  return {
+    goal: mapChatGoal(value.goal ?? {}),
+    noteId: String(value.note_id),
+    delivery: delivery === "next_step" || delivery === "running_turn" ? delivery : "next_turn",
+  };
+}
+
 function mapChatGoal(value: Record<string, any>): ChatGoal {
   return {
     id: String(value.id),
@@ -3656,6 +3666,18 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     handoffTargetSessionId: typeof value.metadata?.handoff_target_session_id === "string" ? value.metadata.handoff_target_session_id : undefined,
     handoffReason: typeof value.metadata?.handoff_reason === "string" ? value.metadata.handoff_reason : undefined,
     heldByProject: typeof value.metadata?.project_hold_id === "string",
+    supervisorNotes: Array.isArray(value.supervisor_notes) ? value.supervisor_notes.flatMap((item: unknown) => {
+      if (!item || typeof item !== "object") return [];
+      const note = item as Record<string, unknown>;
+      return typeof note.id === "string" && typeof note.text === "string"
+        ? [{
+          id: note.id,
+          text: note.text,
+          author: typeof note.author === "string" ? note.author : "operator",
+          createdAt: typeof note.created_at === "string" ? note.created_at : "",
+        }]
+        : [];
+    }) : [],
     executionWaiting: value.execution && typeof value.execution.detail === "string" && ["starting", "held", "closing"].includes(value.execution.reason)
       ? { reason: value.execution.reason, detail: value.execution.detail }
       : undefined,
@@ -10243,6 +10265,24 @@ export class ApiClient {
         }),
       },
     ).then(mapChatGoal);
+  }
+
+  /** Add a supervisor note; a running goal turn hears it mid-turn. */
+  addChatGoalNote(sessionId: string, text: string): Promise<GoalNoteResult> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/notes`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      },
+    ).then(mapGoalNoteResult);
+  }
+
+  removeChatGoalNote(sessionId: string, noteId: string): Promise<GoalNoteResult> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/notes/${encodeURIComponent(noteId)}`, {
+        method: "DELETE",
+      },
+    ).then(mapGoalNoteResult);
   }
 
   createChatGoalConversation(body: {
