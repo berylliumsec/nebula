@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_STAGE_KEY, OTHER_STAGE_KEY, effectiveStages, hasStageGap, stageCells, stageColumns, stageKeyFor, stageRollup, type StagedItem } from "./workStages";
+import { NO_STAGE_KEY, OTHER_STAGE_KEY, chatStageDescription, chatStageName, chatStageState, effectiveStages, hasStageGap, parseChatWorkStage, stageCells, stageColumns, stageKeyFor, stageRollup, type StagedItem } from "./workStages";
 
 const stages = [
   { key: "draft", label: "Draft", flagWhenEmpty: true },
@@ -80,5 +80,26 @@ describe("work stages", () => {
     ]);
     expect(cells[0].total).toBe(3);
     expect(stageRollup(stages, ["b"], [at("3", "b", "done", "draft")])[0]).toMatchObject({ state: "normal", detail: "All done" });
+  });
+});
+
+describe("a chat's project Work stage", () => {
+  const wire = { key: "validation", label: "Validation", item_id: "item-1", item_title: "Validate crash", item_status: "blocked" };
+
+  it("reads Core's work_stage and ignores anything malformed", () => {
+    expect(parseChatWorkStage(wire)).toEqual({ key: "validation", label: "Validation", itemId: "item-1", itemTitle: "Validate crash", itemStatus: "blocked" });
+    expect(parseChatWorkStage(undefined)).toBeUndefined();
+    expect(parseChatWorkStage({ ...wire, label: " " })).toBeUndefined();
+    expect(parseChatWorkStage({ ...wire, item_status: "stuck" })).toBeUndefined();
+  });
+
+  it("colours the dot with the Projects page tile states", () => {
+    expect(["backlog", "ready", "in_progress", "review", "blocked"].map(status => chatStageState(status as "ready"))).toEqual(["normal", "normal", "active", "active", "blocked"]);
+  });
+
+  it("names the stage and item state for screen readers and the tooltip", () => {
+    const stage = parseChatWorkStage(wire)!;
+    expect(chatStageName(stage)).toBe("Work stage Validation, blocked");
+    expect(chatStageDescription(stage)).toBe("Work stage Validation: Validate crash, blocked");
   });
 });

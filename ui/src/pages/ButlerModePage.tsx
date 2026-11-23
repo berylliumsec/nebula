@@ -3,7 +3,9 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Pause, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { butlerCaseStage } from "../butlerStage";
+import { chatStageName } from "./workStages";
 import { ButlerStageLabel } from "../components/ButlerStageLabel";
+import { WorkStageLabel } from "../components/WorkStageLabel";
 import { ALL_PROJECTS, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
@@ -1050,6 +1052,7 @@ export function ButlerModePage() {
     deciding={deciding === briefId}
     note={actionNote[briefId]}
     onStop={briefItem?.turnId ? () => void stopChat(briefItem) : undefined}
+    workStage={briefItem?.workStage}
     butlerCase={briefItem?.butlerCase ? { stage: butlerCaseStage(briefItem.butlerCase.status),
       onOpen: briefItem.butlerCase.sessionId ? () => openPopup(briefItem.butlerCase!.sessionId!, "Butler check", briefItem.project.id) : undefined } : undefined}
     proposalActions={briefItem?.attention?.kind === "proposal" ? proposalActions(briefId, briefItem.title) : undefined} /></Suspense> : null;
@@ -1170,7 +1173,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   const held = Boolean(item.hold);
   const resumable = isResumableIdle(item);
   const butlerStage = item.butlerCase ? butlerCaseStage(item.butlerCase.status) : undefined;
-  return <article className={styles.card} data-section={held ? "held" : item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} data-priority={high ? "high" : undefined} aria-label={`${item.title}: ${held ? "Held" : boardStatusLabel(item)}, ${held ? "Held" : SECTION_LABEL[item.section]}${high ? ", high priority" : ""}${butlerStage ? `, Butler ${butlerStage.label.toLowerCase()}` : ""}`}>
+  return <article className={styles.card} data-section={held ? "held" : item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} data-priority={high ? "high" : undefined} aria-label={`${item.title}: ${held ? "Held" : boardStatusLabel(item)}, ${held ? "Held" : SECTION_LABEL[item.section]}${high ? ", high priority" : ""}${item.workStage ? `, ${chatStageName(item.workStage)}` : ""}${butlerStage ? `, Butler ${butlerStage.label.toLowerCase()}` : ""}`}>
     <div className={styles.cardRow}>
     {selectable && <label className={styles.cardSelect} title={selected ? "Deselect" : resumable ? "Select to resume" : "Select to hold"}>
       <input type="checkbox" checked={selected} disabled={selectDisabled} onChange={onSelect} aria-label={`Select ${item.title} to ${resumable ? "resume" : "hold"}`} />
@@ -1179,7 +1182,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
       <span className={styles.cardHead}><i className={styles.sectionDot} data-section={held ? "held" : item.section} data-goal={item.goal?.status} aria-hidden="true" />{high && <ChevronUp className={styles.priorityMark} size={14} aria-hidden="true" />}<span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
       {runtime && <span className={styles.cardMeta}>{runtime}</span>}
       {item.now && <span className={styles.cardNow} data-state={item.state}>{item.now}</span>}
-      {butlerStage && <ButlerStageLabel stage={butlerStage} prefix="Butler" className={styles.cardStage} />}
+      {(item.workStage || butlerStage) && <span className={styles.cardStage}>{item.workStage && <WorkStageLabel stage={item.workStage} />}{butlerStage && <ButlerStageLabel stage={butlerStage} />}</span>}
       {goal && !expanded && <span className={styles.cardMeta}>{goal}</span>}
       {held && item.hold && <span className={styles.cardMeta}>On hold · {item.hold.reason}</span>}
       {note && !expanded && <span className={styles.cardNote} role="status" data-failed={note.startsWith("Not resumed") ? "true" : undefined}>{note}</span>}

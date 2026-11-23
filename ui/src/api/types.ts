@@ -115,6 +115,15 @@ export interface WorkStage {
   flagWhenEmpty: boolean;
 }
 
+/** The project Work stage a chat is at: its newest open assigned Work item's stage, from Core. */
+export interface ChatWorkStage {
+  key: string;
+  label: string;
+  itemId: Identifier;
+  itemTitle: string;
+  itemStatus: "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done";
+}
+
 export interface EngagementSummary {
   id: Identifier;
   name: string;
@@ -2358,6 +2367,8 @@ export interface ChatSessionSummary {
   butlerRecoveryCaseId?: Identifier;
   /** That case's current status, which Core reads when it lists the chat. */
   butlerCaseStatus?: ButlerCaseStatus;
+  /** The project Work stage of the Work item assigned to this chat, read by Core. */
+  workStage?: ChatWorkStage;
   pendingRuntimeSwitch?: PendingRuntimeSwitch;
   assistantConfig?: ChatAssistantConfig;
   planningEnabled?: boolean;

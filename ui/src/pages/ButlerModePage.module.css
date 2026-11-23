@@ -1096,4 +1096,4 @@ a.sheetRow { text-decoration: none; }
 .selectionBar .link { align-self: center; color: var(--muted); }
 .selectionCount { color: var(--text); font-weight: var(--weight-medium); white-space: nowrap; }
 /* Butler's case about this goal: a stage label under the card's status line. */
-.cardStage { align-self: flex-start; }
+.cardStage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; align-self: flex-start; }

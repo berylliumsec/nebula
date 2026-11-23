@@ -354,7 +354,8 @@ it("shows Butler's case stage on a goal card and offers its Butler check", async
   const withCase = {
     ...poll,
     items: [
-      { ...wire("Fuzz parser", research, "active", "working", "running", "Working"), butler_case: { id: "case-1", status: "needs_attention", session_id: "case-chat", updated_at: "2026-11-20T10:02:00Z" } },
+      { ...wire("Fuzz parser", research, "active", "working", "running", "Working"), butler_case: { id: "case-1", status: "needs_attention", session_id: "case-chat", updated_at: "2026-11-20T10:02:00Z" },
+        work_stage: { key: "simulation", label: "Simulation", item_id: "item-1", item_title: "Fuzz parser", item_status: "in_progress" } },
       wire("Paused triage", research, "idle", "idle", "paused", "Paused"),
     ],
   };
@@ -364,13 +365,19 @@ it("shows Butler's case stage on a goal card and offers its Butler check", async
   });
   mount();
   const board = screen.getByRole("region", { name: "Status board" });
-  const card = await within(board).findByRole("article", { name: "Fuzz parser: Working, Active, Butler needs you" });
+  const card = await within(board).findByRole("article", { name: "Fuzz parser: Working, Active, Work stage Simulation, in progress, Butler needs you" });
+  // The project Work stage leads; Butler's status follows as its own quieter line.
+  const workStage = card.querySelector(".chat-work-stage");
+  expect(workStage).toHaveAttribute("data-state", "active");
+  expect(workStage).toHaveTextContent("Simulation");
+  expect(workStage?.compareDocumentPosition(card.querySelector(".butler-stage")!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   const stage = within(card).getByText("Butler · Needs you").closest(".butler-stage");
   expect(stage).toHaveAttribute("data-stage", "needs-you");
   expect(stage).toHaveAttribute("title", expect.stringMatching(/needs your decision/));
   // A card without a case shows no Butler stage.
   const quiet = within(board).getByRole("article", { name: "Paused triage: Paused, Idle" });
   expect(quiet.querySelector(".butler-stage")).toBeNull();
+  expect(quiet.querySelector(".chat-work-stage")).toBeNull();
   // Opening the card's brief passes the case so the brief can open the Butler check.
   await userEvent.click(within(card).getByRole("button", { expanded: false }));
   expect(await screen.findByText("Brief Fuzz parser · Butler · Needs you · opens check")).toBeInTheDocument();
