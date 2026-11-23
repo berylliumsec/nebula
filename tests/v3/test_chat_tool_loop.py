@@ -916,6 +916,8 @@ async def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_pat
                 "content_characters": 0,
                 "finish_reason": "stop",
                 "provider_request_id": None,
+                "http_status": None,
+                "upstream_provider": None,
                 "reason": "tool_call",
                 "reasoning_characters": 0,
             }
@@ -974,6 +976,8 @@ async def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
                 "content_characters": len(control_frame),
                 "finish_reason": "stop",
                 "provider_request_id": None,
+                "http_status": None,
+                "upstream_provider": None,
                 "reason": "provider_control_frame",
                 "reasoning_characters": 0,
             }
