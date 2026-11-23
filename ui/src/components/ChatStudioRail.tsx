@@ -24,6 +24,8 @@ export function ChatStudioRail({
 }: ChatStudioRailProps) {
   const objective = goal?.objective ?? harnessGoal?.objective;
   const goalStatus = goal?.status ?? harnessGoal?.status;
+  // A held completion is a decision for the operator, not an ordinary block.
+  const awaitingReview = goal?.status === "blocked" && Boolean(goal.completionProposal);
   const counts = subagentSummary(subagents);
   const agents = [...subagents].sort((left, right) =>
     Number(activeStatuses.has(right.status)) - Number(activeStatuses.has(left.status))).slice(0, 3);
@@ -33,13 +35,13 @@ export function ChatStudioRail({
     <section className="chat-studio-goal" aria-label="Goal">
       <div className="chat-studio-goal-state">
         <span className="chat-studio-eyebrow">{goalStatus === "running" ? "Active goal" : "Goal"}</span>
-        {goalStatus && <small data-status={goalStatus}>{goalStatus.replaceAll("_", " ")}</small>}
+        {goalStatus && <small data-status={goalStatus}>{awaitingReview ? "awaiting review" : goalStatus.replaceAll("_", " ")}</small>}
       </div>
       <strong className="chat-studio-goal-summary" title={objective}>{objective || "No active goal"}</strong>
       {goal && harnessGoal && <small title={harnessGoal.objective}>Native harness goal: {harnessGoal.status.replaceAll("_", " ")}</small>}
       {canEditGoal && <button type="button" className="chat-studio-link" aria-expanded={goalEditorOpen}
         aria-controls="chat-studio-goal-editor" onClick={onToggleGoal}>
-        {goalEditorOpen ? "Hide full goal" : goal ? "View full goal and evidence gates" : "Create goal"} <ArrowUpRight size={14} aria-hidden="true" />
+        {goalEditorOpen ? "Hide full goal" : awaitingReview ? "Review completion" : goal ? "View full goal and evidence gates" : "Create goal"} <ArrowUpRight size={14} aria-hidden="true" />
       </button>}
       {!canEditGoal && goal && <details className="chat-studio-goal-details">
         <summary>View full goal</summary>

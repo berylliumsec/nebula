@@ -44,3 +44,26 @@ it("discloses the native goal while Core can create a separate goal", () => {
   expect(screen.getByText("Read the full native objective", { selector: "p" })).toBeVisible();
   expect(screen.getByText("Current step: Check the saved evidence")).toBeVisible();
 });
+
+it("names a held completion as awaiting review and opens its review", () => {
+  const onToggleGoal = vi.fn();
+  render(<ChatStudioRail
+    goal={{
+      id: "goal", engagementId: "project", sessionId: "chat",
+      objective: "Save the recon summary", completionCriteria: ["Saved"],
+      plan: [], currentStep: 1, status: "blocked", elapsedSeconds: 20,
+      blockedReason: "Awaiting closure review: the agent reports this goal complete.",
+      completionRequiresReview: true,
+      completionProposal: { summary: "Saved.", evidence: [{ kind: "agent_reported", detail: "Artifact saved" }] },
+      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+      childrenStarted: 0, linkedTurnIds: [], completionEvidence: [], skillSnapshots: [], revision: 3,
+    }}
+    subagents={[]} pendingRequests={0} sessionId="chat" goalEditorOpen={false} canEditGoal
+    onToggleGoal={onToggleGoal} onOpenSubagents={vi.fn()} onOpenSessionDetails={vi.fn()}
+  />);
+  const region = screen.getByRole("region", { name: "Goal" });
+  expect(region).toHaveTextContent("awaiting review");
+  expect(region).not.toHaveTextContent(/\bblocked\b/);
+  fireEvent.click(screen.getByRole("button", { name: "Review completion" }));
+  expect(onToggleGoal).toHaveBeenCalled();
+});
