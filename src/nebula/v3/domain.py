@@ -3795,6 +3795,26 @@ class ButlerGlobalState(Entity):
     last_project_id: str | None = Field(default=None, max_length=200)
 
 
+class ButlerFocusRuntime(Entity):
+    """The model Butler's home session uses for one focus project.
+
+    Butler's home sessions live in ``BUTLER_HOME_PROJECT``, which the focus
+    project's worker cannot read. This shared row (no project) tells that
+    worker which runtime Butler was given for the project, so its scheduled
+    and recovery checks can run there. See docs/design/butler-home-worker.md.
+    """
+
+    entity_kind: ClassVar[str] = "butler_focus_runtimes"
+    focus_project: str = Field(min_length=1, max_length=200)
+    home_session_id: str = Field(min_length=1, max_length=200)
+    backend: ChatBackend
+    profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    harness_service_tier: str | None = Field(default=None, max_length=100)
+    harness_cyber_access_program: str | None = Field(default=None, max_length=100)
+
+
 class ButlerIncident(Entity):
     """One project-scoped concern keyed by the underlying problem."""
 
@@ -5392,6 +5412,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerGlobalState,
+    ButlerFocusRuntime,
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,
