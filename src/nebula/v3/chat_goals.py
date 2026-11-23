@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .recovery_markers import OPERATOR_RECOVERY_PAUSE
+from .recovery_markers import GOAL_PROVIDER_RETRY, OPERATOR_RECOVERY_PAUSE
 from .async_utils import MaybeAsync, call_async
 
 from datetime import datetime
@@ -1057,11 +1057,14 @@ class ChatGoalService:
                     raise ConflictError(
                         "the operator paused this goal during project recovery"
                     )
-            if OPERATOR_RECOVERY_PAUSE in goal.metadata or hold_mark is not None:
+            # A resume starts a new failure streak: its next transient
+            # provider failure is retried automatically again.
+            cleared = {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER, GOAL_PROVIDER_RETRY}
+            if cleared & goal.metadata.keys():
                 changes["metadata"] = {
                     key: value
                     for key, value in goal.metadata.items()
-                    if key not in {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER}
+                    if key not in cleared
                 }
         elif body.action == "cancel":
             if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
