@@ -1,18 +1,18 @@
 {
-  "change_digest": "62812d29f3aceb575c3acb69699d908c1df635c4773f043513a399beb6963307",
-  "reviewed_by": "Claude: Butler conversation stage labels in the list, header and board",
-  "reason": "Butler case chats (recovery investigations) now show their ButlerRecoveryCase status as a stage (Investigating, Needs you, Uncertain, Resolved, Closed) and the project's Butler chat and threads show Active, Needs you or Idle. Core joins the case status at read time into chat-session list/get metadata (api_crud and the API worker's global project reads) and into Butler board items (butler_case); nothing new is stored. The UI nests case chats under the project's Butler chat (previously they were roots and could replace the Butler chat as the sidebar parent), labels list rows and both conversation headers, and labels board cards and briefs with 'Butler · <stage>' plus Open Butler check. Python selects the read-route, board, chat-hold/priority board and product-help tests (product help gets the new Butler stage labels passage). Frontend selects the stage mapping, sidebar grouping, board mapping/page, and API client tests. Playwright selects the butler-sidebar area (the new mocked stage test plus the existing Butler grouping test in desktop, compact, Chromium 320/390/430 and WebKit 320/390/430, and its real-Core grouping test) and conversation-order on desktop, Chromium 390 and WebKit 390 for conversationSidebar.ts. ButlerModePage.send.test.tsx waits for the reserved thread's log to re-render before counting the sent message; the synchronous count raced in CI.",
-  "exclusions": "butler-mode/assistant-real-* entries are not selected: on origin/main playwright.config.ts their projects' testMatch does not include tests/butler-mode.spec.ts, so they collect 0 tests; the board label was validated on a disposable LAN Core instead (PR body). test_product_search_finds_headless_core_and_paired_butler_cli is excluded: it already fails on origin/main f444c1b. No native code changed. No full-suite approval.",
+  "change_digest": "dd574c6b5d5f8d927cba2fa89c75f1733db637135e53c4a3a94d2ff8c26a50cb",
+  "reviewed_by": "Claude: a conversation's stage is its project Work stage",
+  "reason": "Operator correction to #1312: a conversation's stage is its project's Work stage. Core now joins, at read time, the stage of the chat's most recently updated open Work item assigned to it (WorkItem.assignee_session_id), labelled from Engagement.work_stages: metadata.work_stage on chat-session list/get (api_crud and the API worker's global reads) and work_stage on Butler board items. Nothing is stored. The UI shows it as the primary label in conversation rows, both conversation headers, board cards and briefs, with the Projects page stage-tile dot colours (green, blue in progress/review, red blocked). #1312's Butler status stays as a quieter 'Butler · <status>' line. Python selects the read-route and board tests (new newest-open-item, done, unlisted-stage and no-stage cases), chat-hold/priority board tests and product-help tests. Frontend selects work stage parsing/state, the Butler status mapping, sidebar grouping, board mapping/page, WorkPage (shared workStages module) and API client tests. Playwright selects butler-sidebar (the new Work stage journey plus the Butler status and grouping tests across desktop, compact, Chromium 320/390/430 and WebKit 320/390/430, and its real-Core grouping test) and conversation-order on desktop, Chromium 390 and WebKit 390.",
+  "exclusions": "butler-mode/assistant-real-* entries are not selected: on origin/main their projects' testMatch omits tests/butler-mode.spec.ts, so they collect 0 tests; the board was validated on a disposable LAN Core instead. test_product_search_finds_headless_core_and_paired_butler_cli already fails on origin/main and is excluded. No native code changed. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 42,
-    "frontend": 147,
+    "python": 45,
+    "frontend": 183,
     "native": 0,
-    "playwright": 23
+    "playwright": 31
   },
   "python": [
     "tests/v3/test_runtime_global_project_reads.py",
@@ -21,14 +21,17 @@
     "tests/v3/test_work_priority.py",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_check_stage_labels",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_a_chats_project_work_stage",
     "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads"
   ],
   "frontend": [
+    "ui/src/pages/workStages.test.ts",
     "ui/src/butlerStage.test.ts",
     "ui/src/pages/conversationSidebar.test.ts",
     "ui/src/api/butlerBoard.test.ts",
     "ui/src/pages/ButlerModePage.board.test.tsx",
     "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/pages/WorkPage.test.tsx",
     "ui/src/api/client.test.ts",
     "ui/src/api/client.chatSessionPage.test.ts"
   ],
