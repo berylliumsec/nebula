@@ -382,6 +382,14 @@ async def _project(
             # SQLite returns the stored UTC time without its zone.
             progressed = progressed.replace(tzinfo=timezone.utc)
         last_progress_at = progressed.isoformat() if progressed else None
+    elif turn and turn.backend == "provider" and execution not in TERMINAL:
+        # A provider turn writes its row at every step it saves (a tool
+        # result, a wait, a recovery), so its last write is its last durable
+        # progress. A parked wait that stopped moving shows its age here.
+        progressed = turn.updated_at
+        if progressed.tzinfo is None:
+            progressed = progressed.replace(tzinfo=timezone.utc)
+        last_progress_at = progressed.isoformat()
     return {
         "schema": "nebula.session-state/v1",
         "session_id": session.id,

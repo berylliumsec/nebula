@@ -16,3 +16,14 @@ GOAL_PROVIDER_RETRY = "provider_auto_retry"
 # ChatTurn.request_snapshot key: this failed turn's goal was retried
 # automatically; its saved outcome note says so.
 TURN_GOAL_AUTO_RETRY = "goal_auto_retry"
+# ChatGoal.metadata key: Core interrupted one of this goal's turns because its
+# callback wait made no progress, and resumed it once. A second stall before
+# a turn completes pauses the goal; a completed turn or an operator resume
+# clears the mark.
+GOAL_CALLBACK_STALL = "callback_stall_recovered"
+# ChatTurn.request_snapshot key: Core's stall watchdog interrupted this turn's
+# callback wait; a second stall of the same turn is left for the operator.
+TURN_CALLBACK_STALL = "callback_stall"
+# Recovery causes the stall watchdog records. Only the first resumes by itself.
+CALLBACK_STALL_CAUSE = "callback_stall"
+CALLBACK_STALL_REPEATED_CAUSE = "callback_stall_repeated"

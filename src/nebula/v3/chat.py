@@ -7,10 +7,16 @@ but can never supply or broaden capabilities.
 from __future__ import annotations
 
 from .stored_entities import decode_stored
+import os
+
 from .recovery_markers import (
+    CALLBACK_STALL_CAUSE,
+    CALLBACK_STALL_REPEATED_CAUSE,
+    GOAL_CALLBACK_STALL,
     GOAL_PROVIDER_RETRY,
     OPERATOR_RECOVERY_PAUSE,
     OPERATOR_RECOVERY_STOP,
+    TURN_CALLBACK_STALL,
     TURN_GOAL_AUTO_RETRY,
 )
 from .async_utils import MaybeAsync
@@ -150,6 +156,7 @@ from .deployment_protocol import BUTLER_HOME_PROJECT
 from .domain import BrowserSession
 
 from .domain import (
+    CHAT_SUBAGENT_TERMINAL_STATUSES,
     GOAL_CONTINUE_INSTRUCTION,
     AgentRun,
     Approval,
@@ -163,6 +170,7 @@ from .domain import (
     ChatSchedule,
     ChatSession,
     ChatSubagent,
+    ChatSubagentMessage,
     ChatSubagentStatus,
     ChatGoal,
     ChatGoalStatus,
@@ -396,6 +404,7 @@ from .chat_subagents import (
     SubagentService,
     SubagentWaitPending,
     contract_digest_segment as subagent_digest_segment,
+    core_resumes_interrupted_turn,
     is_subagent_session,
     recoverable_after_core_restart,
     subagent_child_components,
@@ -2424,6 +2433,29 @@ _REFUSED_BUDGET_CLASS = "refused"
 # An approved chat tool call whose turn ended is settled only after this long
 # without a change, so a late start report from its runtime still wins.
 _STALE_APPROVED_CALL_AGE = timedelta(minutes=10)
+# A provider turn parked on a callback wait (a background command, its
+# subagents, or a reply) that shows no progress for this long is interrupted
+# and resumed once by the recovery tick. Operators can tune it within bounds.
+CALLBACK_STALL_ENV = "NEBULA_CALLBACK_STALL_SECONDS"
+_CALLBACK_STALL_DEFAULT_SECONDS = 20 * 60
+_CALLBACK_STALL_MIN_SECONDS = 60
+_CALLBACK_STALL_MAX_SECONDS = 24 * 60 * 60
+
+
+def callback_stall_seconds() -> int:
+    """The no-progress time after which a callback wait counts as stalled."""
+
+    raw = os.environ.get(CALLBACK_STALL_ENV, "").strip()
+    if not raw:
+        return _CALLBACK_STALL_DEFAULT_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        # diagnostic-expected: a malformed setting falls back to its documented default.
+        return _CALLBACK_STALL_DEFAULT_SECONDS
+    return max(_CALLBACK_STALL_MIN_SECONDS, min(_CALLBACK_STALL_MAX_SECONDS, value))
+
+
 # What Core asks when a running goal continues without an operator message.
 _GOAL_CONTINUE_INSTRUCTION = GOAL_CONTINUE_INSTRUCTION
 
@@ -3666,6 +3698,339 @@ class ChatService:
             found.append((turn, pending_entry, execution))
         return found
 
+    async def reconcile_stalled_callback_waits(
+        self, now: datetime | None = None
+    ) -> list[str]:
+        """Recover provider turns parked on a callback wait that stopped moving.
+
+        Only a process wait whose producer settled has its own reconciler;
+        a subagent or reply wait wakes only on an event, and a command whose
+        supervision was lost can stay running in its record forever. A wait
+        with no progress for ``callback_stall_seconds`` is recovered here:
+
+        * a subagent or reply wait that is already satisfied but was never
+          woken resumes normally;
+        * a subagent or reply wait that stalled ends with the subagents'
+          current state and the turn continues;
+        * a command wait is interrupted as an orphaned turn is, its effect
+          recorded as outcome unknown, and restart recovery resumes it once.
+
+        A second stall of the same turn, or of its goal before a turn
+        completes, interrupts the turn for the operator and pauses the goal.
+
+        A held project is skipped; its release wakes the wait. Returns the
+        ids of the turns acted on.
+        """
+
+        now = now or utc_now()
+        threshold = timedelta(seconds=callback_stall_seconds())
+        acted: list[str] = []
+        resumable: list[ChatTurn] = []
+        async for turn in self.store.iter_readable_entities(
+            ChatTurn, {"status": ChatTurnStatus.WAITING_CALLBACK.value}
+        ):
+            if (
+                turn.backend != ChatBackend.PROVIDER
+                or turn.execution_claim_id is not None
+                or self.has_active_provider_turn(turn.id)
+                # A wait's progress is never older than the turn's own last
+                # write, so a recent one needs no further reads.
+                or now - turn.updated_at < threshold
+            ):
+                continue
+            try:
+                if await is_held(self.store, turn.engagement_id, turn.session_id):
+                    continue
+                history = await self._turn_history(turn)
+                entry = history[-1] if history else {}
+                if entry.get("status") != "waiting_callback":
+                    continue
+                wait = entry.get("subagent_wait")
+                if isinstance(wait, dict) and await self.subagents.wait_ready(wait):
+                    # The wake that should have resumed it was lost.
+                    await self.subagents._resume_waiting_turn(turn)
+                    acted.append(turn.id)
+                    continue
+                progressed = await self._callback_wait_progress_at(turn, entry, now)
+                if progressed is None or now - progressed < threshold:
+                    continue
+                recovered = await self._recover_stalled_callback(
+                    turn, entry, progressed, threshold
+                )
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.callback.stall_check_failed",
+                    "A stalled callback wait could not be recovered; the next pass retries.",
+                    exc,
+                    stage="callback-stall",
+                )
+                continue
+            if recovered is None:
+                continue
+            acted.append(turn.id)
+            if core_resumes_interrupted_turn(recovered):
+                resumable.append(recovered)
+        if resumable:
+            (await self.resume_turns_stopped_by_core(resumable))
+        return acted
+
+    async def _callback_wait_progress_at(
+        self, turn: ChatTurn, entry: Mapping[str, Any], now: datetime
+    ) -> datetime | None:
+        """When a parked wait last showed progress; None while it is live.
+
+        A wait is live while something that will end it is still working:
+        a command within its own deadline, a waited-on subagent that is
+        running, queued, waiting for the operator or itself parked on a
+        callback (which this watchdog bounds in turn), or a supervisor that
+        is working while its subagent waits for a reply.
+        """
+
+        from .automation_runtime import AutomationRuntimeManager
+
+        progressed = turn.updated_at
+        wait = entry.get("subagent_wait")
+        if isinstance(wait, dict):
+            reply_to = wait.get("reply_to")
+            if isinstance(reply_to, str):
+                try:
+                    question = await self.store.get(ChatSubagentMessage, reply_to)
+                except NotFoundError:  # diagnostic-expected: a deleted question makes the wait ready; the wake path handles it
+                    return None
+                parent = await self.pending_turn(question.parent_session_id)
+                if parent is not None and (
+                    self.has_active_provider_turn(parent.id)
+                    or parent.execution_claim_id is not None
+                ):
+                    # The supervisor is working and can still answer.
+                    return None
+                return max(progressed, question.updated_at)
+            for subagent_id in [str(item) for item in wait.get("ids") or []]:
+                try:
+                    record = await self.store.get(ChatSubagent, subagent_id)
+                except (
+                    NotFoundError
+                ):  # diagnostic-expected: a removed child no longer moves the wait
+                    continue
+                progressed = max(progressed, record.updated_at)
+                if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
+                    continue
+                child = await self.subagents._child_turn(record)
+                if child is None:
+                    continue
+                if self._turn_working(child):
+                    return None
+                progressed = max(progressed, child.updated_at)
+            return progressed
+        process_id = entry.get("process_id")
+        if not isinstance(process_id, str) or not process_id:
+            return None
+        try:
+            execution = await self.store.get(
+                CommandExecution, AutomationRuntimeManager._execution_id(process_id)
+            )
+        except NotFoundError:  # diagnostic-expected: reconcile_waiting_callbacks interrupts a wait with no process record
+            return None
+        if execution.metadata.get(
+            "results_received"
+        ) or self._callback_producer_terminal(execution):
+            # reconcile_waiting_callbacks resumes it.
+            return None
+        timeout_ms = execution.metadata.get("timeout_ms")
+        if (
+            not isinstance(timeout_ms, int)
+            or isinstance(timeout_ms, bool)
+            or timeout_ms <= 0
+        ):
+            # Without a recorded deadline a long command cannot be told from
+            # a lost one.
+            return None
+        deadline = execution.started_at + timedelta(milliseconds=timeout_ms)
+        if now < deadline:
+            return None
+        # Past its own deadline the command should have been stopped and
+        # settled: its supervision was lost.
+        return max(progressed, deadline, execution.updated_at)
+
+    def _turn_working(self, turn: ChatTurn) -> bool:
+        """Whether a waited-on child turn is still being moved by something."""
+
+        if self.has_active_provider_turn(turn.id) or turn.execution_claim_id:
+            return True
+        if turn.status in {
+            ChatTurnStatus.QUEUED,
+            ChatTurnStatus.WAITING_APPROVAL,
+            # The child's own wait is bounded by this watchdog.
+            ChatTurnStatus.WAITING_CALLBACK,
+        }:
+            return True
+        return turn.status == ChatTurnStatus.INTERRUPTED and (
+            core_resumes_interrupted_turn(turn)
+        )
+
+    async def _recover_stalled_callback(
+        self,
+        turn: ChatTurn,
+        entry: Mapping[str, Any],
+        progressed: datetime,
+        threshold: timedelta,
+    ) -> ChatTurn | None:
+        """Recover one stalled wait; None if it moved in the meantime.
+
+        A subagent or reply wait has no effect of its own: its first stall
+        ends the wait with the subagents' current state, as a goal time
+        reminder does, and the turn resumes. A command wait is interrupted
+        like an orphaned turn, its effect recorded as outcome unknown, for
+        restart recovery to resume once. A second stall interrupts the turn
+        for the operator and pauses its goal.
+        """
+
+        latest = await self.store.get(ChatTurn, turn.id)
+        if (
+            latest.revision != turn.revision
+            or latest.status != ChatTurnStatus.WAITING_CALLBACK
+            or latest.execution_claim_id is not None
+            or self.has_active_provider_turn(latest.id)
+        ):
+            return None
+        goal = (
+            (await self.store.get(ChatGoal, latest.goal_id)) if latest.goal_id else None
+        )
+        repeated = TURN_CALLBACK_STALL in latest.request_snapshot or (
+            goal is not None and GOAL_CALLBACK_STALL in goal.metadata
+        )
+        wait = entry.get("subagent_wait")
+        kind = (
+            ("reply" if wait.get("reply_to") else "subagent")
+            if isinstance(wait, dict)
+            else "background command"
+        )
+        minutes = max(1, int(threshold.total_seconds() // 60))
+        stalled = (
+            f"Core ended this response's {kind} wait after it made no progress "
+            f"for {minutes} minute{'' if minutes == 1 else 's'}."
+        )
+        if repeated:
+            detail = (
+                f"{stalled} It stalled again after Core resumed it once, so it "
+                "will not resume by itself. Review the interrupted response; any "
+                "effect it started is recorded as outcome unknown."
+            )
+        elif isinstance(wait, dict):
+            detail = (
+                f"{stalled} The response continues with the subagents' current state."
+            )
+        else:
+            detail = (
+                f"{stalled} Its effect is recorded as outcome unknown; Core "
+                "resumes the response once without replaying it."
+            )
+        stall = {
+            "wait_kind": kind,
+            "step": entry.get("step"),
+            "tool_call_id": entry.get("tool_call_id"),
+            "last_progress_at": progressed.isoformat(),
+            "threshold_seconds": int(threshold.total_seconds()),
+            "stalled_at": utc_now().isoformat(),
+            "repeated": repeated,
+            "note": detail,
+        }
+        if isinstance(wait, dict) and not repeated:
+            try:
+                recovered = await self.store.update(
+                    ChatTurn,
+                    latest.id,
+                    {
+                        "request_snapshot": {
+                            **latest.request_snapshot,
+                            TURN_CALLBACK_STALL: stall,
+                        }
+                    },
+                    expected_revision=latest.revision,
+                )
+            except ConflictError:  # diagnostic-expected: the wait moved while it was marked; the next pass rereads it
+                return None
+        else:
+            calls = await self.store.find_entities(
+                ToolCall, {"chat_turn_id": latest.id}
+            )
+            hooks = await self.store.find_entities(
+                NativeHookExecution, {"chat_turn_id": latest.id}
+            )
+            try:
+                interrupted = await self._interrupt_orphaned_turn(
+                    latest,
+                    calls,
+                    hooks,
+                    cause="A stalled wait",
+                    recovery_cause=(
+                        CALLBACK_STALL_REPEATED_CAUSE
+                        if repeated
+                        else CALLBACK_STALL_CAUSE
+                    ),
+                    detail=detail,
+                )
+            except ConflictError:  # diagnostic-expected: the wait moved while it was interrupted; the next pass rereads it
+                return None
+            recovered = await self.store.update(
+                ChatTurn,
+                interrupted.id,
+                {
+                    "request_snapshot": {
+                        **interrupted.request_snapshot,
+                        TURN_CALLBACK_STALL: stall,
+                    }
+                },
+                expected_revision=interrupted.revision,
+            )
+        if goal is not None and not repeated:
+
+            def mark(current: ChatGoal) -> dict[str, Any] | None:
+                if GOAL_CALLBACK_STALL in current.metadata:
+                    return None
+                return {
+                    "metadata": {
+                        **current.metadata,
+                        GOAL_CALLBACK_STALL: {
+                            "turn_id": recovered.id,
+                            "stalled_at": stall["stalled_at"],
+                        },
+                    }
+                }
+
+            await revise_latest(self.store, ChatGoal, goal.id, mark)
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.callback.stalled_wait_recovered",
+            detail,
+            outcome="paused" if repeated else "retrying",
+            stage="callback-stall",
+            retryable=not repeated,
+            metadata={
+                "turn_id": recovered.id,
+                "goal_id": recovered.goal_id,
+                "wait_kind": kind,
+            },
+        )
+        if isinstance(wait, dict) and not repeated:
+            await self.subagents._resume_waiting_turn(recovered)
+        return recovered
+
+    @staticmethod
+    def _callback_stall_wake_due(turn: ChatTurn, entry: Mapping[str, Any]) -> bool:
+        """Whether the stall watchdog ended this parked subagent or reply wait."""
+
+        stall = turn.request_snapshot.get(TURN_CALLBACK_STALL)
+        return (
+            isinstance(stall, dict)
+            and stall.get("repeated") is False
+            and entry.get("status") == "waiting_callback"
+            and stall.get("step") == entry.get("step")
+            and stall.get("tool_call_id") == entry.get("tool_call_id")
+        )
+
     async def _reconcile_settled_callback_tool_calls(self) -> None:
         """Close callback tool rows even after their owning turn has settled.
 
@@ -4143,9 +4508,15 @@ class ChatService:
                     "tool_call_id": call.id,
                     "tool_name": call.tool_name,
                     "detail": (
-                        "Core restarted after this invocation may have started, but no "
-                        "trustworthy terminal receipt was recorded. Do not repeat the "
-                        "same invocation. Inspect current state before any follow-up."
+                        (
+                            "Core stopped waiting for this invocation's result after "
+                            "the wait made no progress"
+                            if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                            else "Core restarted after this invocation may have started"
+                        )
+                        + ", but no trustworthy terminal receipt was recorded. Do not "
+                        "repeat the same invocation. Inspect current state before any "
+                        "follow-up."
                     ),
                 }
                 entry = {
@@ -4154,7 +4525,11 @@ class ChatService:
                     "status": "failed",
                     "provider_result": serialize_model_result(observation),
                     "trusted_result": False,
-                    "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+                    "result_summary": (
+                        "Outcome unknown after a stalled wait; identical replay is blocked."
+                        if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                        else "Outcome unknown after Core restart; identical replay is blocked."
+                    ),
                     "recovered_from_restart_unknown": True,
                 }
                 history = [
@@ -4263,8 +4638,13 @@ class ChatService:
             # instruction on resume.
             history.sort(key=lambda item: int(item.get("step", 0)))
             automatic_note = (
-                "Core recovered this turn automatically after restart. Treat tool "
-                f"invocations {unknown_tools or 'none'} and hook executions "
+                (
+                    "Core interrupted this turn's wait after it made no progress "
+                    "and resumed the turn once. Treat tool "
+                    if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                    else "Core recovered this turn automatically after restart. Treat tool "
+                )
+                + f"invocations {unknown_tools or 'none'} and hook executions "
                 f"{unknown_hooks or 'none'} as outcome unknown. Do not repeat an "
                 "identical effect; inspect current state before follow-up work."
                 + (
@@ -4390,12 +4770,16 @@ class ChatService:
         *,
         cause: str,
         transaction: StoreTransaction | None = None,
+        recovery_cause: str | None = None,
+        detail: str | None = None,
     ) -> ChatTurn:
         """Park a turn Core can no longer drive so the operator can resume it.
 
         ``cause`` names what stopped the work ("Core restarted", "Core
         stopped"); a graceful stop and a crash leave the same recoverable
         state, with unknown tool and hook outcomes flagged for reconciliation.
+        ``recovery_cause`` and ``detail`` replace the recorded cause and the
+        operator-facing reason (the callback stall watchdog's own).
         """
 
         write = transaction.update if transaction is not None else self.store.update
@@ -4465,7 +4849,7 @@ class ChatService:
             and goal is not None
             and goal.status != ChatGoalStatus.RUNNING
         )
-        detail = (
+        detail = detail or (
             f"{cause} before this response completed. The existing goal hold "
             "is preserved; review the interrupted response before resuming."
             if preserve_hold
@@ -4486,7 +4870,8 @@ class ChatService:
             **turn.request_snapshot,
             "recovery": {
                 "required": True,
-                "cause": (
+                "cause": recovery_cause
+                or (
                     "runtime_loss"
                     if preserve_hold
                     else "core_shutdown"
@@ -5383,6 +5768,16 @@ class ChatService:
                 "A callback reconciliation pass failed; the next pass retries.",
                 exc,
                 stage="callback-recovery",
+            )
+        try:
+            await self.reconcile_stalled_callback_waits()
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.callback_stall_tick_failed",
+                "A stalled callback wait pass failed; the next pass retries.",
+                exc,
+                stage="callback-stall",
             )
         try:
             timed_waits = await self._goal_time_wait_candidates()
@@ -14623,7 +15018,12 @@ class ChatService:
         wait: dict[str, Any],
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         time_reminder_due = await self._goal_time_wait_due(turn, utc_now())
-        if not (await self.subagents.wait_ready(wait)) and not time_reminder_due:
+        stall_due = self._callback_stall_wake_due(turn, entry)
+        if (
+            not (await self.subagents.wait_ready(wait))
+            and not time_reminder_due
+            and not stall_due
+        ):
             yield (
                 "callback_required",
                 {
@@ -14641,6 +15041,13 @@ class ChatService:
         if time_reminder_due:
             output["goal_time_reminder"] = True
             summary += "; goal time reminder due"
+        if stall_due:
+            # Core ended the wait; what the subagents have reported so far
+            # is the result, and the rest keep running.
+            output["wait_ended_by_core"] = turn.request_snapshot[TURN_CALLBACK_STALL][
+                "note"
+            ]
+            summary += "; wait ended after no progress"
         entry.update(
             {
                 "status": "complete",
@@ -16322,14 +16729,17 @@ class ChatService:
             if turn.goal_id is None or turn.status != ChatTurnStatus.COMPLETE:
                 return
 
+            # A completed turn also ends a callback-stall streak.
+            streaks = {GOAL_PROVIDER_RETRY, GOAL_CALLBACK_STALL}
+
             def clear(goal: ChatGoal) -> dict[str, Any] | None:
-                if GOAL_PROVIDER_RETRY not in goal.metadata:
+                if not streaks & goal.metadata.keys():
                     return None
                 return {
                     "metadata": {
                         key: value
                         for key, value in goal.metadata.items()
-                        if key != GOAL_PROVIDER_RETRY
+                        if key not in streaks
                     }
                 }
 
