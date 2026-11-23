@@ -1175,6 +1175,8 @@
         "ui/src/components/ProviderGoalPanel.tsx::getChatGoal",
         "ui/src/components/ProviderGoalPanel.tsx::updateChatGoal",
         "ui/src/components/ProviderGoalPanel.tsx::writeChatGoal",
+        "ui/src/components/ProviderGoalPanel.tsx::addChatGoalNote",
+        "ui/src/components/ProviderGoalPanel.tsx::removeChatGoalNote",
         "ui/src/components/ProviderGoalChildren.tsx::listGoalChildren",
         "ui/src/components/ProviderGoalChildren.tsx::startGoalChild",
         "ui/src/api/butlerBoard.ts::getChatGoal",
@@ -1187,7 +1189,7 @@
       "butler": {
         "discover": "nebula.work.chats and nebula.work.goals",
         "read": "nebula.work.goal",
-        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.propose_goal_chat, nebula.work.update_goal, nebula.work.goal_action and nebula.work.create_goal_child"
+        "change": "nebula.work.create_goal, nebula.work.create_goal_conversation, nebula.work.propose_goal_chat, nebula.work.update_goal, nebula.work.add_goal_note, nebula.work.goal_action and nebula.work.create_goal_child"
       },
       "authority": "Selected project, current goal revision, existing Core goal transition guards and child lineage; creating a draft does not start a turn",
       "observed_result_test": "tests/v3/test_control_assistant_work.py::test_goal_controls_read_core_state_and_reject_stale_or_foreign_targets",
@@ -4796,12 +4798,20 @@
       "count": 1
     },
     {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::addChatGoalNote",
+      "count": 1
+    },
+    {
       "key": "ui/src/components/ProviderGoalPanel.tsx::createChatGoal",
       "count": 1
     },
     {
       "key": "ui/src/components/ProviderGoalPanel.tsx::getChatGoal",
       "count": 3
+    },
+    {
+      "key": "ui/src/components/ProviderGoalPanel.tsx::removeChatGoalNote",
+      "count": 1
     },
     {
       "key": "ui/src/components/ProviderGoalPanel.tsx::replaceChatGoalSkills",
