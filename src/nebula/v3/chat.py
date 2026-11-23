@@ -33,6 +33,7 @@ from .diagnostics import (
     new_error_id,
     record_caught_exception,
     record_diagnostic,
+    scrub_host_paths,
 )
 
 import asyncio
@@ -2472,6 +2473,31 @@ def callback_stall_seconds() -> int:
 
 # What Core asks when a running goal continues without an operator message.
 _GOAL_CONTINUE_INSTRUCTION = GOAL_CONTINUE_INSTRUCTION
+
+_GOAL_START_CAUSE_LIMIT = 400
+
+
+def _goal_start_failure_reason(
+    headline: str, exc: BaseException, error_id: str | None
+) -> str:
+    """Pause text that names why goal work could not start.
+
+    A goal that fails before its turn exists has no turn error to review, so
+    the pause reason carries the cause: Core's own message for its errors
+    (already written for the operator) and only the type name otherwise.
+    """
+
+    detail = ""
+    if type(exc).__module__.startswith("nebula."):
+        detail = " ".join(scrub_host_paths(str(exc)).split())
+    if not detail:
+        detail = f"an unexpected {type(exc).__name__}"
+    if len(detail) > _GOAL_START_CAUSE_LIMIT:
+        detail = detail[: _GOAL_START_CAUSE_LIMIT - 1] + "…"
+    reason = f"{headline}: {detail.rstrip('.')}."
+    if error_id:
+        reason += f" Error ID {error_id}."
+    return reason + " Resolve it, then resume the goal to retry."
 
 
 _GOAL_TIME_FIVE_MINUTE_REMINDER = (
@@ -6594,12 +6620,16 @@ class ChatService:
             # reason; using up a budget ends the run, it is not a failure.
             return None
         except Exception as exc:
-            record_caught_exception(
+            # The goal stops here, so the cause is an operation failure even
+            # when it is a validation-class refusal (a context too small for
+            # the goal's tools): the default level must keep it.
+            error_id = record_caught_exception(
                 "chat",
                 "chat.goal.auto_continue_failed",
                 "A running conversation goal could not start its next turn.",
                 exc,
                 stage="goal-auto-continue",
+                operation_failed=True,
             )
             # Budget checks in prepare_async already pause with a precise reason.
             # Other failures must not leave an idle goal claiming to be running.
@@ -6609,8 +6639,11 @@ class ChatService:
                     (
                         await self._pause_running_session_goal(
                             turn.session_id,
-                            "Automatic goal continuation could not start. Review the latest "
-                            "response and error, then resume the goal to retry.",
+                            _goal_start_failure_reason(
+                                "Automatic goal continuation could not start",
+                                exc,
+                                error_id,
+                            ),
                         )
                     )
             except (
@@ -6683,12 +6716,15 @@ class ChatService:
             # reason; a budget spent before dispatch is not a failure.
             return None
         except Exception as exc:
-            record_caught_exception(
+            # The goal pauses before any turn exists, so this record and the
+            # pause reason are the operator's only view of the cause.
+            error_id = record_caught_exception(
                 "chat",
                 "chat.goal.dispatch_failed",
                 "A started or resumed conversation goal could not dispatch work.",
                 exc,
                 stage="goal-dispatch",
+                operation_failed=True,
             )
             try:
                 current = await goals.get(session_id)
@@ -6696,8 +6732,9 @@ class ChatService:
                     (
                         await self._pause_running_session_goal(
                             session_id,
-                            "Goal work could not start. Review the provider or runtime "
-                            "error, then resume the goal to retry.",
+                            _goal_start_failure_reason(
+                                "Goal work could not start", exc, error_id
+                            ),
                         )
                     )
             except NotFoundError:  # diagnostic-expected: goal removed concurrently
