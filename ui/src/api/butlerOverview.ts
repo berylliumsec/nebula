@@ -149,6 +149,8 @@ export interface ButlerOverview {
     path?: string;
     detail?: string;
     hostProjectId?: string;
+    /** Why this project cannot host the scheduled run, and how to fix it. */
+    hostHint?: string;
     checkIntervalMinutes?: number;
     lastCheckAt?: string;
     nextCheckAt?: string;
@@ -191,6 +193,7 @@ interface WireButlerOverview {
     path?: string | null;
     detail?: string | null;
     host_project_id?: string | null;
+    host_hint?: string | null;
     check_interval_minutes?: number;
     last_check_at?: string | null;
     next_check_at?: string | null;
@@ -350,6 +353,7 @@ export async function getButlerOverview(api: ApiClient, projectId: string, signa
       path: wire.global_instructions.path ?? undefined,
       detail: wire.global_instructions.detail ?? undefined,
       hostProjectId: wire.global_instructions.host_project_id ?? undefined,
+      hostHint: wire.global_instructions.host_hint ?? undefined,
       checkIntervalMinutes: wire.global_instructions.check_interval_minutes ?? undefined,
       lastCheckAt: wire.global_instructions.last_check_at ?? undefined,
       nextCheckAt: wire.global_instructions.next_check_at ?? undefined,

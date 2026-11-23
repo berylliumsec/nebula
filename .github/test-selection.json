@@ -1,32 +1,35 @@
 {
-  "change_digest": "a5ec4d02d5fb222fad27b319a9b08808adb4d37ed53b88f259b1d10f43540b19",
-  "reviewed_by": "Claude: goal provider auto-retry, focused backend selection",
-  "reason": "A running provider goal whose turn fails with a transient provider error (an overload or retryable status after the provider's own retries, a reply cut mid-stream, a torn or refused connection) now stays running once: Core marks the goal, notes the automatic retry in the failed turn's outcome note, and the idle-goal reconciler dispatches the continuation on a later pass. A second consecutive failure, non-transient errors, an operator pause and project holds pause or defer as before; a completed turn or an operator resume clears the mark. Providers type a cut stream (missing finish, torn transport after output) as ProviderStreamInterruptedError with error kind 'interrupted', keeping retryable=False and the same message. Selected: the new regression file plus the provider stream, robustness and leftover suites, goal lifecycle, turn outcome history, restart recovery, goal revision races, orphan recovery and hook turn-end suites that exercise the touched settle, reconcile and outcome paths.",
-  "exclusions": "No UI, frontend or native change: the note reuses the existing turn-outcome message rendering, so frontend, native and Playwright layers are empty. Harness goal turns settle through a different path and are unchanged. No new operator setting, so the settings assistant catalog is unchanged. No full-suite approval.",
+  "change_digest": "284e1c2b72403672e6e28a0329b1259a42a1ed4cc9077ae207a608bbe5565676",
+  "reviewed_by": "Claude: Butler home host, focused Butler recovery/home/overview selection",
+  "reason": "Butler's background checks now reach every Act project. A worker reads only its own project, so a Butler chat stored elsewhere (Butler's home, or another project) was invisible and every recovery case in an Act project without its own Butler chat failed in _butler_session ('(ValueError)'). A shared ButlerFocusRuntime row (no project) now carries a Butler chat's runtime: a home session publishes it for its focus project, and a project's own Butler chat publishes the Nebula-wide default when reserved and again from the anchor on each Nebula-wide check (backfill). _butler_session makes the project's own Butler chat on the focus runtime or else the default, refusing a cloud provider for a local-only project. _global_anchor counts only a project's own chat or focus runtime, so the host does not move. global_status reads 'ready' from a non-host project when the shared clock shows a recent check, else returns host_blocker and host_hint, which Butler Oversight shows. A failed investigation's outcome now keeps the exception type and message and records a diagnostic instead of '(ValueError)'. Selected: the home-host regression file (scoped workers on SQLite and PostgreSQL, including the live shape of one Act host with Butler chats and another Act project without), the product-knowledge regression, the Butler instructions, capacity-retry (investigation failure outcomes), home session, home scope, session reservation and home harness suites, the generic CRUD exposure classification, the runtime bundle compatibility check for the entity-field digest, and the Oversight component and catalog tests.",
+  "exclusions": "tests/v3/test_butler_recovery.py (test_act_switches_worker_to_provider_and_queues_only_the_parent) and tests/v3/test_tolerant_entity_readers.py (test_a_new_entity_field_needs_a_reviewed_addition_flag) each have one test that fails identically on pristine main 1921d89, so they are left out rather than blocking on unrelated failures; their other tests were run locally and pass. test_execution_locks.py's two-anchor PostgreSQL test passed locally but the file carries a known red PostgreSQL handoff test. No native change. No new operator setting: the settings catalog gains search keywords for the existing BUTLER.md entry. No full-suite approval. Playwright is empty: the only catalogued journey for this path, area butler-global (real-core.spec.ts 'assistant upgrade Nebula-wide Butler checks idle projects'), was run locally on assistant-real-desktop, -chromium-390 and -webkit-390 and passed its Core overview polling, then timed out on every profile clicking a 'Work' button inside a Butler dialog that the current NebulaControlAssistant no longer renders (Butler mode replaced it before this change); that stale step is unrelated to this diff. The operator journey was instead validated on a disposable LAN Core.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 438,
-    "frontend": 0,
+    "python": 110,
+    "frontend": 29,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_goal_provider_auto_retry.py",
-    "tests/v3/test_providers.py",
-    "tests/v3/test_openai_compatible_robustness.py",
-    "tests/v3/test_provider_leftovers.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_goal_revision_races.py",
-    "tests/v3/test_runtime_orphan_recovery.py",
-    "tests/v3/test_native_hook_turn_ends.py"
+    "tests/v3/test_butler_home_host.py",
+    "tests/v3/test_butler_host_knowledge.py",
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_butler_home_sessions.py",
+    "tests/v3/test_butler_home_scope.py",
+    "tests/v3/test_butler_sessions.py",
+    "tests/v3/test_butler_home_harness.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_butler_capacity_retry.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ButlerOversight.test.tsx",
+    "ui/src/settingsCatalog.butlerHost.test.ts"
+  ],
   "native": [],
   "playwright": [],
   "checks": []

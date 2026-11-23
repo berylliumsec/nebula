@@ -10,9 +10,11 @@ from sqlalchemy import func, select, text
 from .stored_entities import decode_stored
 from .advisory_keys import per_id_key
 from .chat import ChatConfigurationError
+from .chat_assistant_config import chat_assistant_config
 from .database import EntityRow
 from .deployment_protocol import BUTLER_HOME_PROJECT, RESERVED_PROJECT_IDS
 from .domain import (
+    ButlerFocusRuntime,
     ChatBackend,
     ChatSession,
     Engagement,
@@ -25,7 +27,7 @@ from .domain import (
 from .execution_scope import observer_reads
 from .harnesses import HarnessRuntimeService
 from .mcp import resolve_mcp_profiles
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 
 
 class ButlerFocus(NebulaModel):
@@ -87,7 +89,94 @@ class ButlerSessionReservation(NebulaModel):
         return self
 
 
+# ``ButlerFocusRuntime.focus_project`` of the Nebula-wide default runtime.
+DEFAULT_RUNTIME_FOCUS = "*"
+
+
+def focus_runtime_id(project_id: str) -> str:
+    return f"butler-focus-runtime:{project_id}"
+
+
+async def record_focus_runtime(
+    store: NebulaStore, session: ChatSession, focus: str
+) -> None:
+    """Share a Butler chat's runtime with workers that cannot read it.
+
+    ``focus`` is the project a home session is about, or
+    ``DEFAULT_RUNTIME_FOCUS`` for a project's own Butler chat, which becomes
+    the runtime every Act project without a Butler chat uses for its
+    scheduled and recovery checks. Without it those checks stop before they
+    start, because a worker reads only its own project's chats.
+    """
+
+    try:
+        config = await chat_assistant_config(store, session, butler_default=False)
+    except NotFoundError:
+        # diagnostic-expected: a session whose harness binding is gone has no
+        # runtime to share; the project's status then names the missing Butler.
+        return
+    profile_id, model = config["profile_id"], config["model"]
+    if not isinstance(profile_id, str) or not isinstance(model, str):
+        return
+    harness = config["backend"] == ChatBackend.HARNESS.value
+    values = {
+        "focus_project": focus,
+        "source_project": session.engagement_id,
+        "session_id": session.id,
+        "backend": ChatBackend(config["backend"]),
+        "profile_id": profile_id,
+        "model": model,
+        "harness_reasoning_effort": config["harness_reasoning_effort"]
+        if harness
+        else None,
+        "harness_service_tier": config["harness_service_tier"] if harness else None,
+        "harness_cyber_access_program": config["harness_cyber_access_program"]
+        if harness
+        else None,
+    }
+    entity_id = focus_runtime_id(focus)
+    async with store.transaction(immediate=True) as transaction:
+        (await transaction.lock_shared_rows())
+        row = await transaction.session.get(EntityRow, entity_id)
+        current = decode_stored(ButlerFocusRuntime, row.payload) if row else None
+        if current is None:
+            (
+                await transaction.add(
+                    ButlerFocusRuntime.model_validate({"id": entity_id, **values})
+                )
+            )
+        elif any(getattr(current, key) != value for key, value in values.items()):
+            (
+                await transaction.update(
+                    ButlerFocusRuntime,
+                    entity_id,
+                    values,
+                    expected_revision=current.revision,
+                )
+            )
+
+
 async def reserve_butler_session(
+    store: NebulaStore,
+    harness_runtime: HarnessRuntimeService,
+    request: ButlerSessionReservation,
+) -> ChatSession:
+    """Return the active project Butler session, or commit exactly one new one.
+
+    A home session focused on a project shares its runtime with that
+    project's worker, and a project's own Butler chat shares its runtime as
+    the Nebula-wide default (``record_focus_runtime``).
+    """
+
+    session = await _reserve_butler_session(store, harness_runtime, request)
+    if request.focus is not None:
+        (await record_focus_runtime(store, session, request.focus.project))
+    elif request.engagement_id != BUTLER_HOME_PROJECT:
+        (await record_focus_runtime(store, session, DEFAULT_RUNTIME_FOCUS))
+    return session
+
+
+async def _reserve_butler_session(
     store: NebulaStore,
     harness_runtime: HarnessRuntimeService,
     request: ButlerSessionReservation,

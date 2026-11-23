@@ -754,6 +754,7 @@ CUSTOM_RESOURCES = {
     "butler_goal_watches",
     "butler_project_states",
     "butler_global_states",
+    "butler_focus_runtimes",
     "butler_voice_settings",
     "butler_incidents",
     "butler_decisions",

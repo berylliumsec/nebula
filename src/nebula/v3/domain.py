@@ -3795,6 +3795,29 @@ class ButlerGlobalState(Entity):
     last_project_id: str | None = Field(default=None, max_length=200)
 
 
+class ButlerFocusRuntime(Entity):
+    """The model a Butler chat uses, shared so other projects can run Butler.
+
+    A project's worker reads only its own project, so it cannot see a Butler
+    chat stored elsewhere: in ``BUTLER_HOME_PROJECT`` or in another project.
+    This shared row (no project) carries that chat's runtime. ``focus_project``
+    is the project it is for, or ``"*"`` for the Nebula-wide default that any
+    Act project without its own Butler chat uses for its scheduled and
+    recovery checks. See docs/design/butler-home-worker.md.
+    """
+
+    entity_kind: ClassVar[str] = "butler_focus_runtimes"
+    focus_project: str = Field(min_length=1, max_length=200)
+    source_project: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    backend: ChatBackend
+    profile_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    harness_service_tier: str | None = Field(default=None, max_length=100)
+    harness_cyber_access_program: str | None = Field(default=None, max_length=100)
+
+
 class ButlerIncident(Entity):
     """One project-scoped concern keyed by the underlying problem."""
 
@@ -5392,6 +5415,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerGlobalState,
+    ButlerFocusRuntime,
     ButlerIncident,
     ButlerDecision,
     ButlerAuthorityPolicy,

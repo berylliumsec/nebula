@@ -1486,7 +1486,7 @@ def butler_router(service: ButlerOversightService) -> APIRouter:
             "authority": authority["authority"],
             "authority_revision": authority["revision"],
             "global_instructions": (
-                (await service.recovery_service.global_status())
+                (await service.recovery_service.global_status(engagement_id))
                 if service.recovery_service is not None
                 else {"status": "unavailable", "path": None}
             ),
