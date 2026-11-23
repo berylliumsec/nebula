@@ -7,7 +7,12 @@ but can never supply or broaden capabilities.
 from __future__ import annotations
 
 from .stored_entities import decode_stored
-from .recovery_markers import OPERATOR_RECOVERY_PAUSE, OPERATOR_RECOVERY_STOP
+from .recovery_markers import (
+    GOAL_PROVIDER_RETRY,
+    OPERATOR_RECOVERY_PAUSE,
+    OPERATOR_RECOVERY_STOP,
+    TURN_GOAL_AUTO_RETRY,
+)
 from .async_utils import MaybeAsync
 
 from .database import DatabaseBusyError, EntityRow, ProviderTurnQueueRow
@@ -29,6 +34,7 @@ from contextlib import aclosing
 from contextvars import copy_context
 import base64
 import hashlib
+import httpx
 import json
 import logging
 import math
@@ -269,9 +275,13 @@ from .providers import (
     ModelStreamEvent,
     ModelToolResult,
     ModelUsage,
+    _RETRYABLE_STATUS_CODES,
     ProviderContextLengthError,
+    ProviderError,
     ProviderMalformedToolCallError,
+    ProviderOverloadedError,
     ProviderResponseError,
+    ProviderStreamInterruptedError,
     StreamEventType,
     ToolCall as ModelToolCall,
     ToolChoice,
@@ -475,6 +485,28 @@ class CompletionHookBlocked(ChatError):
             redact_text(execution.stdout or execution.stderr)
         ).strip()[:_HOOK_MODEL_FEEDBACK_CHARS]
         super().__init__(f"{message}; hook output: {detail}" if detail else message)
+
+
+def _goal_retryable_provider_failure(error: BaseException | None) -> bool:
+    """A provider failure a running goal may retry once with a fresh turn.
+
+    Transient upstream failures qualify: an overload or retryable status the
+    provider's own retries did not outlast, a reply cut off mid-stream, and a
+    torn or refused connection. Chat's own errors (hooks, policy, history),
+    refusals, spent quota, credential and request defects do not; neither
+    does a context overflow, which chat recovers from elsewhere.
+    """
+
+    if not isinstance(error, ProviderError) or isinstance(
+        error, (ProviderContextLengthError, ProviderResponseError)
+    ):
+        return False
+    if isinstance(error, (ProviderOverloadedError, ProviderStreamInterruptedError)):
+        return True
+    if getattr(error, "status_code", None) in _RETRYABLE_STATUS_CODES:
+        return True
+    # A transport failure keeps httpx's error as its cause.
+    return isinstance(error.__cause__, httpx.TransportError)
 
 
 def _completion_hook_goal_pause_reason(error: CompletionHookBlocked) -> str:
@@ -5524,7 +5556,23 @@ class ChatService:
             if self._idle_goal_observations.get(goal.id) != key:
                 observed[goal.id] = key
                 continue
-            if latest is None or latest.status == ChatTurnStatus.COMPLETE:
+            retry = goal.metadata.get(GOAL_PROVIDER_RETRY)
+            retry_armed = (
+                latest is not None
+                and latest.status == ChatTurnStatus.FAILED
+                and isinstance(retry, dict)
+                and retry.get("failed_turn_id") == latest.id
+            )
+            if retry_armed and await is_held(
+                self.store, goal.engagement_id, goal.session_id
+            ):
+                # The hold pauses the goal; its release resumes it.
+                continue
+            if (
+                latest is None
+                or latest.status == ChatTurnStatus.COMPLETE
+                or retry_armed
+            ):
                 dispatched = await self.dispatch_running_goal(
                     goal.session_id, _GOAL_CONTINUE_INSTRUCTION
                 )
@@ -5915,6 +5963,7 @@ class ChatService:
                 # child's question closed while its parent was idle) and
                 # continue its goal; neither may queue behind this finished run.
                 await runtime.admission.release(turn.id)
+            goal_retry_armed = False
             if turn is not None and (stopped or runtime.error is not None):
                 latest = await self.store.get(ChatTurn, turn.id)
                 if (
@@ -5952,26 +6001,32 @@ class ChatService:
                     # The admission was released first, and parked if the
                     # turn was waiting then; the turn has ended since.
                     (await self._settle_admission(latest.id))
+                    if not stopped and _goal_retryable_provider_failure(runtime.error):
+                        # Before the outcome note, which says so.
+                        goal_retry_armed = await self._arm_goal_provider_retry(
+                            latest.id
+                        )
                 # Before subagent reports held for this turn are posted, so
                 # the note follows the operator's message it answers.
                 (await self.record_turn_outcome(turn.id))
-                if stopped:
-                    pause_reason = (
-                        "Response stopped by the operator. Resume the goal when ready."
+                # An armed retry leaves the goal running; the idle-goal
+                # reconciler starts its continuation after a short wait.
+                if not goal_retry_armed:
+                    if stopped:
+                        pause_reason = "Response stopped by the operator. Resume the goal when ready."
+                    elif isinstance(runtime.error, CompletionHookBlocked):
+                        pause_reason = _completion_hook_goal_pause_reason(runtime.error)
+                    else:
+                        pause_reason = (
+                            "Response failed before the goal finished. Review the "
+                            "error, then resume the goal."
+                        )
+                    (
+                        await self._pause_running_session_goal(
+                            turn.session_id,
+                            pause_reason,
+                        )
                     )
-                elif isinstance(runtime.error, CompletionHookBlocked):
-                    pause_reason = _completion_hook_goal_pause_reason(runtime.error)
-                else:
-                    pause_reason = (
-                        "Response failed before the goal finished. Review the error, "
-                        "then resume the goal."
-                    )
-                (
-                    await self._pause_running_session_goal(
-                        turn.session_id,
-                        pause_reason,
-                    )
-                )
             if turn is not None:
                 await self._close_provider_journal(turn.id, runtime)
             # Followers stop here and their callers read the turn and its goal
@@ -5991,6 +6046,7 @@ class ChatService:
                         stage="subagent-settle",
                     )
                 if not stopped and runtime.error is None:
+                    await self._clear_goal_provider_retry(turn.id)
                     await self._continue_running_goal_after_turn(prepared)
             if runtime.followers == 0:
                 runtime.cleanup_task = create_diagnostic_task(
@@ -16178,6 +16234,115 @@ class ChatService:
             },
             expected_revision=turn.revision,
         )
+
+    async def _arm_goal_provider_retry(self, turn_id: str) -> bool:
+        """Keep a goal running once after a transient provider failure.
+
+        The failed turn's goal must still be running, unheld, and not already
+        retrying: a second failure in a row pauses it as before. The goal is
+        marked with the failed turn, which the idle-goal reconciler continues
+        on a later pass, and the turn is marked so its outcome note says so.
+        Never raises; a goal that cannot be marked pauses as before.
+        """
+
+        try:
+            turn = await self.store.get(ChatTurn, turn_id)
+            if (
+                turn.goal_id is None
+                or turn.status != ChatTurnStatus.FAILED
+                or await is_held(self.store, turn.engagement_id, turn.session_id)
+            ):
+                return False
+            now = utc_now().isoformat()
+            armed = False
+
+            def mark_goal(goal: ChatGoal) -> dict[str, Any] | None:
+                nonlocal armed
+                armed = False
+                if (
+                    goal.status != ChatGoalStatus.RUNNING
+                    or goal.execution_claim_id is not None
+                    or GOAL_PROVIDER_RETRY in goal.metadata
+                ):
+                    return None
+                armed = True
+                return {
+                    "metadata": {
+                        **goal.metadata,
+                        GOAL_PROVIDER_RETRY: {
+                            "failed_turn_id": turn.id,
+                            "armed_at": now,
+                            "error": str(turn.error or "")[:300],
+                        },
+                    }
+                }
+
+            await revise_latest(self.store, ChatGoal, turn.goal_id, mark_goal)
+            if not armed:
+                return False
+
+            def mark_turn(current: ChatTurn) -> dict[str, Any] | None:
+                if TURN_GOAL_AUTO_RETRY in current.request_snapshot:
+                    return None
+                return {
+                    "request_snapshot": {
+                        **current.request_snapshot,
+                        TURN_GOAL_AUTO_RETRY: {"armed_at": now},
+                    }
+                }
+
+            await revise_latest(self.store, ChatTurn, turn.id, mark_turn)
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.goal.provider_retry_armed",
+                "A goal's response failed with a transient provider error; Core "
+                "continues the goal once automatically.",
+                outcome="retrying",
+                stage="goal-auto-retry",
+                retryable=True,
+                metadata={"goal_id": turn.goal_id, "turn_id": turn.id},
+            )
+            return True
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.goal.provider_retry_arm_failed",
+                "A goal's automatic retry could not be recorded; the goal pauses.",
+                exc,
+                stage="goal-auto-retry",
+            )
+            return False
+
+    async def _clear_goal_provider_retry(self, turn_id: str) -> None:
+        """End a goal's failure streak once one of its turns completes."""
+
+        try:
+            turn = await self.store.get(ChatTurn, turn_id)
+            if turn.goal_id is None or turn.status != ChatTurnStatus.COMPLETE:
+                return
+
+            def clear(goal: ChatGoal) -> dict[str, Any] | None:
+                if GOAL_PROVIDER_RETRY not in goal.metadata:
+                    return None
+                return {
+                    "metadata": {
+                        key: value
+                        for key, value in goal.metadata.items()
+                        if key != GOAL_PROVIDER_RETRY
+                    }
+                }
+
+            await revise_latest(self.store, ChatGoal, turn.goal_id, clear)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.goal.provider_retry_clear_failed",
+                "A goal's automatic-retry mark could not be cleared after a "
+                "completed response.",
+                exc,
+                stage="goal-auto-retry",
+            )
 
     async def _pause_running_session_goal(
         self, session_id: str, reason: str
