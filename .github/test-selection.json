@@ -1,27 +1,42 @@
 {
-  "change_digest": "cb779e757bd5fd0cedc5c195bd62959f09aa7f028c53b530a170fb87664df45f",
-  "reviewed_by": "Claude: harness shutdown revision race, focused shutdown and harness-switch selection",
-  "reason": "HarnessRuntimeService.shutdown read each still-open harness turn and wrote it INTERRUPTED with the revision it read. The turn's own finishing task could save it in between, so the write raised RevisionConflict, which escaped shutdown before it cancelled the remaining chat and mission tasks. That made test_saved_harness_switch_binds_on_next_message_in_disposable_core flaky on main and could leave tasks alive for the thread guard. Shutdown now re-reads on conflict: a turn that settled keeps its outcome, one still open is retried on its fresh revision (bounded), and a conflict never escapes. Select the new deterministic regression test that forces the interleaving, the existing shutdown-while-connecting test, the harness turn lifecycle suite, and the previously flaky disposable-Core harness switch test.",
-  "exclusions": "No UI, setting, provider or native change, so frontend, Playwright and native layers are empty and the settings assistant is unchanged. Other test_harnesses.py cases do not exercise shutdown's per-turn interrupt. No full-suite approval.",
+  "change_digest": "32c80f4b6612624e5ea12b4ff9e24d9ad1eedd3b35bcfcc1485616d054a99563",
+  "reviewed_by": "Claude: goal supervisor notes and mid-turn addenda, focused backend, component and mocked browser selection",
+  "reason": "Running goals gain bounded supervisor notes (ChatGoal.supervisor_notes, 4,000 characters each, at most 50, a 51st refused) with POST/DELETE /chat/sessions/{id}/goal/notes on control capacity, a guidance_revision that only objective, criteria, plan and note changes bump, and a bounded change log. A running provider goal turn records the guidance revision it was prepared with and, before each routing call, receives what changed once as a Core-added goal.read result (new read-only goal.read tool on provider goal turns); a running harness turn is steered; Grok and idle goals read the change at the next turn. Notes ride on the per-turn goal progress block, never the cached instructions. Butler gets nebula.work.add_goal_note and a bounded goal view. The goal panel adds an Add note form, a Supervisor notes list with remove, and a delivery status line. Selected: the new regression file (note append/cap/render/paging, guidance-change recording, native once-only mid-turn delivery, harness steer and Grok fallback, control lane), goal lifecycle, Butler work tools, goal tool budgets, Core delivery steps, harness goals, recovery-control routes, runtime delivery, turn bookkeeping, the runtime manifest (entity field digest) and the Playwright manifest; the goal panel and destination component tests; the new mocked goal-notes browser journey and the goal panel revision race in desktop and mobile Chromium/WebKit.",
+  "exclusions": "tests/v3/test_butler_capabilities.py and tests/v3/test_butler_workflow_registry.py are excluded because each already fails one test on origin/main (UPDATE_GOAL_SCHEMA lacks active_plan_index; useProjectViewLease calls are unreviewed); their other tests passed locally with this change. Real-Core Playwright (real-core.spec.ts) is not selected: the real-Core journey was exercised on a disposable LAN Core instead. No native change. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 14,
-    "frontend": 0,
+    "python": 245,
+    "frontend": 28,
     "native": 0,
-    "playwright": 0
+    "playwright": 6
   },
   "python": [
-    "tests/v3/test_harnesses.py::test_shutdown_keeps_a_turn_its_own_task_settled_mid_interrupt",
-    "tests/v3/test_harnesses.py::test_shutdown_and_restart_settle_a_turn_still_connecting",
-    "tests/v3/test_harness_turn_lifecycle.py",
-    "tests/v3/test_control_assistant_work.py::test_saved_harness_switch_binds_on_next_message_in_disposable_core"
+    "tests/v3/test_goal_supervisor_addenda.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_tool_capacity_starvation.py",
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_recovery_controls.py",
+    "tests/v3/test_runtime_delivery.py",
+    "tests/v3/test_turn_tool_bookkeeping.py",
+    "tests/v3/test_runtime_bundle.py",
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/assistantDestinations.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "area:goal-supervisor-notes",
+    "area:release-goal-panel-race"
+  ],
+  "checks": [
+    "frontend-audit"
+  ]
 }
