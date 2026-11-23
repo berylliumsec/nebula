@@ -7102,3 +7102,75 @@ async def test_steer_after_turn_completes_reports_inactive_not_failure(tmp_path)
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_shutdown_keeps_a_turn_its_own_task_settled_mid_interrupt(tmp_path):
+    """A turn that finishes between shutdown's read and write keeps its outcome."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+        _chat, _chat_turn, first = await runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="seed",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        session_id = (await store.get(HarnessTurn, first.id)).harness_session_id
+        settling = await store.create(
+            HarnessTurn(
+                id="settles-during-shutdown",
+                engagement_id=engagement.id,
+                harness_session_id=session_id,
+                origin=HarnessTurnOrigin.ANALYSIS,
+                prompt="live",
+                status=HarnessTurnStatus.RUNNING,
+            )
+        )
+        still_open = await store.create(
+            HarnessTurn(
+                id="saved-but-still-running",
+                engagement_id=engagement.id,
+                harness_session_id=session_id,
+                origin=HarnessTurnOrigin.ANALYSIS,
+                prompt="live",
+                status=HarnessTurnStatus.RUNNING,
+            )
+        )
+        real_update = store.update
+        raced: set[str] = set()
+
+        async def racing_update(model, entity_id, changes, **kwargs):
+            # The turn's own task saves first, exactly once per turn.
+            if model is HarnessTurn and entity_id not in raced:
+                raced.add(entity_id)
+                current = await store.get(HarnessTurn, entity_id)
+                own = (
+                    {"status": HarnessTurnStatus.COMPLETE}
+                    if entity_id == settling.id
+                    else {"prompt": "progress saved"}
+                )
+                await real_update(
+                    HarnessTurn, entity_id, own, expected_revision=current.revision
+                )
+            return await real_update(model, entity_id, changes, **kwargs)
+
+        store.update = racing_update  # type: ignore[method-assign]
+        try:
+            assert await runtime._interrupt_turn_for_shutdown(settling.id) is None
+            interrupted = await runtime._interrupt_turn_for_shutdown(still_open.id)
+        finally:
+            store.update = real_update  # type: ignore[method-assign]
+        assert (
+            await store.get(HarnessTurn, settling.id)
+        ).status == HarnessTurnStatus.COMPLETE
+        assert interrupted is not None
+        assert interrupted.status == HarnessTurnStatus.INTERRUPTED
+        assert (
+            await store.get(HarnessTurn, still_open.id)
+        ).status == HarnessTurnStatus.INTERRUPTED
+        await runtime.shutdown()
+
+    (await scenario())
