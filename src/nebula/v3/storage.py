@@ -85,6 +85,7 @@ from .domain import (
     AgentRun,
     Approval,
     Artifact,
+    ButlerRecoveryCase,
     ChatGoal,
     ChatMessage,
     ChatQueue,
@@ -1458,6 +1459,27 @@ class NebulaStore:
         )
         async with self.database.session() as session:
             return {value for value in (await session.scalars(statement)) if value}
+
+    async def butler_case_statuses(self, case_ids: Iterable[str]) -> dict[str, str]:
+        """Current status of each Butler recovery case, by case ID.
+
+        Case chats show their case's stage in the conversation list; one
+        bounded read per listed page, never a scan of a project's cases.
+        """
+
+        ids = {value for value in case_ids if value}
+        if not ids:
+            return {}
+        statement = select(EntityRow.id, EntityRow.payload["status"].as_string()).where(
+            EntityRow.kind == ButlerRecoveryCase.entity_kind,
+            EntityRow.id.in_(ids),
+        )
+        async with self.database.session() as session:
+            return {
+                str(case_id): str(status)
+                for case_id, status in (await session.execute(statement))
+                if status
+            }
 
     async def list_tool_call_artifacts(
         self, engagement_id: str, tool_call_id: str

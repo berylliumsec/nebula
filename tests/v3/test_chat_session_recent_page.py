@@ -164,4 +164,66 @@ async def test_older_butler_recovery_chat_has_read_only_sidebar_provenance(tmp_p
     assert "butler_initiated" not in (await store.get(ChatSession, "recovery")).metadata
 
 
+
+async def test_butler_case_chat_reads_carry_case_status(tmp_path):
+    from nebula.v3.domain import ButlerRecoveryCase
+
+    store = NebulaStore(tmp_path / "case.db")
+    (await store.create(Engagement(id="project-a", name="Project A")))
+    (
+        await store.create(
+            ButlerRecoveryCase(
+                id="case-1",
+                engagement_id="project-a",
+                trigger="periodic",
+                signal="butler.periodic_check",
+                source_event_id="event-1",
+                source_event_sequence=1,
+                authority_revision=1,
+                summary="Scheduled check",
+                status="uncertain",
+            )
+        )
+    )
+    (
+        await store.create_many(
+            [
+                ChatSession(
+                    id="case-chat",
+                    engagement_id="project-a",
+                    title="Butler check · Scheduled check",
+                    provider_profile_id="provider",
+                    model="model",
+                    metadata={
+                        "control_assistant": True,
+                        "butler_initiated": True,
+                        "butler_recovery_case_id": "case-1",
+                    },
+                ),
+                ChatSession(
+                    id="ordinary",
+                    engagement_id="project-a",
+                    title="Ordinary",
+                    provider_profile_id="provider",
+                    model="model",
+                ),
+            ]
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        listed = await client.get(
+            "/api/v1/chat-sessions",
+            params={"engagement_id": "project-a", "recent_first": "true"},
+            headers=headers,
+        )
+        single = await client.get("/api/v1/chat-sessions/case-chat", headers=headers)
+    assert listed.status_code == single.status_code == 200
+    by_id = {item["id"]: item["metadata"] for item in listed.json()}
+    assert by_id["case-chat"]["butler_case_status"] == "uncertain"
+    assert single.json()["metadata"]["butler_case_status"] == "uncertain"
+    assert "butler_case_status" not in by_id["ordinary"]
+    assert "butler_case_status" not in (await store.get(ChatSession, "case-chat")).metadata
+
+
 pytestmark = pytest.mark.anyio

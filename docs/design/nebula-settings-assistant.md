@@ -1446,6 +1446,25 @@ sets priority when asked (`nebula.work.set_priority`) and reviews
 high-priority chats first; the operator does not need to tell Butler which
 chats matter.
 
+## Butler stage labels
+
+Every Butler conversation shows its stage as a
+word with a shape, in the Workbench conversation list and beside the open
+chat's title. A **Butler check** (the chat Butler opens to investigate a
+blocked or stalled goal, a failed subagent or a scheduled check) follows its
+Core recovery case: **Investigating** (Butler is looking, or Core is checking
+its repair), **Needs you** (Butler could not repair it and needs a decision),
+**Uncertain** (Butler acted but Core could not confirm the repair),
+**Resolved** (Core verified recovery) or **Closed** (superseded). Butler checks
+nest under the project's Butler chat, without the "Butler check ·" prefix; a
+check that needs the operator puts that chat under **Needs you**. The
+project's Butler chat and Butler threads show **Active**, **Needs you** or
+**Idle** from their own activity. A board card whose goal has an open Butler
+check, or one resolved in the last 24 hours, shows **Butler · <stage>**, and
+its brief offers **Open Butler check**. The stage is read from Core on every
+list, chat and board read (`metadata.butler_case_status` on chat sessions,
+`butler_case` on board items); nothing extra is stored.
+
 ## Closing the desktop and shutting down Core
 
 On Linux, local Core runs independently of its desktop viewer. Closing, updating,

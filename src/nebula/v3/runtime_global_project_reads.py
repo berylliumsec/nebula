@@ -13,6 +13,7 @@ from sqlalchemy.orm import aliased
 
 from .stored_entities import decode_stored
 from .butler_board import butler_board_router
+from .butler_case_stage import with_case_status
 from .file_attribution import file_attribution_router
 from .chat_turn_headers import pending_engagement_turn_headers
 from .conditional_reads import conditional, content_etag
@@ -130,14 +131,17 @@ def mount_global_project_reads(
             for item in sessions
             if item.metadata.get("butler_initiated") is not True
         )
-        return [
-            item.model_copy(
-                update={"metadata": {**item.metadata, "butler_initiated": True}}
-            )
-            if item.id in legacy_ids
-            else item
-            for item in sessions
-        ]
+        return await with_case_status(
+            store,
+            [
+                item.model_copy(
+                    update={"metadata": {**item.metadata, "butler_initiated": True}}
+                )
+                if item.id in legacy_ids
+                else item
+                for item in sessions
+            ],
+        )
 
     @app.get(
         "/api/v1/chat-sessions/{session_id}",
@@ -148,7 +152,7 @@ def mount_global_project_reads(
         session_id: str, response: Response
     ) -> ChatSession:
         response.headers["Cache-Control"] = "no-store"
-        return await store.get(ChatSession, session_id)
+        return (await with_case_status(store, [await store.get(ChatSession, session_id)]))[0]
 
     @app.get(
         "/api/v1/chat/session-activity", response_model=None, dependencies=dependencies

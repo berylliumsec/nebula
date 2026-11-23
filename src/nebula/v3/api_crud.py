@@ -12,6 +12,7 @@ from pydantic import Field
 
 from .async_utils import MaybeAsync, call_async
 from .api_validation import ApiEntityValidator
+from .butler_case_stage import with_case_status
 from .domain import (
     AutomationProjectPolicy,
     ChatSession,
@@ -420,6 +421,9 @@ def _register_crud_routes(
                     else item
                     for item in entities
                 ]
+                entities = await with_case_status(
+                    store, [item for item in entities if isinstance(item, ChatSession)]
+                )
             if model is HarnessSession and entities:
                 (
                     chat_titles,
@@ -487,6 +491,8 @@ def _register_crud_routes(
                 entity = entity.model_copy(
                     update={"metadata": {**entity.metadata, "butler_initiated": True}}
                 )
+            if isinstance(entity, ChatSession):
+                entity = (await with_case_status(store, [entity]))[0]
             entity = (
                 knowledge_summary(entity)
                 if isinstance(entity, KnowledgeSource)
