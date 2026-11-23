@@ -3660,6 +3660,14 @@ SUBAGENT_REPORTS_INSTRUCTION = (
 )
 """What Core asks when a goal's subagents have reported."""
 
+GOAL_COMPLETION_REVIEW_REASON = (
+    "Awaiting closure review: the agent reports this goal complete."
+)
+"""The blocked reason of a goal that holds an agent's completion for review."""
+
+GOAL_COMPLETION_PROPOSAL_KEY = "completion_proposal"
+"""Goal metadata holding the agent's completion awaiting closure review."""
+
 CORE_GOAL_INSTRUCTIONS = frozenset(
     {
         GOAL_START_INSTRUCTION,
@@ -3702,6 +3710,10 @@ class ChatGoal(Entity):
     paused_at: datetime | None = None
     completed_at: datetime | None = None
     blocked_reason: str | None = Field(default=None, max_length=2_000)
+    # When set, an agent's goal.complete does not finish the goal: Core holds
+    # it blocked with the proposal until the operator or Butler approves the
+    # completion or sends the goal back.
+    completion_requires_review: bool = False
     completion_summary: str | None = Field(default=None, max_length=20_000)
     completion_evidence: list[dict[str, Any]] = Field(
         default_factory=list, max_length=200
@@ -3741,6 +3753,14 @@ class ChatGoal(Entity):
         ):
             raise ValueError("goal execution ownership must be recorded atomically")
         return self
+
+    @property
+    def awaiting_completion_review(self) -> bool:
+        """Whether an agent's completion is held for closure review."""
+
+        return self.status == ChatGoalStatus.BLOCKED and isinstance(
+            self.metadata.get(GOAL_COMPLETION_PROPOSAL_KEY), dict
+        )
 
     def active_elapsed_seconds(self, now: datetime | None = None) -> float:
         elapsed = self.elapsed_seconds
