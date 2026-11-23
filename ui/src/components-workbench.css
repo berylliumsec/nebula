@@ -3136,3 +3136,18 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .code-editor-files .code-editor-agent-mark[data-state="waiting"] { background: var(--orange); }
 .code-editor-files .code-editor-agent-mark[data-state="working"] { background: var(--blue); }
 .code-editor-files .code-editor-agent-mark[data-state="failed"] { background: var(--red); }
+/* Butler conversation stage: text plus a shape (filled, ring, or dashed ring). */
+.butler-stage { --stage-color: var(--muted); display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 100%; padding: 1px 7px 1px 6px; border: 1px solid color-mix(in srgb, var(--stage-color) 55%, transparent); border-radius: 999px; color: var(--stage-color); font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
+.butler-stage-mark { width: 6px; height: 6px; flex: none; border: 1.5px solid currentColor; border-radius: 50%; background: currentColor; }
+.butler-stage[data-stage="investigating"], .butler-stage[data-stage="active"] { --stage-color: var(--blue); }
+.butler-stage[data-stage="needs-you"] { --stage-color: var(--status-warning); }
+.butler-stage[data-stage="uncertain"] { --stage-color: var(--status-warning); }
+.butler-stage[data-stage="uncertain"] .butler-stage-mark { background: transparent; }
+.butler-stage[data-stage="resolved"] { --stage-color: var(--green); }
+.butler-stage[data-stage="closed"] .butler-stage-mark, .butler-stage[data-stage="idle"] .butler-stage-mark { border-width: 1px; background: transparent; }
+.session-list-item > .session-select.has-stage { grid-template-columns: 18px minmax(0, 1fr) auto; }
+.conversation-heading-title, .mobile-conversation-title-row { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: 8px; }
+.conversation-heading-title > strong, .mobile-conversation-title-row > strong { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-conversation-title-row { justify-content: center; gap: 6px; }
+/* The row's text column rule targets its direct spans; the label stays one line. */
+.session-list-item > .session-select > .butler-stage { flex-direction: row; overflow: visible; }

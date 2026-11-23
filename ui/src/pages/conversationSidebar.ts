@@ -1,5 +1,6 @@
 import type { ChatSessionSummary } from "../api/types";
 import { conversationMatchesSearch } from "./chatBulkActions";
+import { caseNeedsOperator, isButlerCaseChat, isProjectButlerChat } from "../butlerStage";
 
 type ActivityState = "working" | "waiting" | "idle";
 
@@ -21,6 +22,19 @@ export interface ConversationSidebarGroup {
   label: string;
   rows: ConversationSidebarRow[];
   rootCount: number;
+}
+
+/**
+ * The list's activity per chat: Core's turn state, plus a Butler case chat
+ * whose case needs the operator counts as waiting for them.
+ */
+export function sidebarActivity(
+  sessions: ChatSessionSummary[],
+  activity: Record<string, ActivityState>,
+): Record<string, ActivityState> {
+  const waiting = sessions.filter(session => caseNeedsOperator(session) && activity[session.id] !== "working" && activity[session.id] !== "waiting");
+  if (!waiting.length) return activity;
+  return { ...activity, ...Object.fromEntries(waiting.map(session => [session.id, "waiting" as const])) };
 }
 
 export function groupSidebarConversations(
@@ -51,8 +65,9 @@ export function groupSidebarConversations(
   // Butler-created main chat can still own its own subagent conversations.
   const butlerByProject = new Map<string, ChatSessionSummary>();
   for (const session of sessions) {
-    // Butler's own subagents also run in Butler mode; they are not its chat.
-    if (!session.isControlAssistant || session.isSubagent) continue;
+    // Butler's own subagents, its threads and its case chats also run in
+    // Butler mode; none of them is the project's Butler chat.
+    if (!isProjectButlerChat(session)) continue;
     const current = butlerByProject.get(session.engagementId);
     if (!current || (current.archivedAt && !session.archivedAt)
       || (Boolean(current.archivedAt) === Boolean(session.archivedAt) && Date.parse(session.updatedAt) > Date.parse(current.updatedAt))) {
@@ -60,9 +75,12 @@ export function groupSidebarConversations(
     }
   }
   for (const session of sessions) {
-    if (!session.isButlerInitiated || session.isControlAssistant || session.isSubagent) continue;
+    const caseChat = isButlerCaseChat(session);
+    if (!caseChat && (!session.isButlerInitiated || session.isControlAssistant || session.isSubagent)) continue;
     if (session.pinned && !session.archivedAt) continue;
-    const butler = butlerByProject.get(session.engagementId);
+    // A case chat stays under the Butler chat that opened it while that chat is listed.
+    const opener = caseChat && session.parentSessionId ? byId.get(session.parentSessionId) : undefined;
+    const butler = opener && isProjectButlerChat(opener) ? opener : butlerByProject.get(session.engagementId);
     if (!butler || butler.id === session.id) continue;
     butlerChats.set(butler.id, [...(butlerChats.get(butler.id) ?? []), session]);
     attached.add(session.id);

@@ -4467,6 +4467,72 @@ reloadTest("assistant upgrade Butler initiated chats stay grouped and reachable 
   expect(accessibility.violations).toEqual([]);
 });
 
+reloadTest("assistant upgrade Butler case chats show their stage in the list and header", async ({ page }) => {
+  test.setTimeout(180_000);
+  const base = { ...entity, engagement_id: "scratch-project", backend: "provider", provider_profile_id: "provider-a", model: "model-a" };
+  const butler = { ...base, id: "stage-butler", title: "Butler", metadata: { control_assistant: true } };
+  const caseChat = (id: string, title: string, status: string) => ({ ...base, id, title: `Butler check · ${title}`, parent_session_id: butler.id,
+    metadata: { control_assistant: true, butler_initiated: true, butler_recovery_case_id: `case-${id}`, butler_case_status: status } });
+  const blocked = caseChat("stage-blocked", "goal \"Fuzz the sample parser\" blocked with a long reason that must truncate", "needs_attention");
+  const stalled = caseChat("stage-stalled", "host command stalled 40 min", "investigating");
+  const unsure = caseChat("stage-unsure", "subagent failed twice", "uncertain");
+  const fixed = caseChat("stage-fixed", "provider 503 on turn", "resolved");
+  const thread = { ...base, id: "stage-thread", title: "Which goals stalled overnight?", metadata: { control_assistant: true, butler_thread: true } };
+  const ordinary = { ...base, id: "stage-ordinary", title: "Operator research", metadata: {} };
+  // Newer case chats must not displace the Butler chat as their parent.
+  const items = [stalled, blocked, unsure, fixed, thread, ordinary, butler];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") return route.fulfill({ json: items });
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({ json: butler });
+    if (path.endsWith("/chat/session-activity")) return route.fulfill({ json: [{ session_id: stalled.id, state: "working", turn_id: "stalled-turn" }] });
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/stage-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/stage-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, `/?view=chat&session=${blocked.id}`, "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+
+  // The open case chat names its stage beside the title, in text.
+  const header = mobile ? page.locator(".mobile-conversation-header") : page.locator(".conversation-heading");
+  const headerStage = header.locator(".butler-stage");
+  await expect(headerStage).toHaveText("Needs you");
+  await expect(headerStage).toHaveAttribute("title", /needs your decision/);
+  const headerBox = await header.boundingBox();
+  const stageBox = await headerStage.boundingBox();
+  expect(stageBox && headerBox && stageBox.x + stageBox.width <= headerBox.x + headerBox.width + 1).toBe(true);
+
+  const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const row = (id: string) => sidebar.locator(`[data-session-id="${id}"]`);
+  // The selected case chat opens its Butler chat; every case chat nests there.
+  await expect(row(blocked.id)).toBeVisible();
+  await expect(row(blocked.id).locator("..")).toHaveClass(/nested-subagent/);
+  await expect(sidebar.getByRole("button", { name: "Collapse 4 chats for Butler" })).toBeVisible();
+  await expect(sidebar.getByRole("heading", { name: "Working" })).toBeVisible();
+  const expected: Array<[string, string]> = [[butler.id, "Active"], [blocked.id, "Needs you"], [stalled.id, "Investigating"], [unsure.id, "Uncertain"], [fixed.id, "Resolved"], [thread.id, "Idle"]];
+  for (const [id, label] of expected) {
+    await expect(row(id).locator(".butler-stage"), id).toHaveText(label);
+    const rowBox = await row(id).boundingBox();
+    const labelBox = await row(id).locator(".butler-stage").boundingBox();
+    expect(rowBox && labelBox && labelBox.x + labelBox.width <= rowBox.x + rowBox.width + 1, `${id} label inside its row`).toBe(true);
+    // Mark and word sit on one line.
+    const markBox = await row(id).locator(".butler-stage-mark").boundingBox();
+    const textBox = await row(id).locator(".butler-stage-text").boundingBox();
+    expect(markBox && textBox && markBox.x + markBox.width <= textBox.x && labelBox && labelBox.height < 24, `${id} label on one line`).toBe(true);
+  }
+  // Nested rows drop the repeated prefix; the stage travels with the row's accessible name.
+  await expect(row(blocked.id).locator(".conversation-title-text")).toHaveText(/^goal "Fuzz the sample parser"/);
+  await expect(row(blocked.id)).toHaveAccessibleName(/Needs you/);
+  await expect(row(ordinary.id).locator(".butler-stage")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include("#workbench-conversations").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 reloadTest("assistant upgrade sidebar follows subagents created during an active turn", async ({ page }) => {
   const parent = { ...entity, id: "live-sidebar-parent", engagement_id: "scratch-project", title: "Active investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
   const child = { ...entity, id: "live-sidebar-child", engagement_id: "scratch-project", title: "Subagent · New research", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "live-subagent" } };

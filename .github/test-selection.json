@@ -1,38 +1,45 @@
 {
-  "change_digest": "f481a9195c8859ddf34429fc96ffa45498b33fa63a1d11336530ce063f75948b",
-  "reviewed_by": "Claude: harness goal one-shot transient retry, focused harness goal/transport selection",
-  "reason": "A running harness goal paused on its first failed turn because _account_terminal_chat_usage_once wrote the goal PAUSED with the turn's error, even when the vendor transport simply dropped. Harness turn failures are now classified (new HarnessTransportClosedError for a vendor process/stream that ended; unresponsive app-server; connection errors; retryable HTTP statuses; Codex connection/stream/rate-limit/server error kinds); a transient failure of a running, unheld goal keeps it running with the #1298 provider_auto_retry mark and the idle-goal reconciler continues it once. Select the new retry suite (classification table, one continuation, second-failure pause, completed-turn and resume clearing, non-transient/stop/shutdown/hold/paused cases, real subprocess reader exit vs malformed reply), the harness goal suite, the harness turn lifecycle, Codex/Claude transport and turn outcome suites, adapter tests, and the test_harnesses.py failure, transport-loss and shutdown cases.",
-  "exclusions": "No UI, setting, or provider change: frontend, Playwright and native layers are empty and the settings assistant is unchanged. Native provider retry (chat.py) is unchanged. Other test_harnesses.py cases do not exercise turn failure settlement; test_knowledge_access_change_refreshes_fixed_gateway_catalog and test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail identically on origin/main (HarnessInstructionContextChanged) and are not selected. No full-suite approval.",
+  "change_digest": "62812d29f3aceb575c3acb69699d908c1df635c4773f043513a399beb6963307",
+  "reviewed_by": "Claude: Butler conversation stage labels in the list, header and board",
+  "reason": "Butler case chats (recovery investigations) now show their ButlerRecoveryCase status as a stage (Investigating, Needs you, Uncertain, Resolved, Closed) and the project's Butler chat and threads show Active, Needs you or Idle. Core joins the case status at read time into chat-session list/get metadata (api_crud and the API worker's global project reads) and into Butler board items (butler_case); nothing new is stored. The UI nests case chats under the project's Butler chat (previously they were roots and could replace the Butler chat as the sidebar parent), labels list rows and both conversation headers, and labels board cards and briefs with 'Butler · <stage>' plus Open Butler check. Python selects the read-route, board, chat-hold/priority board and product-help tests (product help gets the new Butler stage labels passage). Frontend selects the stage mapping, sidebar grouping, board mapping/page, and API client tests. Playwright selects the butler-sidebar area (the new mocked stage test plus the existing Butler grouping test in desktop, compact, Chromium 320/390/430 and WebKit 320/390/430, and its real-Core grouping test) and conversation-order on desktop, Chromium 390 and WebKit 390 for conversationSidebar.ts. ButlerModePage.send.test.tsx waits for the reserved thread's log to re-render before counting the sent message; the synchronous count raced in CI.",
+  "exclusions": "butler-mode/assistant-real-* entries are not selected: on origin/main playwright.config.ts their projects' testMatch does not include tests/butler-mode.spec.ts, so they collect 0 tests; the board label was validated on a disposable LAN Core instead (PR body). test_product_search_finds_headless_core_and_paired_butler_cli is excluded: it already fails on origin/main f444c1b. No native code changed. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 266,
-    "frontend": 0,
+    "python": 42,
+    "frontend": 147,
     "native": 0,
-    "playwright": 0
+    "playwright": 23
   },
   "python": [
-    "tests/v3/test_harness_goal_auto_retry.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_harness_turn_lifecycle.py",
-    "tests/v3/test_codex_transport.py",
-    "tests/v3/test_claude_harness_turns.py",
-    "tests/v3/test_codex_turn_outcomes.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harnesses.py::test_failed_turn_persists_profile_failure_reason",
-    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
-    "tests/v3/test_harnesses.py::test_transport_loss_discards_the_dead_connection_before_the_next_turn",
-    "tests/v3/test_harnesses.py::test_stop_closes_a_connection_that_never_acknowledges_interrupt",
-    "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn",
-    "tests/v3/test_harnesses.py::test_connection_failure_is_reported_and_releases_the_session",
-    "tests/v3/test_harnesses.py::test_harness_transport_error_keeps_one_reference_from_ledger_to_api",
-    "tests/v3/test_harnesses.py::test_shutdown_keeps_a_turn_its_own_task_settled_mid_interrupt"
+    "tests/v3/test_runtime_global_project_reads.py",
+    "tests/v3/test_chat_session_recent_page.py",
+    "tests/v3/test_chat_holds.py",
+    "tests/v3/test_work_priority.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_check_stage_labels",
+    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/butlerStage.test.ts",
+    "ui/src/pages/conversationSidebar.test.ts",
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/api/client.chatSessionPage.test.ts"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "area:butler-sidebar",
+    "conversation-order/model-desktop",
+    "conversation-order/model-chromium-390",
+    "conversation-order/model-webkit-390"
+  ],
+  "checks": [
+    "frontend-audit"
+  ]
 }

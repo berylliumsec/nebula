@@ -111,6 +111,11 @@ describe("Butler board reads", () => {
           now: "Approve run_command: make install",
           attention: { kind: "approval", action_id: "a1", summary: "Approve run_command: make install", requested_at: "2026-11-20T10:01:00Z" },
           goal: { objective: "Find a crash", status: "running", current_step: 2, plan_length: 6 },
+          butler_case: { id: "case-1", status: "needs_attention", session_id: "case-chat", updated_at: "2026-11-20T10:02:00Z" },
+        }, {
+          session_id: "s2", title: "Other", project: { id: "p1", name: "Research" }, section: "active", state: "working",
+          backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:01:00Z",
+          butler_case: { id: "case-2", status: "unknown-status" },
         }],
       },
     });
@@ -124,7 +129,10 @@ describe("Butler board reads", () => {
       sessionId: "s1", section: "active", state: "waiting", turnId: "t1",
       attention: { kind: "approval", actionId: "a1" },
       goal: { currentStep: 2, planLength: 6 },
+      butlerCase: { id: "case-1", status: "needs_attention", sessionId: "case-chat" },
     });
+    // A status this UI does not know shows no stage rather than a wrong one.
+    expect(answer?.board.items[1].butlerCase).toBeUndefined();
   });
 
   it("pages a section in one project and treats 304 as unchanged", async () => {

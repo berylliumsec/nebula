@@ -8,7 +8,9 @@ chats by ID, in three sections by goal status: **active** (running),
 and **completed** (completed or cancelled). Counts per project and in total are
 exact. Listed chats are enriched with their turn state (working, waiting on
 the operator, or a failed last turn) from their own pending and newest turns,
-never from a scan of every project's turns. Chats without a goal, Butler's own
+never from a scan of every project's turns. A card also carries Butler's newest open
+(or freshly resolved) recovery case about its chat, so the operator sees
+that Butler is investigating it or needs them. Chats without a goal, Butler's own
 conversations, side chats, subagent chats and archived projects or chats are
 never listed. Both the supervisor's API worker and the single-process app
 mount this route.
@@ -27,6 +29,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import aliased
 
 from .work_priority import marked_high
+from .butler_case_stage import cases_for_goal_chats
 from .stored_entities import decode_stored
 from .chat_subagents import is_subagent_session
 from .chat_turn_headers import (
@@ -474,6 +477,22 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             store,
             [entry[0].id for _name, entry in shown if entry[3] == "waiting"],
         )
+        async with store.database.session() as database:
+            cases = await cases_for_goal_chats(
+                database,
+                [entry[0].id for _name, entry in shown],
+                {entry[0].engagement_id for _name, entry in shown},
+            )
+        items = await _with_holds(
+            store,
+            [
+                await _board_item(store, name, *entry, approvals, questions)
+                for name, entry in shown
+            ],
+        )
+        for item in items:
+            # Butler's newest open (or freshly resolved) case about this chat.
+            item["butler_case"] = cases.get(item["session_id"])
         body = {
             "counts": totals,
             "states": states,
@@ -489,13 +508,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 key=lambda item: (str(item["name"]).casefold(), str(item["id"])),
             ),
             "section": section,
-            "items": await _with_holds(
-                store,
-                [
-                    await _board_item(store, name, *entry, approvals, questions)
-                    for name, entry in shown
-                ],
-            ),
+            "items": items,
             "next_offset": next_offset,
             "truncated": truncated,
         }

@@ -630,3 +630,134 @@ async def test_butler_threads_list_every_project_with_state(project_reads):
     assert items[working.id]["turn_id"]
     assert items[working.id]["project"] == {"id": bounty.id, "name": "Bounty"}
     assert items[idle.id]["state"] == "idle"
+
+
+async def test_butler_case_stage_reaches_case_chats_and_goal_cards(project_reads):
+    from datetime import timedelta
+
+    from nebula.v3.butler_case_stage import cases_for_goal_chats
+    from nebula.v3.domain import ButlerRecoveryCase, ChatGoal, ChatGoalStatus, utc_now
+
+    store = project_reads.store
+    project = await store.create(Engagement(name="Bounty"))
+
+    async def chat(title, **metadata):
+        return await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+                metadata=metadata,
+            )
+        )
+
+    async def goal(session):
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=session.id,
+                objective=f"Goal of {session.title}",
+                completion_criteria=["Report"],
+                status=ChatGoalStatus.RUNNING,
+            )
+        )
+
+    sequence = iter(range(1, 100))
+
+    async def case(source, status, **fields):
+        number = next(sequence)
+        return await store.create(
+            ButlerRecoveryCase(
+                id=f"case-{number}",
+                engagement_id=project.id,
+                trigger="immediate",
+                signal="goal.blocked",
+                source_event_id=f"event-{number}",
+                source_event_sequence=number,
+                source_session_id=source.id if source else None,
+                authority_revision=1,
+                summary="Goal blocked",
+                status=status,
+                **fields,
+            )
+        )
+
+    butler = await chat("Butler", control_assistant=True)
+    blocked = await chat("Blocked goal")
+    await goal(blocked)
+    repaired = await chat("Repaired goal")
+    await goal(repaired)
+    dropped = await chat("Dropped case goal")
+    await goal(dropped)
+    plain = await chat("Quiet goal")
+    await goal(plain)
+
+    # A case Butler resolved earlier is superseded by the newer open one.
+    await case(blocked, "resolved")
+    open_case = await case(blocked, "needs_attention")
+    investigation = await chat(
+        "Butler check · Goal blocked",
+        control_assistant=True,
+        butler_initiated=True,
+        butler_recovery_case_id=open_case.id,
+    )
+    open_case = await store.update(
+        ButlerRecoveryCase,
+        open_case.id,
+        {"investigation_session_id": investigation.id},
+        expected_revision=open_case.revision,
+    )
+    resolved = await case(repaired, "resolved")
+    await case(dropped, "cancelled")
+    orphan = await chat(
+        "Butler check · deleted case",
+        control_assistant=True,
+        butler_initiated=True,
+        butler_recovery_case_id="case-missing",
+    )
+
+    listed = await project_reads.client.get(
+        "/api/v1/chat-sessions",
+        params={"engagement_id": project.id},
+        headers=AUTH,
+    )
+    single = await project_reads.client.get(
+        f"/api/v1/chat-sessions/{investigation.id}", headers=AUTH
+    )
+    assert listed.status_code == single.status_code == 200, listed.text
+    by_id = {item["id"]: item["metadata"] for item in listed.json()}
+    assert by_id[investigation.id]["butler_case_status"] == "needs_attention"
+    assert single.json()["metadata"]["butler_case_status"] == "needs_attention"
+    # Only case chats carry a stage, and a missing case leaves none.
+    assert "butler_case_status" not in by_id[butler.id]
+    assert "butler_case_status" not in by_id[orphan.id]
+    assert "butler_case_status" not in by_id[blocked.id]
+    # The stage is read-time only; nothing is written to the chat.
+    stored = await store.get(ChatSession, investigation.id)
+    assert "butler_case_status" not in stored.metadata
+
+    board = await project_reads.client.get("/api/v1/butler/board", headers=AUTH)
+    assert board.status_code == 200, board.text
+    cards = {item["session_id"]: item for item in board.json()["items"]}
+    assert cards[blocked.id]["butler_case"] == {
+        "id": open_case.id,
+        "status": "needs_attention",
+        "session_id": investigation.id,
+        "updated_at": cards[blocked.id]["butler_case"]["updated_at"],
+    }
+    assert cards[repaired.id]["butler_case"]["status"] == "resolved"
+    assert cards[dropped.id]["butler_case"] is None
+    assert cards[plain.id]["butler_case"] is None
+
+    # A resolved case stops showing on its goal after a day; open ones stay.
+    async with store.database.session() as database:
+        later = await cases_for_goal_chats(
+            database,
+            [blocked.id, repaired.id],
+            [project.id],
+            now=resolved.updated_at + timedelta(hours=25),
+        )
+    assert set(later) == {blocked.id}
+    assert later[blocked.id]["status"] == "needs_attention"
+    assert utc_now() - resolved.updated_at < timedelta(hours=1)

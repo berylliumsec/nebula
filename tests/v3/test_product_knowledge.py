@@ -57,6 +57,17 @@ def test_product_help_explains_adding_a_claude_harness(monkeypatch):
     assert "managed approvals" in text
 
 
+def test_product_help_explains_butler_check_stage_labels(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Butler check stage label Uncertain Needs you Investigating Resolved"
+    )
+    text = "\n".join(str(item["text"]) for item in matches).lower()
+    assert "butler stage labels" in text
+    assert "core could not confirm the repair" in text
+    assert "open butler check" in text
+
+
 def test_product_help_explains_never_permission_bypass(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

@@ -1,3 +1,4 @@
+import type { ButlerCaseStatus } from "../butlerStage";
 export type Identifier = string;
 
 export type ResourceKind =
@@ -2353,6 +2354,10 @@ export interface ChatSessionSummary {
   isButlerThread?: boolean;
   /** Core records chats created by Butler separately from ordinary conversations. */
   isButlerInitiated?: boolean;
+  /** Set on a chat Butler opened to investigate one recovery case. */
+  butlerRecoveryCaseId?: Identifier;
+  /** That case's current status, which Core reads when it lists the chat. */
+  butlerCaseStatus?: ButlerCaseStatus;
   pendingRuntimeSwitch?: PendingRuntimeSwitch;
   assistantConfig?: ChatAssistantConfig;
   planningEnabled?: boolean;

@@ -211,6 +211,7 @@ import {
   type DiagnosticStatus,
 } from "../diagnostics";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { parseButlerCaseStatus } from "../butlerStage";
 
 type JsonObject = Record<string, unknown>;
 
@@ -3554,6 +3555,9 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     isControlAssistant: value.metadata?.control_assistant === true,
     isButlerThread: value.metadata?.butler_thread === true,
     isButlerInitiated: value.metadata?.butler_initiated === true,
+    butlerRecoveryCaseId: typeof value.metadata?.butler_recovery_case_id === "string" && value.metadata.butler_recovery_case_id
+      ? value.metadata.butler_recovery_case_id : undefined,
+    butlerCaseStatus: parseButlerCaseStatus(value.metadata?.butler_case_status),
     assistantConfig,
     pendingRuntimeSwitch: mapPendingRuntimeSwitch(value.metadata?.pending_runtime_switch),
     planningEnabled: assistantConfig?.planningEnabled ?? value.metadata?.planning_enabled === true,

@@ -1,4 +1,5 @@
 import type { ApiClient } from "./client";
+import { parseButlerCaseStatus, type ButlerCaseStatus } from "../butlerStage";
 
 export type ButlerBoardState = "waiting" | "working" | "failed" | "idle";
 
@@ -47,6 +48,8 @@ export interface ButlerBoardItem {
   priority?: "high";
   /** Set when a chat hold covers this chat; it shows under Held. */
   hold?: BoardChatHold;
+  /** Butler's newest open (or freshly resolved) recovery case about this chat. */
+  butlerCase?: { id: string; status: ButlerCaseStatus; sessionId?: string; updatedAt?: string };
 }
 
 export type ButlerBoardCounts = Record<ButlerBoardSection, number>;
@@ -88,6 +91,7 @@ interface WireItem {
   session_revision?: number | null;
   priority?: string | null;
   hold?: { id: string; batch_id?: string | null; reason: string; created_at: string } | null;
+  butler_case?: { id: string; status: string; session_id?: string | null; updated_at?: string | null } | null;
 }
 
 interface WireBoard {
@@ -147,7 +151,14 @@ function mapItem(item: WireItem): ButlerBoardItem {
       reason: item.hold.reason,
       createdAt: item.hold.created_at,
     } : undefined,
+    butlerCase: mapButlerCase(item.butler_case),
   };
+}
+
+function mapButlerCase(value: WireItem["butler_case"]): ButlerBoardItem["butlerCase"] {
+  const status = parseButlerCaseStatus(value?.status);
+  if (!value || !status) return undefined;
+  return { id: value.id, status, sessionId: value.session_id ?? undefined, updatedAt: value.updated_at ?? undefined };
 }
 
 export interface ButlerBoardQuery {
