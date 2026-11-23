@@ -193,6 +193,7 @@ jobs:
     needs: selection
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       RUN_SELECTED: ${{ needs.selection.result == 'success' && needs.selection.outputs.python != '[]' && contains(fromJSON(needs.selection.outputs.python_versions || '[]'), matrix.python-version) }}
     strategy:
@@ -296,7 +297,7 @@ jobs:
             timeout -k 5s 300s poetry run pytest -vv -o faulthandler_timeout=45 -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
           else
             poetry run pytest --collect-only -q "${targets[@]}"
-            poetry run -- python scripts/run_pytest_thread_guard.py -- -q -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
+            poetry run -- python scripts/run_pytest_thread_guard.py --max-seconds 1200 -- -q -o faulthandler_timeout=180 -W error::RuntimeWarning -W error::pytest.PytestUnraisableExceptionWarning "${targets[@]}"
           fi
       - name: Lint Nebula 3
         if: env.RUN_SELECTED == 'true'

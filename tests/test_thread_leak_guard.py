@@ -71,3 +71,42 @@ def test_session_hook_reports_leak_and_subprocess_exits_after_owner_cleanup(tmp_
     assert "Leaked non-daemon thread: synthetic-leak" in result.stdout
     assert (tmp_path / "result.xml").is_file()
     assert "stopping its owned process group" in result.stderr
+
+
+def test_max_seconds_stops_a_hung_test_and_keeps_its_stack(tmp_path):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    test = tmp_path / "test_synthetic_hang.py"
+    test.write_text(
+        "import threading\n"
+        "def test_hangs_forever():\n"
+        "    threading.Event().wait()\n"
+    )
+    repository = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_pytest_thread_guard.py",
+            "--max-seconds",
+            "4",
+            "--",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "-o",
+            "faulthandler_timeout=1",
+            str(test),
+        ],
+        cwd=repository,
+        env={**os.environ, "PYTHONPATH": str(repository)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "ran longer than 4s" in result.stderr
+    # pytest's faulthandler dumped the hung test's stack before the bound hit.
+    assert "test_hangs_forever" in result.stdout + result.stderr
