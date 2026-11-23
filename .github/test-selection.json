@@ -1,26 +1,30 @@
 {
-  "change_digest": "5758ad7299b1ea5a33781343f4d5f56a8485ff8ea58984af195b205e33ad1c9c",
-  "reviewed_by": "Claude: tool-slot starvation fix, focused Core selection",
-  "reason": "Control-plane built-ins (work_*, agent messages, notes.write, tool_catalog.search/load, goal.complete) skip the process and host tool pools via ToolSpec.uses_execution_capacity; other tools report tool_queued/tool_admitted and a queued ledger row while waiting, and a wait past NEBULA_TOOL_CAPACITY_WAIT_SECONDS (default 600) fails the call with CapacityReached before it runs. The new regression file proves the exempt tool runs with every slot held, the queued event and ledger state for the process and host pools, and the bounded wait. Existing capacity, tool-loop, catalog, agent-message and Work files cover the changed broker call sites and spec definitions.",
-  "exclusions": "No UI change: the live tool card still renders tool_started as running and ignores the new tool_queued/tool_admitted events; the durable queued step uses the existing activity-ledger queued status. No frontend, native or Playwright tests apply. The harness tool gateway does not use these pools. No full-suite approval.",
+  "change_digest": "a5ec4d02d5fb222fad27b319a9b08808adb4d37ed53b88f259b1d10f43540b19",
+  "reviewed_by": "Claude: goal provider auto-retry, focused backend selection",
+  "reason": "A running provider goal whose turn fails with a transient provider error (an overload or retryable status after the provider's own retries, a reply cut mid-stream, a torn or refused connection) now stays running once: Core marks the goal, notes the automatic retry in the failed turn's outcome note, and the idle-goal reconciler dispatches the continuation on a later pass. A second consecutive failure, non-transient errors, an operator pause and project holds pause or defer as before; a completed turn or an operator resume clears the mark. Providers type a cut stream (missing finish, torn transport after output) as ProviderStreamInterruptedError with error kind 'interrupted', keeping retryable=False and the same message. Selected: the new regression file plus the provider stream, robustness and leftover suites, goal lifecycle, turn outcome history, restart recovery, goal revision races, orphan recovery and hook turn-end suites that exercise the touched settle, reconcile and outcome paths.",
+  "exclusions": "No UI, frontend or native change: the note reuses the existing turn-outcome message rendering, so frontend, native and Playwright layers are empty. Harness goal turns settle through a different path and are unchanged. No new operator setting, so the settings assistant catalog is unchanged. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 116,
+    "python": 438,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_tool_capacity_starvation.py",
-    "tests/v3/test_chat_runtime_capacity.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_chat_agent_messages.py",
-    "tests/v3/test_work.py"
+    "tests/v3/test_goal_provider_auto_retry.py",
+    "tests/v3/test_providers.py",
+    "tests/v3/test_openai_compatible_robustness.py",
+    "tests/v3/test_provider_leftovers.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_turn_outcome_history.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_goal_revision_races.py",
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_native_hook_turn_ends.py"
   ],
   "frontend": [],
   "native": [],

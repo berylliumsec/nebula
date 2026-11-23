@@ -24,6 +24,7 @@ from nebula.v3.providers import (
     ProviderError,
     ProviderContextLengthError,
     ProviderOverloadedError,
+    ProviderStreamInterruptedError,
     ProviderConfig,
     ProviderFlavor,
     ProviderKind,
@@ -2861,6 +2862,8 @@ def test_stream_without_a_terminal_frame_is_not_a_clean_completion():
     ]
     assert "ended before" in (events[-1].error or "")
     assert events[-1].retryable is False
+    # Typed as a cut reply, so a running goal can retry it with a new turn.
+    assert isinstance(events[-1].provider_error(), ProviderStreamInterruptedError)
 
     # Either terminal marker makes a complete reply; truncation is reported.
     truncated = (
@@ -3042,6 +3045,7 @@ async def test_transport_failures_become_provider_errors_with_a_reason():
         "without sending complete message body"
     )
     assert events[-1].retryable is False
+    assert events[-1].error_kind == "interrupted"
 
 
 async def test_stream_of_only_keepalives_ends_after_the_request_timeout(monkeypatch):

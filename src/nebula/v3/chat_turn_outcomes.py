@@ -18,6 +18,7 @@ from typing import Any
 
 from .domain import ChatMessage, ChatTurn, ChatTurnStatus
 from .providers import ModelMessage
+from .recovery_markers import TURN_GOAL_AUTO_RETRY
 from .redaction import redact_text
 from .tool_activity import step_brief
 
@@ -33,6 +34,10 @@ _ARGUMENTS_CHARS = 160
 _SUMMARY_CHARS = 160
 _NOTE_CHARS = 6_000
 _OPERATOR_STOP = "response stopped"
+AUTO_RETRY_NOTE = (
+    "Core is retrying the goal automatically because the provider failure "
+    "looked transient. If the next response fails too, the goal pauses."
+)
 
 
 def is_turn_outcome(message: ChatMessage) -> bool:
@@ -91,6 +96,8 @@ def turn_outcome_text(
                 f"Response failed: {reason or 'the response could not be completed'}"
             )
         ]
+    if isinstance(turn.request_snapshot.get(TURN_GOAL_AUTO_RETRY), dict):
+        lines.append(AUTO_RETRY_NOTE)
     resolution = turn.request_snapshot.get("completion_hook_resolution")
     if isinstance(resolution, dict):
         candidate = _clip(str(resolution.get("candidate") or ""), 3_500)
@@ -144,6 +151,9 @@ def turn_outcome_metadata(
         "chat_turn_id": turn.id,
         "turn_status": turn.status.value,
         "interrupted": True,
+        "automatic_goal_retry": isinstance(
+            turn.request_snapshot.get(TURN_GOAL_AUTO_RETRY), dict
+        ),
         "tool_call_ids": [
             str(item["tool_call_id"])
             for item in (turn.tool_history if history is None else history)

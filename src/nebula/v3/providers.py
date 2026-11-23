@@ -115,6 +115,15 @@ class ProviderOverloadedError(ProviderError):
         self.retry_after = retry_after
 
 
+class ProviderStreamInterruptedError(ProviderError):
+    """A reply cut off after output began: a torn connection or a missing end.
+
+    The stream is never replayed underneath the partial answer, so it is not
+    retryable at the request level. A caller that can start a fresh turn
+    (a running goal's continuation) may treat it as transient.
+    """
+
+
 class ProviderResponseError(ProviderError):
     """The provider completed a request without the required response shape."""
 
@@ -171,6 +180,7 @@ StreamErrorKind = Literal[
     "tool_call",
     "malformed_tool_call",
     "response",
+    "interrupted",
 ]
 """Which typed provider failure ended a stream."""
 
@@ -183,6 +193,7 @@ _STREAM_ERROR_TYPES: dict[StreamErrorKind, type[ProviderError]] = {
     "tool_call": ProviderToolCallError,
     "malformed_tool_call": ProviderMalformedToolCallError,
     "response": ProviderResponseError,
+    "interrupted": ProviderStreamInterruptedError,
 }
 
 
@@ -1759,12 +1770,15 @@ async def _stream_with_retry(
             )
             # Before any output a timed-out or torn stream is resent like a
             # transient status; after output it never is.
-            if (
-                started
-                or operation not in _MODEL_INFERENCE_OPERATIONS
-                or not isinstance(exc, _RESENDABLE_TRANSPORT_ERRORS)
+            if operation not in _MODEL_INFERENCE_OPERATIONS or not isinstance(
+                exc, _RESENDABLE_TRANSPORT_ERRORS
             ):
                 raise _transport_failure(exc) from exc
+            if started:
+                # Named as a cut reply, so a goal can start a fresh turn.
+                raise ProviderStreamInterruptedError(
+                    str(_transport_failure(exc))
+                ) from exc
             interrupted = _interrupted_transport(exc)
             if attempt >= policy.attempts:
                 raise (
@@ -5097,7 +5111,7 @@ async def _stream_openai_compatible(
             # Chat Completions ends every reply with a finish_reason and then
             # [DONE]; a body that closes cleanly without either was cut short
             # (a proxy idle timeout) and must not be stored as a whole answer.
-            raise ProviderError(
+            raise ProviderStreamInterruptedError(
                 "provider stream ended before the reply completed: no finish "
                 "reason or [DONE] frame arrived"
             )
@@ -6948,6 +6962,7 @@ __all__ = [
     "ProviderContextLengthError",
     "ProviderOverloadedError",
     "ProviderResponseError",
+    "ProviderStreamInterruptedError",
     "ProviderFlavor",
     "ProviderHealth",
     "ProviderKind",
