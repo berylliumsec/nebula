@@ -113,6 +113,12 @@ from .runtime_coordination import LeaseLost
 from .research_results import HANDLE as RESEARCH_RESULT_HANDLE
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .butler_reporting_tools import REPORT_TOOL_NAMES, report_components
+from .chat_goal_addenda import (
+    SEEN_KEY as GOAL_ADDENDA_SEEN_KEY,
+    GoalAddenda,
+    notes_progress,
+    prepared_marker,
+)
 from .chat_goal_tools import (
     GOAL_COMPLETE_TOOL_NAME,
     GOAL_TOOL_NAMES,
@@ -2502,8 +2508,10 @@ def _goal_instructions(goal: ChatGoal) -> str:
             },
             ensure_ascii=False,
         )
-        + "\nCore reports the goal's current step and remaining budgets with "
-        "the latest message."
+        + "\nCore reports the goal's current step, remaining budgets and "
+        "supervisor notes with the latest message. If the supervisor changes "
+        "the goal while you work, Core delivers the change as a goal.read "
+        "result before your next step; follow the newest guidance."
     )
 
 
@@ -2525,6 +2533,11 @@ def _goal_progress_block(goal: ChatGoal) -> str:
                     goal.token_budget - goal.usage.total_tokens
                     if goal.token_budget is not None
                     else None
+                ),
+                **(
+                    {"supervisor_notes": notes}
+                    if (notes := notes_progress(goal)) is not None
+                    else {}
                 ),
             },
             ensure_ascii=False,
@@ -3214,6 +3227,8 @@ class ChatService:
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self.provider_usage_observer = provider_usage_observer
         self.turn_ledger = ChatTurnLedger(store.database)
+        # Supervisor changes a running goal's turn hears before its next step.
+        self.goal_addenda = GoalAddenda(store, self.turn_ledger.history)
         # Sealed reasoning parts by id; they are write-once, so a copy stays
         # valid. Recovery passes read turns off the event loop too.
         self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
@@ -7700,6 +7715,7 @@ class ChatService:
                             engagement_id=goal.engagement_id,
                             workspace=Path(tool_components.workspace),
                             scope=tool_components.scope,
+                            include_read=True,
                         ),
                     )
                 if tool_components is not None:
@@ -8320,6 +8336,11 @@ class ChatService:
                     "control_assistant": settings_only,
                     "butler_recovery_case_id": request._butler_recovery_case_id,
                     "available_tool_names": sorted(tool_components.specs),
+                    **(
+                        {GOAL_ADDENDA_SEEN_KEY: prepared_marker(goal)}
+                        if goal is not None
+                        else {}
+                    ),
                     "planning_enabled": bool(request.planning_enabled),
                     "plan_behavior": "advisory",
                     "allowed_tool_names": request.allowed_tool_names,
@@ -10452,7 +10473,7 @@ class ChatService:
                 budgeted_specs = [
                     spec
                     for spec in components.specs.values()
-                    if spec.name == GOAL_COMPLETE_TOOL_NAME
+                    if spec.name in GOAL_TOOL_NAMES
                     or (
                         spec.budget_class == "artifact_query"
                         and (
@@ -10527,6 +10548,23 @@ class ChatService:
                             )
                             delivered_events.extend(events)
                         (await call_async(delivery.commit))
+                    # What the goal's supervisor changed since the turn was
+                    # prepared or last told, as a goal.read result. The step
+                    # records what it delivered, so it arrives once.
+                    addendum = await self.goal_addenda.routing_delivery(
+                        turn, available_names
+                    )
+                    if addendum is not None:
+                        name, output, summary, marker = addendum
+                        turn, events = await self._subagent_delivery_step(
+                            turn,
+                            components,
+                            name,
+                            output,
+                            summary,
+                            marker={GOAL_ADDENDA_SEEN_KEY: marker},
+                        )
+                        delivered_events.extend(events)
                     for delivered in delivered_events:
                         yield delivered
                     routing = prepared.model_request.model_copy(
@@ -14136,9 +14174,12 @@ class ChatService:
         name: str,
         output: dict[str, Any],
         summary: str,
+        *,
+        marker: dict[str, Any] | None = None,
     ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
         """Record a tool step Core ran on the model's behalf to deliver
-        subagent messages or reports, replayed like any other step."""
+        subagent messages or reports, or a goal supervisor's addendum,
+        replayed like any other step. ``marker`` is saved on the step."""
 
         spec = components.specs[name]
         step = turn.next_step
@@ -14162,6 +14203,7 @@ class ChatService:
             "trusted_result": True,
             "result_summary": summary,
             **({"display_name": spec.display_name} if spec.display_name else {}),
+            **(marker or {}),
         }
         turn = await self._save_tool_step(turn, entry)
         common = {
