@@ -379,6 +379,8 @@ _GOAL_CAPACITY_RECOVERY_INSTRUCTION = (
     "the exact hold. Otherwise continue one safe next step toward the goal."
 )
 _MAX_GOAL_CAPACITY_RETRIES = 1
+# Shutdown re-reads a harness turn this many times when its own task keeps saving it.
+_SHUTDOWN_INTERRUPT_ATTEMPTS = 3
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 # A gateway call answers this long before the harness's own tool timeout, so
@@ -9962,6 +9964,44 @@ class HarnessRuntimeService:
             )
         )
 
+    async def _interrupt_turn_for_shutdown(self, turn_id: str) -> HarnessTurn | None:
+        """Mark a still-open turn interrupted; return it, or None if it settled.
+
+        The turn's own finishing task can save it between our read and our
+        write. A lost write is re-read: a turn that settled meanwhile keeps its
+        own outcome, and one still open is retried on its fresh revision. A
+        conflict must not escape, or shutdown would skip cancelling the
+        remaining chat and mission tasks below.
+        """
+        open_statuses = {HarnessTurnStatus.RUNNING, HarnessTurnStatus.WAITING_APPROVAL}
+        for _attempt in range(_SHUTDOWN_INTERRUPT_ATTEMPTS):
+            turn = await self.store.get(HarnessTurn, turn_id)
+            if turn.status not in open_statuses:
+                return None
+            try:
+                return await self.store.update(
+                    HarnessTurn,
+                    turn.id,
+                    {
+                        "status": HarnessTurnStatus.INTERRUPTED,
+                        "completed_at": utc_now(),
+                        "error": "Nebula Core shut down during the turn",
+                    },
+                    expected_revision=turn.revision,
+                )
+            except RevisionConflict:  # diagnostic-expected: the turn's own task saved it first; re-read and keep its outcome or retry on the fresh revision
+                continue
+        record_diagnostic(
+            "warning",
+            "harnesses",
+            "harnesses.shutdown.turn_interrupt_contended",
+            "Shutdown could not mark a harness turn interrupted; it kept changing.",
+            outcome="skipped",
+            stage="shutdown",
+            metadata={"turn_id": turn_id},
+        )
+        return None
+
     async def shutdown(self) -> None:
         self._closed = True
         active = list(self._active.items())
@@ -9979,23 +10019,8 @@ class HarnessRuntimeService:
                     stage="harnesses",
                 )
                 pass
-            turn = await self.store.get(HarnessTurn, item.turn_id)
-            if turn.status in {
-                HarnessTurnStatus.RUNNING,
-                HarnessTurnStatus.WAITING_APPROVAL,
-            }:
-                (
-                    await self.store.update(
-                        HarnessTurn,
-                        turn.id,
-                        {
-                            "status": HarnessTurnStatus.INTERRUPTED,
-                            "completed_at": utc_now(),
-                            "error": "Nebula Core shut down during the turn",
-                        },
-                        expected_revision=turn.revision,
-                    )
-                )
+            turn = await self._interrupt_turn_for_shutdown(item.turn_id)
+            if turn is not None:
                 (
                     await self._expire_ended_turn_approvals(
                         turn,
