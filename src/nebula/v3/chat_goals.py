@@ -24,6 +24,7 @@ from .chat_agent_messages import resolve_agent_messaging_choice
 from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
+    GOAL_COMPLETION_PROPOSAL_KEY,
     DEFAULT_GOAL_RESUME_INSTRUCTION,
     GOAL_START_INSTRUCTION,
     ChatBackend,
@@ -91,6 +92,9 @@ class GoalCreate(BaseModel):
     time_budget_seconds: int | None = Field(default=None, ge=30 * 60)
     step_budget: int | None = Field(default=None, ge=1)
     child_budget: int | None = Field(default=None, ge=0, le=CHAT_GOAL_CHILD_LIMIT)
+    # Hold an agent's own completion for operator or Butler closure review.
+    # An update that leaves it out keeps the goal's current choice.
+    completion_requires_review: bool = False
 
     @field_validator("resume_instruction")
     @classmethod
@@ -383,6 +387,7 @@ class ChatGoalService:
                 time_budget_seconds=body.time_budget_seconds,
                 step_budget=body.step_budget,
                 child_budget=body.child_budget,
+                completion_requires_review=body.completion_requires_review,
             )
         )
 
@@ -511,6 +516,7 @@ class ChatGoalService:
                     time_budget_seconds=body.time_budget_seconds,
                     step_budget=body.step_budget,
                     child_budget=body.child_budget,
+                    completion_requires_review=body.completion_requires_review,
                     metadata=recovery_metadata,
                 )
                 (await transaction.add_all([session, goal]))
@@ -617,6 +623,7 @@ class ChatGoalService:
             time_budget_seconds=body.time_budget_seconds,
             step_budget=body.step_budget,
             child_budget=body.child_budget,
+            completion_requires_review=body.completion_requires_review,
         )
         return session, goal
 
@@ -819,6 +826,7 @@ class ChatGoalService:
             time_budget_seconds=min(body.max_time_seconds, remaining_time),
             step_budget=min(body.max_steps, remaining_steps),
             child_budget=child_budget,
+            completion_requires_review=source.completion_requires_review,
             tools_enabled=bool(selected.get("tools_enabled")),
             planning_enabled=True,
             mcp_server_ids=mcp_ids,
@@ -1062,8 +1070,14 @@ class ChatGoalService:
                         "the operator paused this goal during project recovery"
                     )
             # A resume starts a new failure streak: its next transient
-            # provider failure is retried automatically again.
-            cleared = {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER, GOAL_PROVIDER_RETRY}
+            # provider failure is retried automatically again. Resuming a
+            # goal held for closure review sends its completion back.
+            cleared = {
+                OPERATOR_RECOVERY_PAUSE,
+                HOLD_MARKER,
+                GOAL_PROVIDER_RETRY,
+                GOAL_COMPLETION_PROPOSAL_KEY,
+            }
             if not allow_pending_recovery:
                 # Only the operator's resume starts a new callback-stall
                 # streak; Core's own resume after a stall keeps the mark so
@@ -1074,6 +1088,13 @@ class ChatGoalService:
                     key: value
                     for key, value in goal.metadata.items()
                     if key not in cleared
+                }
+            if goal.awaiting_completion_review:
+                changes["metadata"]["completion_review"] = {
+                    "outcome": "sent_back",
+                    "reason": body.reason,
+                    "proposal": goal.metadata[GOAL_COMPLETION_PROPOSAL_KEY],
+                    "reviewed_at": now.isoformat(),
                 }
         elif body.action == "cancel":
             if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
@@ -1104,21 +1125,51 @@ class ChatGoalService:
                 "execution_claimed_at": None,
             }
         else:
-            if goal.status != ChatGoalStatus.RUNNING:
-                raise ConflictError("only a running goal can be completed")
-            if not body.completion_summary or not body.completion_evidence:
+            proposal = (
+                goal.metadata[GOAL_COMPLETION_PROPOSAL_KEY]
+                if goal.awaiting_completion_review
+                else None
+            )
+            if goal.status != ChatGoalStatus.RUNNING and proposal is None:
+                raise ConflictError(
+                    "only a running goal or one awaiting closure review can be completed"
+                )
+            # Approving a held completion accepts the agent's proposal unless
+            # the reviewer supplies their own summary or evidence.
+            summary = body.completion_summary or (
+                proposal.get("completion_summary") if proposal else None
+            )
+            evidence = body.completion_evidence or (
+                list(proposal.get("completion_evidence") or []) if proposal else []
+            )
+            if not summary or not evidence:
                 raise HTTPException(422, "completion requires a summary and evidence")
             changes = {
                 "status": ChatGoalStatus.COMPLETED,
                 "completed_at": now,
-                "completion_summary": body.completion_summary,
-                "completion_evidence": body.completion_evidence,
+                "blocked_reason": None,
+                "completion_summary": summary,
+                "completion_evidence": evidence,
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
                 "execution_owner_id": None,
                 "execution_claim_id": None,
                 "execution_claimed_at": None,
             }
+            if proposal is not None:
+                changes["metadata"] = {
+                    **{
+                        key: value
+                        for key, value in goal.metadata.items()
+                        if key != GOAL_COMPLETION_PROPOSAL_KEY
+                    },
+                    "completion_review": {
+                        "outcome": "approved",
+                        "reason": body.reason,
+                        "proposal": proposal,
+                        "reviewed_at": now.isoformat(),
+                    },
+                }
         # Children are read before the unit of work opens and written inside
         # it, after the parent's guarded update: a revision conflict on either
         # side rolls the whole stop back instead of leaving children changed
@@ -1256,6 +1307,11 @@ class ChatGoalService:
                     "time_budget_seconds": body.time_budget_seconds,
                     "step_budget": body.step_budget,
                     "child_budget": body.child_budget,
+                    **(
+                        {"completion_requires_review": body.completion_requires_review}
+                        if "completion_requires_review" in body.model_fields_set
+                        else {}
+                    ),
                 },
                 expected_revision=goal.revision,
             )
@@ -1380,6 +1436,7 @@ class ChatGoalService:
                 time_budget_seconds=body.time_budget_seconds,
                 step_budget=body.step_budget,
                 child_budget=0,
+                completion_requires_review=body.completion_requires_review,
                 parent_goal_id=parent.id,
                 skill_snapshots=skill_entries,
                 status=ChatGoalStatus.DRAFT,
@@ -1519,6 +1576,18 @@ class ChatGoalService:
         ]
 
 
+def sent_back_instruction(resume_instruction: str, reason: str | None) -> str:
+    """The resume turn of a goal whose held completion was sent back."""
+
+    feedback = " ".join((reason or "").split())
+    return (
+        "Closure review sent this goal back instead of completing it."
+        + (f" Reviewer feedback: {feedback}" if feedback else "")
+        + " Address the review before proposing completion again.\n\n"
+        + resume_instruction
+    )
+
+
 def goals_router(
     store: NebulaStore,
     *,
@@ -1568,11 +1637,17 @@ def goals_router(
 
     @router.post("/chat/sessions/{session_id}/goal/actions", response_model=ChatGoal)
     async def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:
+        sent_back = (
+            body.action == "resume"
+            and (await service.get(session_id)).awaiting_completion_review
+        )
         updated = await service.write(session_id, body)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
                 GOAL_START_INSTRUCTION
                 if body.action == "start"
+                else sent_back_instruction(updated.resume_instruction, body.reason)
+                if sent_back
                 else updated.resume_instruction
             )
             await goal_dispatcher(session_id, instruction)
