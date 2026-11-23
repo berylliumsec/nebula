@@ -216,6 +216,7 @@ from .mcp import (
     resolve_mcp_profiles,
 )
 from .tool_results import (
+    MCP_RESULT_NOTE,
     ToolOutputService,
     ToolResultReceipt,
     WorkspaceOutputService,
@@ -17311,8 +17312,8 @@ class HarnessRuntimeService:
                                 and profile.capabilities.instructions
                                 else ""
                             )
-                            + "\n\nResults are captured by Nebula and returned "
-                            "as nebula.tool-result/v2 receipts; use tool_output.search to inspect them."
+                            + "\n\n"
+                            + MCP_RESULT_NOTE
                         )[:10_000],
                         "inputSchema": tool.input_schema,
                         "annotations": {

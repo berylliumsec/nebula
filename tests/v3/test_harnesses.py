@@ -2766,7 +2766,13 @@ async def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tm
 
         receipt = response["structuredContent"]
         assert receipt["schema"] == "nebula.tool-result/v2"
-        assert "443/tcp" not in json.dumps(receipt)
+        # MCP text arrives as a redacted preview, as a command's stdout does;
+        # the image block and the structured content stay artifact-only.
+        [preview] = receipt["output_preview"]
+        assert preview["kind"] == "mcp_text"
+        assert preview["text"].startswith("PORT 443/tcp open https\n")
+        assert "AAEC" not in json.dumps(receipt)
+        assert "open_ports" not in json.dumps(receipt)
         assert response["isError"] is False
         call = await store.get(ToolCall, receipt["tool_call_id"])
         assert call.status == ToolCallStatus.COMPLETE

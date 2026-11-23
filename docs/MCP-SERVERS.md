@@ -292,6 +292,21 @@ told which server each pick comes from, and it gets the description of every
 server behind a pick or ranked by Jev, as JSON data. Handshake instructions are
 never sent to the model.
 
+### Results and timeouts
+
+Every MCP result is saved as artifacts. A text result also reaches the model
+inline as a redacted `output_preview`, with the same size limits as a
+command's output: small text in full, larger text as its head and tail. When
+structured content carries `stdout`, `stderr` or `output` text that does not
+fit, the preview shows those fields instead of the JSON. Images and other
+binary content are never previewed.
+
+When a call runs past `tool_timeout_seconds`, or its turn is stopped, Nebula
+sends the server `notifications/cancelled` for that request and gives it about
+1.5 seconds to wind down. Then it closes the connection: a stdio server gets
+end of input before it is stopped. A server that frees what a call holds, such
+as a lock or lease, only on cancellation can now free it right away.
+
 ## Fields that are not imported
 
 These are recognised and skipped with a warning in the preview:

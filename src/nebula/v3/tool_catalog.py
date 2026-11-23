@@ -33,6 +33,7 @@ from pydantic import Field
 from .diagnostics import record_caught_exception
 from .domain import McpServerProfile, NebulaModel, RiskClass, ScopePolicy
 from .runtime_platform import RuntimeToolComponents
+from .tool_results import MCP_RESULT_NOTE
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
 
 CATALOG_SEARCH = "tool_catalog.search"
@@ -175,10 +176,7 @@ def _directory_description(spec: ToolSpec) -> str:
 
     text = " ".join(spec.description.split())
     if spec.source_id and spec.source_id.startswith("mcp:"):
-        text = text.removesuffix(
-            "Results are captured as artifacts and returned as a "
-            "nebula.tool-result/v2 receipt."
-        ).strip()
+        text = text.removesuffix(MCP_RESULT_NOTE).strip()
     if len(text) <= MAX_DIRECTORY_DESCRIPTION_CHARS:
         return text
     return text[: MAX_DIRECTORY_DESCRIPTION_CHARS - 1].rsplit(" ", 1)[0] + "…"

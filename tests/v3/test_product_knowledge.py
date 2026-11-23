@@ -1323,3 +1323,15 @@ def test_product_help_explains_butler_proposed_goal_chats(monkeypatch):
     text = "\n".join(str(item["text"]) for item in matches)
     assert "nebula.work.propose_goal_chat" in text
     assert "nothing runs until the operator" in " ".join(text.split())
+
+
+def test_product_search_explains_mcp_results_and_timeouts(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "What happens when an MCP tool call times out, and does the model see its output?"
+    )
+    assert any(
+        "notifications/cancelled" in str(item["text"])
+        and "output_preview" in str(item["text"])
+        for item in matches
+    )

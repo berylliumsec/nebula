@@ -145,6 +145,21 @@ class ToolOutputOmission(BaseModel):
     byte_count: int = Field(ge=0)
 
 
+# The note every MCP tool description ends with, so the model knows its
+# text output arrives inline. The tool directory strips it again.
+MCP_RESULT_NOTE = (
+    "Results are captured as artifacts and returned as a nebula.tool-result/v2 "
+    "receipt. Its redacted output_preview carries the tool's text output when "
+    "present; a partial one shows only the head and tail. Read anything else "
+    "with tool_output.read."
+)
+
+# ``mcp_text`` previews an MCP server's plain-text content: a text block, or
+# an ``output`` string its structured content carries. Structured ``stdout``
+# and ``stderr`` strings keep their stream names.
+PreviewKind: TypeAlias = Literal["stdout", "stderr", "mcp_text"]
+
+
 class ToolOutputPreview(BaseModel):
     """A redacted stream preview. The artifact remains authoritative.
 
@@ -155,7 +170,7 @@ class ToolOutputPreview(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     artifact_id: str
-    kind: Literal["stdout", "stderr"]
+    kind: PreviewKind
     text: str
     partial: bool = False
     total_lines: int | None = Field(default=None, ge=0)
@@ -330,20 +345,35 @@ def artifact_ref(
     )
 
 
+def _previewable(ref: ToolArtifactRef) -> bool:
+    """A process stream, or MCP content stored as plain text (never media)."""
+
+    return ref.kind in {"stdout", "stderr"} or (
+        ref.kind == "mcp_content" and ref.media_type == "text/plain"
+    )
+
+
+def _preview_kind(artifact: Artifact, ref: ToolArtifactRef) -> PreviewKind:
+    if ref.kind in {"stdout", "stderr"}:
+        return cast(PreviewKind, ref.kind)
+    stream = artifact.metadata.get("preview_kind")
+    return cast(PreviewKind, stream) if stream in {"stdout", "stderr"} else "mcp_text"
+
+
 def _preview_candidates(
     streams: list[tuple[Artifact, ToolArtifactRef]],
 ) -> list[tuple[Artifact, ToolArtifactRef]]:
-    """Nonempty stdout/stderr streams, or none when any cannot be previewed.
+    """Nonempty text streams, or none when any cannot be previewed.
 
-    A truncated, unsearchable or not fully observed stream keeps every stream
+    Process stdout/stderr and plain-text MCP content qualify. A truncated,
+    unsearchable or not fully observed stream keeps every stream
     artifact-only, so a preview is never mistaken for the whole result.
     """
 
     candidates = [
         (artifact, ref)
         for artifact, ref in streams
-        if ref.kind in {"stdout", "stderr"}
-        and (ref.byte_count or ref.observed_byte_count)
+        if _previewable(ref) and (ref.byte_count or ref.observed_byte_count)
     ]
     if (
         not candidates
@@ -386,7 +416,7 @@ def small_output_preview(
             previews.append(
                 ToolOutputPreview(
                     artifact_id=ref.artifact_id,
-                    kind=cast(Literal["stdout", "stderr"], ref.kind),
+                    kind=_preview_kind(artifact, ref),
                     text=safe,
                 )
             )
@@ -456,7 +486,7 @@ class _StreamSample:
     """Both ends of one stream, with the line arithmetic a preview needs."""
 
     artifact_id: str
-    kind: Literal["stdout", "stderr"]
+    kind: PreviewKind
     size: int
     head: bytes
     tail: bytes
@@ -488,7 +518,7 @@ def _sample_stream(
     last = tail or head
     return _StreamSample(
         artifact_id=ref.artifact_id,
-        kind=cast(Literal["stdout", "stderr"], ref.kind),
+        kind=_preview_kind(artifact, ref),
         size=size,
         head=head,
         tail=tail,
@@ -2032,6 +2062,7 @@ def sanitize_model_history_result(
 
 
 __all__ = [
+    "MCP_RESULT_NOTE",
     "DEFAULT_TOOL_OUTPUT_READ_LINES",
     "MAX_CAPTURE_BYTES",
     "MAX_EXCERPT_BYTES",
