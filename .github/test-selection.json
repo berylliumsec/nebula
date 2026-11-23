@@ -1,33 +1,36 @@
 {
-  "change_digest": "a2267aef75496183d22d1b98b7c48473ba8127dfbde131ccc04654913a20c864",
-  "reviewed_by": "Codex: E2E fixture and CI refactor, inventory comparison and focused selection",
-  "reason": "Extract existing authentication, first-user, and runtime settings journeys without removing cases. Verify 40 moved cases across eight profiles plus five existing lifecycle checks, resource ownership unit tests, and CI catalog/argument tests. Build production UI. Digest covers the committed refactor and empty root package-lock.json; unrelated uncommitted ui/.env.example edits are excluded. First-user empty knowledge assertion now uses the project-owned route before upload; the inherited global route returned 404. The first-user provider declares its synthetic context window through the UI instead of depending on unknown-model fallback capacity; runtime-settings retains unknown-limit coverage. Follow-up CI trace review: runtime-settings explicitly owns/selects a project and waits for workspace readiness before postreload settings interaction. Reverify its 16 cases across eight profiles; retain prior reviewed selections for the full refactor diff.",
-  "exclusions": "No production feature or native-shell change. Unrelated journeys are retained but not executed. No full-suite approval. Catalog inventory comparison preserves existing project/title registrations. Operator local environment files are outside this task. The committed root package-lock.json has an empty packages map, introduces no dependencies, and needs no additional runtime tests.",
+  "change_digest": "0238d047c9f7a1c4e745930f95e091549226ba9bd5ef87c8f9943af017350705",
+  "reviewed_by": "Claude: command-runtime-unavailable notice, focused harness/subagent/importer selection",
+  "reason": "Harness sessions in a Docker-mode project with no prepared command runtime silently lost run_command/process_io while metadata claimed command_runtime_enabled. Sessions now record command_runtime_unavailable with runtime_info detail, report command_runtime_enabled False, keep graph tools, record one warning diagnostic per session build, emit one warning notice per session on its first turn, tell the model in developer instructions, and roll over to a commands-capable session when the runtime is prepared or the project switches to Host mode. The subagent capability catalog returns unavailable_reason. The 2.x importer writes default_host_policy like new projects. Selected: the new and changed harness command-runtime tests plus tests whose fakes gained command_runtime_unavailable_detail, the importer and subagent catalog files, and harness turn lifecycle for the turn-start path that now emits the notice.",
+  "exclusions": "No UI change: the notice is a severity=warning harness notice, which harnessActivity already places in the transcript tier, so no frontend or Playwright selection. Native provider chats still raise AutomationRuntimeUnavailable unchanged. tests/v3/test_harnesses.py is selected by node id because test_knowledge_access_change_refreshes_fixed_gateway_catalog and test_browser_attachment_refreshes_catalog_without_replacing_native_thread already fail on origin/main 01852b9 (HarnessInstructionContextChanged) independent of this change. No settings change, so no settings catalog or assistant update. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
-  "python_node": true,
+  "python_node": false,
   "expected_tests": {
-    "python": 45,
-    "frontend": 5,
+    "python": 76,
+    "frontend": 0,
     "native": 0,
-    "playwright": 45
+    "playwright": 0
   },
   "python": [
-    "tests/test_playwright_impact.py"
+    "tests/v3/test_harnesses.py::test_harness_session_does_not_require_unprepared_optional_command_runtime",
+    "tests/v3/test_harnesses.py::test_unavailable_command_runtime_detail_tells_the_operator_how_to_fix_it",
+    "tests/v3/test_harnesses.py::test_prepared_command_runtime_replaces_a_session_that_had_no_commands",
+    "tests/v3/test_harnesses.py::test_switching_to_host_mode_clears_the_unavailable_commands_state",
+    "tests/v3/test_harnesses.py::test_tool_disabled_harness_session_has_no_native_or_command_runtime",
+    "tests/v3/test_harnesses.py::test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session",
+    "tests/v3/test_harnesses.py::test_existing_codex_session_forks_when_project_changes_to_host_mode",
+    "tests/v3/test_harnesses.py::test_bounded_docker_goal_chat_reauthorizes_in_new_host_session",
+    "tests/v3/test_harnesses.py::test_host_mode_freezes_native_shell_and_uses_linked_workspace",
+    "tests/v3/test_harnesses.py::test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session",
+    "tests/v3/test_harnesses.py::test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice",
+    "tests/v3/test_importer.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harness_turn_lifecycle.py"
   ],
-  "frontend": [
-    "ui/src/test/fixtureResources.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:authentication-recovery",
-    "area:first-user",
-    "area:runtime-settings",
-    "area:fixture-lifecycle"
-  ],
-  "checks": [
-    "desktop-ui-build"
-  ]
+  "playwright": []
 }

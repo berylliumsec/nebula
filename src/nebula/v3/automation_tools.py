@@ -991,6 +991,41 @@ class AutomationToolPlatform:
             await self.manager.project_policy(engagement_id, transaction=transaction)
         ).execution_mode
 
+    async def command_runtime_unavailable_detail(
+        self, engagement_id: str, error: BaseException | None = None
+    ) -> str:
+        """Operator-facing text for a session that has no command tools.
+
+        It names what is missing and the two ways to fix it, so a chat or
+        goal that cannot run commands says so instead of failing silently.
+        """
+
+        reason = ""
+        try:
+            reason = (
+                (await self.manager.runtime_info(engagement_id=engagement_id)).detail
+                or ""
+            ).strip()
+        except Exception as exc:
+            # The admission error below still explains the missing runtime.
+            record_caught_exception(
+                "automation",
+                "automation.command_runtime_detail_unavailable",
+                "Could not read the command runtime state for an unavailable-commands notice.",
+                exc,
+                stage="runtime.detail",
+                metadata={"project_id": engagement_id},
+            )
+        if not reason and error is not None:
+            reason = str(error).strip()
+        reason = (reason or "the command runtime is not prepared").rstrip(".")
+        return (
+            "Command tools (run_command, process_io) are unavailable in this "
+            f"session: {reason}. Prepare the runtime in Settings > Automation "
+            "runtime, or switch this project to Host mode in Project policy, "
+            "then send the next message."
+        )
+
     async def chat_components(
         self,
         *,
