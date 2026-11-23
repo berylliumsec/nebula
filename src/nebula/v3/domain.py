@@ -3796,17 +3796,20 @@ class ButlerGlobalState(Entity):
 
 
 class ButlerFocusRuntime(Entity):
-    """The model Butler's home session uses for one focus project.
+    """The model a Butler chat uses, shared so other projects can run Butler.
 
-    Butler's home sessions live in ``BUTLER_HOME_PROJECT``, which the focus
-    project's worker cannot read. This shared row (no project) tells that
-    worker which runtime Butler was given for the project, so its scheduled
-    and recovery checks can run there. See docs/design/butler-home-worker.md.
+    A project's worker reads only its own project, so it cannot see a Butler
+    chat stored elsewhere: in ``BUTLER_HOME_PROJECT`` or in another project.
+    This shared row (no project) carries that chat's runtime. ``focus_project``
+    is the project it is for, or ``"*"`` for the Nebula-wide default that any
+    Act project without its own Butler chat uses for its scheduled and
+    recovery checks. See docs/design/butler-home-worker.md.
     """
 
     entity_kind: ClassVar[str] = "butler_focus_runtimes"
     focus_project: str = Field(min_length=1, max_length=200)
-    home_session_id: str = Field(min_length=1, max_length=200)
+    source_project: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
     backend: ChatBackend
     profile_id: str = Field(min_length=1, max_length=200)
     model: str = Field(min_length=1, max_length=500)

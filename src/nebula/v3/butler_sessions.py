@@ -89,6 +89,10 @@ class ButlerSessionReservation(NebulaModel):
         return self
 
 
+# ``ButlerFocusRuntime.focus_project`` of the Nebula-wide default runtime.
+DEFAULT_RUNTIME_FOCUS = "*"
+
+
 def focus_runtime_id(project_id: str) -> str:
     return f"butler-focus-runtime:{project_id}"
 
@@ -96,11 +100,13 @@ def focus_runtime_id(project_id: str) -> str:
 async def record_focus_runtime(
     store: NebulaStore, session: ChatSession, focus: str
 ) -> None:
-    """Share a home session's runtime with its focus project's worker.
+    """Share a Butler chat's runtime with workers that cannot read it.
 
-    That worker cannot read Butler's home project, so without this row it
-    would find no Butler for the project and its scheduled and recovery checks
-    would stop before they start.
+    ``focus`` is the project a home session is about, or
+    ``DEFAULT_RUNTIME_FOCUS`` for a project's own Butler chat, which becomes
+    the runtime every Act project without a Butler chat uses for its
+    scheduled and recovery checks. Without it those checks stop before they
+    start, because a worker reads only its own project's chats.
     """
 
     try:
@@ -115,7 +121,8 @@ async def record_focus_runtime(
     harness = config["backend"] == ChatBackend.HARNESS.value
     values = {
         "focus_project": focus,
-        "home_session_id": session.id,
+        "source_project": session.engagement_id,
+        "session_id": session.id,
         "backend": ChatBackend(config["backend"]),
         "profile_id": profile_id,
         "model": model,
@@ -156,13 +163,16 @@ async def reserve_butler_session(
 ) -> ChatSession:
     """Return the active project Butler session, or commit exactly one new one.
 
-    A home session focused on a project also shares its runtime with that
-    project's worker (``record_focus_runtime``).
+    A home session focused on a project shares its runtime with that
+    project's worker, and a project's own Butler chat shares its runtime as
+    the Nebula-wide default (``record_focus_runtime``).
     """
 
     session = await _reserve_butler_session(store, harness_runtime, request)
     if request.focus is not None:
         (await record_focus_runtime(store, session, request.focus.project))
+    elif request.engagement_id != BUTLER_HOME_PROJECT:
+        (await record_focus_runtime(store, session, DEFAULT_RUNTIME_FOCUS))
     return session
 
 
