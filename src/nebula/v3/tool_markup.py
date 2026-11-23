@@ -400,9 +400,7 @@ def _recover_frames(
     return calls, "".join(pieces), unparsed
 
 
-def recover(text: str) -> MarkupRecovery:
-    """Read every complete native tool frame in ``text`` back into tool calls."""
-
+def _recover(text: str, *, tagged: bool) -> MarkupRecovery:
     found = dsml.recover(text)
     calls = [
         MarkupCall(name=call.name, arguments=call.arguments, markup="dsml")
@@ -412,10 +410,9 @@ def recover(text: str) -> MarkupRecovery:
     unparsed = found.unparsed_frames
     grammars: list[
         tuple[str, re.Pattern[str], Callable[[str], list[MarkupCall] | None]]
-    ] = [
-        (_GLM_OPEN, _GLM_FRAME, _parse_tool_call),
-        ("tool\u2581calls\u2581begin", _DS_FRAME, _parse_deepseek),
-    ]
+    ] = [("tool\u2581calls\u2581begin", _DS_FRAME, _parse_deepseek)]
+    if tagged:
+        grammars.insert(0, (_GLM_OPEN, _GLM_FRAME, _parse_tool_call))
     for marker, frames, parse in grammars:
         if marker not in remaining:
             continue
@@ -432,3 +429,41 @@ def recover(text: str) -> MarkupRecovery:
         text=remaining.strip() if calls else text,
         unparsed_frames=unparsed,
     )
+
+
+def recover(text: str) -> MarkupRecovery:
+    """Read every complete native tool frame in ``text`` back into tool calls."""
+
+    return _recover(text, tagged=True)
+
+
+def recover_reasoning(text: str) -> MarkupRecovery:
+    """Read complete DSML and DeepSeek special-token frames from reasoning.
+
+    DeepSeek V4 sometimes writes its call into the reasoning channel instead of
+    ``tool_calls``, leaving a reply with no answer and no call. Only the two
+    grammars that are never prose are read here: a thought may well draft or
+    discuss a GLM or Qwen ``<tool_call>`` tag without meaning to make the call.
+    """
+
+    return _recover(text, tagged=False)
+
+
+# What survives of a DSML frame when a route strips the protocol's special
+# tokens: bare closing tags in the order the frame closes them.
+_STRIPPED_CLOSE = re.compile(
+    r"</(?:[|\uff5c]DSML[|\uff5c]\s*)?(?:parameter|invoke|(?:tool_|function_)?calls)>"
+)
+
+
+def control_fragment(text: str) -> bool:
+    """Whether ``text`` holds DSML or DeepSeek tool markup Core could not read.
+
+    It is evidence for a diagnosis, never a call: a frame whose opening tags
+    were stripped cannot be read back into one.
+    """
+
+    if dsml.frame_start(text) is not None or _deepseek_start(text) is not None:
+        return True
+    closes = {match.group(0) for match in _STRIPPED_CLOSE.finditer(text)}
+    return len(closes) >= 2

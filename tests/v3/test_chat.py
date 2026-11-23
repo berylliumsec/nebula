@@ -892,6 +892,7 @@ async def test_provider_chat_recovers_from_reasoning_only_output_exhaustion(
                 "provider_request_id": None,
                 "http_status": None,
                 "upstream_provider": None,
+                "model": "model-a",
                 "reason": "output_limit",
                 "reasoning_characters": 48,
             }
@@ -967,6 +968,9 @@ async def test_provider_chat_recovers_from_reasoning_only_stop_with_more_room(
                 "content_characters": 0,
                 "finish_reason": "stop",
                 "provider_request_id": "reasoning-only-1",
+                "http_status": None,
+                "upstream_provider": None,
+                "model": "model-a",
                 "reason": "reasoning_only",
                 "reasoning_characters": 26,
             }
