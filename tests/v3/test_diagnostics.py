@@ -1188,3 +1188,42 @@ def test_settings_save_keeps_session_memory_protected_detail(
 
 
 pytestmark = pytest.mark.anyio
+
+
+def test_caught_exception_that_stops_work_is_kept_at_the_default_level(
+    manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+
+    class SampleConfigurationError(ValueError):
+        pass
+
+    # A validation-class cause is a warning, which the default level drops.
+    assert (
+        record_caught_exception(
+            "chat",
+            "chat.test.refused",
+            "A request was refused.",
+            SampleConfigurationError("context too small"),
+            stage="prepare",
+        )
+        is None
+    )
+    error_id = record_caught_exception(
+        "chat",
+        "chat.test.work_stopped",
+        "Work could not start.",
+        SampleConfigurationError("context too small"),
+        stage="dispatch",
+        operation_failed=True,
+    )
+
+    assert error_id
+    assert manager.flush()
+    records = _records(manager.log_dir / "chat.log")
+    assert [record["event_code"] for record in records] == ["chat.test.work_stopped"]
+    assert records[0]["level"] == "ERROR"
+    assert records[0]["outcome"] == "failure"
+    assert records[0]["error_id"] == error_id
+    assert records[0]["exception_type"] == "SampleConfigurationError"
+    assert records[0]["stage"] == "dispatch"
