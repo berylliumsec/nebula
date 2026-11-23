@@ -365,7 +365,16 @@ class LegacyEngagementImporter:
                     }
                 },
             )
-            entities: list[Any] = [engagement, scope]
+            from .setup import default_host_policy
+
+            # The same execution policy a newly created Project gets. Without
+            # it the project falls back to Docker mode, and a Core with no
+            # prepared container runtime gives its chats no command tools.
+            entities: list[Any] = [
+                engagement,
+                scope,
+                default_host_policy(engagement_id),
+            ]
             counts: Counter[str] = Counter({"engagements": 1, "scope_policies": 1})
 
             for cidr in cidrs:

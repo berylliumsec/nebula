@@ -1327,6 +1327,44 @@ async def test_supervisor_can_enable_ready_command_runtime_for_one_child(
     (await scenario())
 
 
+async def test_child_catalog_says_why_command_tools_are_unavailable(
+    tmp_path: Path,
+) -> None:
+    from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
+
+    detail = "Command tools (run_command, process_io) are unavailable in this session: no runtime."
+
+    class UnpreparedRuntime:
+        async def chat_components(self, *, engagement_id: str, extra_components=None):
+            del engagement_id, extra_components
+            raise AutomationRuntimeUnavailable("prepare the runtime")
+
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            assert isinstance(error, AutomationRuntimeUnavailable)
+            del engagement_id
+            return detail
+
+    async def scenario() -> None:
+        provider = RoutedProvider(parent=[_response(text="Done.")], child=[])
+        store, project, _, chat = await _setup(tmp_path, provider)
+        chat.automation_tool_platform = UnpreparedRuntime()
+        prepared = await chat.prepare_async(
+            _request(project, content="What can children use?", allow_subagents=True)
+        )
+        assert prepared.turn is not None
+        catalog = await chat.subagents.available_capabilities(prepared.turn.id)
+        assert catalog["command_runtime"] == {
+            "available": False,
+            "selected": False,
+            "tool_names": [],
+            "unavailable_reason": detail,
+        }
+        assert "run_command" not in catalog["tool_names"]
+        await chat.shutdown()
+
+    (await scenario())
+
+
 async def test_assigned_tool_names_are_enforced_by_the_execution_broker(
     tmp_path: Path,
 ) -> None:

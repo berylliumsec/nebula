@@ -2056,6 +2056,12 @@ async def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path
                 del engagement_id
                 raise AutomationRuntimeUnavailable("command runtime is optional")
 
+            async def command_runtime_unavailable_detail(
+                self, engagement_id, error=None
+            ):
+                del engagement_id
+                return f"Command tools are unavailable in this session: {error}."
+
         runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
         session = await runtime.create_session(
             engagement_id=engagement.id,
@@ -2103,6 +2109,10 @@ async def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_
         async def chat_components(self, *, engagement_id: str):
             del engagement_id
             raise AutomationRuntimeUnavailable("command runtime is optional")
+
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            del engagement_id
+            return f"Command tools are unavailable in this session: {error}."
 
     runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
     profile = await store.update(
@@ -2187,6 +2197,12 @@ async def test_existing_codex_session_forks_when_project_changes_to_host_mode(tm
                 del engagement_id
                 raise AutomationRuntimeUnavailable("command runtime is optional")
 
+            async def command_runtime_unavailable_detail(
+                self, engagement_id, error=None
+            ):
+                del engagement_id
+                return f"Command tools are unavailable in this session: {error}."
+
         runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
         updated, _, second = await runtime.prepare_chat(
             engagement_id=engagement.id,
@@ -2217,9 +2233,25 @@ async def test_existing_codex_session_forks_when_project_changes_to_host_mode(tm
 
 
 async def test_harness_session_does_not_require_unprepared_optional_command_runtime(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
-    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+    import nebula.v3.harnesses as harnesses_module
+
+    store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
+    diagnostics: list[tuple[str, str, dict]] = []
+    original_record = harnesses_module.record_diagnostic
+
+    def capture(level, feature, event_code, message, **fields):
+        diagnostics.append((level, event_code, fields))
+        return original_record(level, feature, event_code, message, **fields)
+
+    monkeypatch.setattr(harnesses_module, "record_diagnostic", capture)
+    detail = (
+        "Command tools (run_command, process_io) are unavailable in this session: "
+        "the existing Kali headless runtime has not been prepared. Prepare the "
+        "runtime in Settings > Automation runtime, or switch this project to Host "
+        "mode in Project policy, then send the next message."
+    )
 
     class UnpreparedCommands:
         async def project_execution_mode(
@@ -2232,20 +2264,285 @@ async def test_harness_session_does_not_require_unprepared_optional_command_runt
             del engagement_id
             raise AutomationRuntimeUnavailable("Kali image is still preparing")
 
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            assert engagement_id == engagement.id
+            assert isinstance(error, AutomationRuntimeUnavailable)
+            return detail
+
     unprepared = UnpreparedCommands()
     unprepared.store = store  # type: ignore[attr-defined]
     runtime.bind_automation_tool_platform(unprepared)  # type: ignore[arg-type]
 
-    session = await runtime.create_session(
+    chat, _, first = await runtime.prepare_chat(
         engagement_id=engagement.id,
         profile_id=profile.id,
         model=None,
+        prompt="Fix the failing build",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
     )
+    session = await store.get(HarnessSession, first.harness_session_id)
 
-    assert session.metadata["command_runtime_enabled"] is True
+    # The session stays usable with graph tools, but no longer claims commands.
+    assert session.metadata["command_runtime_enabled"] is False
+    assert session.metadata["command_runtime_unavailable"] == {
+        "detail": detail,
+        "execution_mode": "docker",
+    }
     snapshot = session.metadata["command_runtime_snapshot"]
     assert snapshot["application_model_runtime"] == "v2"
+    assert snapshot["tool_names"]
     assert all(name.startswith("model.") for name in snapshot["tool_names"])
+    assert "run_command" not in snapshot["tool_names"]
+    unavailable = [
+        item
+        for item in diagnostics
+        if item[1] == "harnesses.command_runtime.unavailable"
+    ]
+    assert len(unavailable) == 1
+    assert unavailable[0][0] == "warning"
+    assert unavailable[0][2]["metadata"]["entity_id"] == session.id
+    assert unavailable[0][2]["metadata"]["execution_mode"] == "docker"
+
+    events = [event async for event in runtime.stream_turn(first.id)]
+    notices = [
+        event
+        for event in events
+        if event.type == "notice"
+        and event.payload.get("reason") == "command_runtime_unavailable"
+    ]
+    assert len(notices) == 1
+    assert notices[0].payload["severity"] == "warning"
+    assert notices[0].title == "Command tools unavailable"
+    assert notices[0].summary == detail
+    assert notices[0].harness_turn_id == first.id
+    opened = adapter.opens[-1]
+    assert opened.gateway_tools
+    assert all(
+        "run_command" not in str(item.get("name")) for item in opened.gateway_tools
+    )
+    instructions = harnesses_module._codex_developer_instructions(
+        opened.session,
+        HarnessNativeCapabilities(),
+        gateway_tools=opened.gateway_tools,
+    )
+    assert "run_command, process_io) are not available in this session" in instructions
+
+    # One notice per session: the next turn in the same session stays quiet.
+    _, _, second = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Try again",
+        chat_session_id=chat.id,
+        harness_session_id=session.id,
+        mcp_server_ids=[],
+    )
+    assert second.harness_session_id == session.id
+    events = [event async for event in runtime.stream_turn(second.id)]
+    assert not [
+        event
+        for event in events
+        if event.payload.get("reason") == "command_runtime_unavailable"
+    ]
+    assert (
+        len(
+            [
+                item
+                for item in diagnostics
+                if item[1] == "harnesses.command_runtime.unavailable"
+            ]
+        )
+        == 1
+    )
+    await runtime.shutdown()
+
+
+async def test_unavailable_command_runtime_detail_tells_the_operator_how_to_fix_it(
+    tmp_path,
+):
+    from nebula.v3.automation_tools import AutomationToolPlatform
+
+    class Manager:
+        fail = False
+
+        async def runtime_info(self, *, engagement_id=None):
+            assert engagement_id == "eng-a"
+            if self.fail:
+                raise RuntimeError("runner probe failed")
+            return SimpleNamespace(
+                detail="the existing Kali headless runtime has not been prepared"
+            )
+
+    manager = Manager()
+    platform = AutomationToolPlatform(
+        manager=manager,  # type: ignore[arg-type]
+        store=NebulaStore(tmp_path / "nebula.db"),
+        artifact_store=object(),
+        workspace_resolver=lambda _: tmp_path,
+    )
+    error = AutomationRuntimeUnavailable(
+        "prepare the existing Kali headless runtime before enabling commands"
+    )
+
+    detail = await platform.command_runtime_unavailable_detail("eng-a", error)
+    assert detail.startswith("Command tools (run_command, process_io) are unavailable")
+    assert "the existing Kali headless runtime has not been prepared." in detail
+    assert "Settings > Automation runtime" in detail
+    assert "Host mode" in detail
+
+    manager.fail = True
+    fallback = await platform.command_runtime_unavailable_detail("eng-a", error)
+    assert "prepare the existing Kali headless runtime before enabling commands." in (
+        fallback
+    )
+
+
+async def test_prepared_command_runtime_replaces_a_session_that_had_no_commands(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+
+    class Commands:
+        ready = False
+        store = None
+
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
+            del engagement_id
+            return "docker"
+
+        async def chat_components(self, *, engagement_id: str):
+            if not self.ready:
+                raise AutomationRuntimeUnavailable("Kali image is still preparing")
+            return AutomationToolComponents(
+                broker=object(),
+                scope=ScopePolicy(
+                    id=f"scope:{engagement_id}", engagement_id=engagement_id
+                ),
+                workspace=tmp_path,
+                specs=command_specs(),
+                runtime_digest="sha256:" + "c" * 64,
+            )
+
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            del engagement_id
+            return f"Command tools are unavailable in this session: {error}."
+
+    commands = Commands()
+    commands.store = store  # type: ignore[assignment]
+    runtime.bind_automation_tool_platform(commands)  # type: ignore[arg-type]
+    chat, _, first = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Start without a runtime",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    _ = [event async for event in runtime.stream_turn(first.id)]
+    graph_only = await store.get(HarnessSession, first.harness_session_id)
+    assert graph_only.metadata["command_runtime_enabled"] is False
+    assert graph_only.metadata["command_runtime_notice_turn_id"] == first.id
+
+    # The operator prepares the runtime: the next turn validates the frozen
+    # graph-only snapshot and continues in a session that has commands.
+    commands.ready = True
+    _, _, second = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Now run the build",
+        chat_session_id=chat.id,
+        harness_session_id=graph_only.id,
+        mcp_server_ids=[],
+    )
+    replacement = await store.get(HarnessSession, second.harness_session_id)
+    assert replacement.id != graph_only.id
+    assert second.metadata["session_rollover_reason"] == "command_runtime_changed"
+    assert replacement.metadata["command_runtime_enabled"] is True
+    assert "command_runtime_unavailable" not in replacement.metadata
+    assert {"run_command", "process_io"} <= set(
+        replacement.metadata["command_runtime_snapshot"]["tool_names"]
+    )
+    events = [event async for event in runtime.stream_turn(second.id)]
+    assert not [
+        event
+        for event in events
+        if event.payload.get("reason") == "command_runtime_unavailable"
+    ]
+    await runtime.shutdown()
+
+
+async def test_switching_to_host_mode_clears_the_unavailable_commands_state(tmp_path):
+    store, engagement, profile, _, _, runtime = await _runtime(tmp_path)
+
+    class Commands:
+        mode = "docker"
+        store = None
+
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
+            del engagement_id
+            return self.mode
+
+        async def chat_components(self, *, engagement_id: str):
+            if self.mode == "docker":
+                raise AutomationRuntimeUnavailable("Kali image is still preparing")
+            return AutomationToolComponents(
+                broker=object(),
+                scope=ScopePolicy(
+                    id=f"scope:{engagement_id}", engagement_id=engagement_id
+                ),
+                workspace=tmp_path,
+                specs=command_specs(),
+                runtime_digest="sha256:" + "d" * 64,
+            )
+
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            del engagement_id
+            return f"Command tools are unavailable in this session: {error}."
+
+    commands = Commands()
+    commands.store = store  # type: ignore[assignment]
+    runtime.bind_automation_tool_platform(commands)  # type: ignore[arg-type]
+    chat, _, first = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Start in Docker mode",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    _ = [event async for event in runtime.stream_turn(first.id)]
+    docker_session = await store.get(HarnessSession, first.harness_session_id)
+    assert docker_session.metadata["command_runtime_enabled"] is False
+
+    commands.mode = "host"
+    _, _, second = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Continue in Host mode",
+        chat_session_id=chat.id,
+        harness_session_id=docker_session.id,
+        mcp_server_ids=[],
+    )
+    host_session = await store.get(HarnessSession, second.harness_session_id)
+    assert host_session.id != docker_session.id
+    assert host_session.metadata["execution_mode"] == "host"
+    assert host_session.metadata["command_runtime_enabled"] is True
+    assert "command_runtime_unavailable" not in host_session.metadata
+    assert "command_runtime_notice_turn_id" not in host_session.metadata
+    assert (
+        "run_command" in host_session.metadata["command_runtime_snapshot"]["tool_names"]
+    )
+    await runtime.shutdown()
 
 
 async def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path):
@@ -5697,6 +5994,10 @@ async def test_bounded_docker_goal_chat_reauthorizes_in_new_host_session(tmp_pat
             del engagement_id
             raise AutomationRuntimeUnavailable("command runtime is optional")
 
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            del engagement_id
+            return f"Command tools are unavailable in this session: {error}."
+
     runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
     with pytest.raises(HarnessConfigurationError, match="Enable Allow all"):
         await runtime._fork_session_for_execution_mode(
@@ -5825,6 +6126,12 @@ async def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp
             async def chat_components(self, *, engagement_id: str):
                 del engagement_id
                 raise AutomationRuntimeUnavailable("command runtime is optional")
+
+            async def command_runtime_unavailable_detail(
+                self, engagement_id, error=None
+            ):
+                del engagement_id
+                return f"Command tools are unavailable in this session: {error}."
 
         session = await runtime.create_session(
             engagement_id=engagement.id,

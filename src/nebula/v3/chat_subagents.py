@@ -1442,6 +1442,7 @@ class SubagentService:
             )
         )
         command_tools: list[str] = []
+        command_runtime_unavailable: str | None = None
         if self.chat.automation_tool_platform is not None:
             from .automation_runtime import AutomationRuntimeUnavailable
 
@@ -1453,11 +1454,15 @@ class SubagentService:
                         )
                     ).specs
                 )
-            except AutomationRuntimeUnavailable:
+            except AutomationRuntimeUnavailable as exc:
                 # diagnostic-expected: an unprepared runtime is omitted from the child catalog.
                 # A configured runtime that has not been prepared is not a
-                # usable child capability yet.
-                pass
+                # usable child capability yet. The catalog says why, so a
+                # supervisor does not start children that expect commands;
+                # the session build records the diagnostic, not this read.
+                command_runtime_unavailable = await self.chat.automation_tool_platform.command_runtime_unavailable_detail(
+                    session.engagement_id, exc
+                )
         names.update(command_tools)
         names.update({"notes.write", "conversation.search"})
         from .chat import ChatConfigurationError
@@ -1510,6 +1515,11 @@ class SubagentService:
                     )
                 ),
                 "tool_names": command_tools,
+                **(
+                    {"unavailable_reason": command_runtime_unavailable}
+                    if command_runtime_unavailable is not None
+                    else {}
+                ),
             },
             "subagents": {
                 "available": bool(

@@ -88,6 +88,29 @@ async def test_import_is_side_by_side_typed_and_source_preserving(tmp_path):
         assert artifacts.verify(artifact)
 
 
+async def test_import_gives_the_project_the_new_project_execution_policy(tmp_path):
+    from nebula.v3.domain import AutomationProjectPolicy
+    from nebula.v3.setup import default_host_policy
+
+    source = tmp_path / "legacy"
+    _make_legacy_engagement(source)
+    store = NebulaStore(tmp_path / "v3.db")
+    artifacts = ArtifactStore(tmp_path / "artifact-store")
+
+    report = await LegacyEngagementImporter(store, artifacts).import_engagement(source)
+
+    assert report.status == "completed"
+    engagement_id = report.target_engagement_id
+    policies = await store.list_entities(
+        AutomationProjectPolicy, engagement_id=engagement_id
+    )
+    expected = default_host_policy(engagement_id)
+    assert [item.id for item in policies] == [expected.id]
+    assert policies[0].execution_mode == "host"
+    assert policies[0].host_access_acknowledged is False
+    assert policies[0].network_enabled is False
+
+
 async def test_invalid_legacy_data_rolls_back_and_reports_failure(tmp_path):
     source = tmp_path / "legacy"
     source.mkdir()
