@@ -2010,7 +2010,34 @@ def _rejected_tool_call_response(
     )
 
 
-def _record_final_answer_fallback(response: ModelResponse) -> None:
+def _record_final_answer_fallback(
+    response: ModelResponse, *, hook_id: str | None = None, problem: str = ""
+) -> None:
+    if hook_id is not None:
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.final_answer.hook_stop_closing",
+            "Routing stopped after repeated project hook denials and the model "
+            "returned no answer; Core completed the turn with its own closing "
+            "message.",
+            outcome="fallback",
+            stage="chat",
+            retryable=True,
+            safe_failure_cause=(
+                "A project hook refused the model's calls until routing "
+                "stopped, and the final synthesis was empty."
+            ),
+            metadata={
+                "provider_id": response.provider_id,
+                "model": response.model,
+                "hook_id": hook_id,
+                "reason": problem,
+                "http_status": response.http_status,
+                "upstream_provider": response.upstream_provider,
+            },
+        )
+        return
     record_diagnostic(
         "warning",
         "chat",
@@ -2030,6 +2057,38 @@ def _record_final_answer_fallback(response: ModelResponse) -> None:
             "answer_characters": len(_operator_answer_text(response.text)),
         },
     )
+
+
+# Empty syntheses a hook stop answers with Core's own closing message. Asking
+# again repeats that tools are unavailable to a model whose calls were just
+# refused; overnight goals spent their retries on that until they blocked.
+_HOOK_STOP_CLOSING_PROBLEMS = frozenset({"missing_answer", "reasoning_only"})
+
+
+def _hook_stop_closing_answer(
+    response: ModelResponse, hook_id: str, refused_tools: Sequence[str]
+) -> ModelResponse:
+    """Core's closing answer for a turn a project hook stopped.
+
+    It names the hook and what it refused, so the operator sees why the turn
+    ended and the next turn's model reads that the approach was blocked.
+    """
+
+    counts: dict[str, int] = {}
+    for name in refused_tools:
+        counts[name] = counts.get(name, 0) + 1
+    refused = ", ".join(
+        f"{name} ×{count}" if count > 1 else name for name, count in counts.items()
+    )
+    total = sum(counts.values())
+    text = (
+        f"Stopped: project hook `{hook_id}` refused {total} "
+        f"call{'s' if total != 1 else ''} in this turn"
+        + (f" ({refused})" if refused else "")
+        + ", and the model wrote no answer. The next turn can try a different "
+        "approach."
+    )
+    return response.model_copy(update={"text": text, "tool_calls": []})
 
 
 class _StreamedAnswer:
@@ -2086,6 +2145,8 @@ def _final_answer_response_record(
         "content_characters": len(response.text.strip()),
         "reasoning_characters": len(response.reasoning.strip()),
         "provider_request_id": response.provider_request_id,
+        "http_status": response.http_status,
+        "upstream_provider": response.upstream_provider,
     }
 
 
@@ -2295,7 +2356,9 @@ _ROUTING_DEVIATION_LIMIT = 3
 
 
 def _repeated_hook_denial(
-    denials: dict[str, int], provider_result: object
+    denials: dict[str, int],
+    provider_result: object,
+    refused: dict[str, list[str]] | None = None,
 ) -> str | None:
     """Count a project hook's denial; return its ID once it reaches the limit.
 
@@ -2313,6 +2376,11 @@ def _repeated_hook_denial(
     if not isinstance(hook_id, str) or not hook_id:
         return None
     denials[hook_id] = denials.get(hook_id, 0) + 1
+    if refused is not None:
+        tool = result.get("tool")
+        refused.setdefault(hook_id, []).append(
+            tool[:120] if isinstance(tool, str) and tool else "tool"
+        )
     return hook_id if denials[hook_id] >= _ROUTING_DEVIATION_LIMIT else None
 
 
@@ -9882,6 +9950,7 @@ class ChatService:
             route_deviated = False
             # Denials per project hook in this turn; they outlast calls that run.
             hook_denials: dict[str, int] = {}
+            hook_refused_tools: dict[str, list[str]] = {}
             repeated_hook: str | None = None
             while (
                 turn.status != ChatTurnStatus.FINALIZING
@@ -10351,7 +10420,9 @@ class ChatService:
                         if parallel_event[0] == "tool_completed":
                             repeated_hook = (
                                 _repeated_hook_denial(
-                                    hook_denials, parallel_event[1].get("receipt")
+                                    hook_denials,
+                                    parallel_event[1].get("receipt"),
+                                    hook_refused_tools,
                                 )
                                 or repeated_hook
                             )
@@ -10686,7 +10757,7 @@ class ChatService:
                     # answer and goal transition commit in one transaction.
                     break
                 denied_hook = _repeated_hook_denial(
-                    hook_denials, entry.get("provider_result")
+                    hook_denials, entry.get("provider_result"), hook_refused_tools
                 )
                 if denied_hook is not None:
                     # The model keeps rewording a command the same hook routes
@@ -10972,27 +11043,45 @@ class ChatService:
                                 )
                                 route_again = True
                                 break
-                            recovery_attempts += 1
-                            allowed, delay = await self._may_retry_final_answer(
-                                prepared, recovery_attempts
-                            )
-                            if allowed:
-                                if delay:
-                                    # A provider that just failed to answer is
-                                    # not asked again immediately; the turn
-                                    # stays open and the operator keeps its
-                                    # partial state.
-                                    await asyncio.sleep(delay)
-                                final_request = (
-                                    await self._final_answer_recovery_request(
-                                        prepared, final_request, problem
-                                    )
+                            if (
+                                repeated_hook is not None
+                                and problem in _HOOK_STOP_CLOSING_PROBLEMS
+                            ):
+                                # Routing stopped on a hook's refusals and the
+                                # model has nothing to say. Asking again only
+                                # repeats that tools are unavailable; the turn
+                                # ends on Core's closing message instead, so a
+                                # running goal continues with its next turn.
+                                synthesis = _hook_stop_closing_answer(
+                                    synthesis,
+                                    repeated_hook,
+                                    hook_refused_tools.get(repeated_hook, ()),
                                 )
-                                break
-                            if fallback_answer is None:
-                                raise _final_answer_exhausted(problem)
-                            _record_final_answer_fallback(fallback_answer)
-                            synthesis = fallback_answer
+                                _record_final_answer_fallback(
+                                    synthesis, hook_id=repeated_hook, problem=problem
+                                )
+                            else:
+                                recovery_attempts += 1
+                                allowed, delay = await self._may_retry_final_answer(
+                                    prepared, recovery_attempts
+                                )
+                                if allowed:
+                                    if delay:
+                                        # A provider that just failed to answer
+                                        # is not asked again immediately; the
+                                        # turn stays open and the operator
+                                        # keeps its partial state.
+                                        await asyncio.sleep(delay)
+                                    final_request = (
+                                        await self._final_answer_recovery_request(
+                                            prepared, final_request, problem
+                                        )
+                                    )
+                                    break
+                                if fallback_answer is None:
+                                    raise _final_answer_exhausted(problem)
+                                _record_final_answer_fallback(fallback_answer)
+                                synthesis = fallback_answer
                         try:
                             synthesis = await self._completion_hook_feedback(
                                 prepared, final_request, synthesis
