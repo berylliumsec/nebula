@@ -207,6 +207,7 @@ def notes_write_spec() -> ToolSpec:
         filesystem_access="none",
         idempotency=IdempotencyBehavior.SAFE,
         timeout_seconds=30,
+        uses_execution_capacity=False,
     )
 
 

@@ -600,6 +600,7 @@ def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
         output_schema={"type": "object", "additionalProperties": True},
         risk_class=RiskClass.LOCAL_READ,
         budget_class="artifact_query",
+        uses_execution_capacity=False,
     )
 
 

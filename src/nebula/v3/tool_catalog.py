@@ -610,6 +610,7 @@ def catalog_components(
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,
                 budget_class="artifact_query",
+                uses_execution_capacity=False,
             ),
             ToolSpec(
                 name=CATALOG_LOAD,
@@ -634,6 +635,7 @@ def catalog_components(
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,
                 budget_class="artifact_query",
+                uses_execution_capacity=False,
             ),
             ToolSpec(
                 name=CATALOG_CALL,
