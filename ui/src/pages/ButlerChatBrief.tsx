@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { ButlerStage } from "../butlerStage";
 import { ButlerStageLabel } from "../components/ButlerStageLabel";
+import { WorkStageLabel } from "../components/WorkStageLabel";
+import type { ChatWorkStage } from "../api/types";
 import { ArrowLeft, ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { boardElapsed } from "../api/butlerBoard";
@@ -28,7 +30,7 @@ function money(value: number | undefined): string | undefined {
  * steps, and one line per turn. Core owns all of it; the brief polls while
  * visible. The full transcript stays one click away.
  */
-export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenChat, onOpenTurn, onOpenFile, onDecide, deciding, note, onStop, proposalActions, position, butlerCase }: {
+export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenChat, onOpenTurn, onOpenFile, onDecide, deciding, note, onStop, proposalActions, position, butlerCase, workStage }: {
   api: ApiClient;
   sessionId: string;
   /** The running turn, from the board, for Stop. */
@@ -44,6 +46,8 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
   onStop?: () => void;
   /** Butler's open (or freshly resolved) case about this chat, and how to open its Butler check. */
   butlerCase?: { stage: ButlerStage; onOpen?: () => void };
+  /** The project Work stage of the chat's assigned Work item, from the board. */
+  workStage?: ChatWorkStage;
   /** Start / Edit / Cancel for a chat Butler proposed (the board knows it is a proposal). */
   proposalActions?: ReactNode;
   /** "2 of 5" among the board's cards, for ↑/↓. */
@@ -233,7 +237,8 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
 
     <div className={styles.footer}>
       <span className={styles.muted}>Full transcript · {brief.turnCount} {brief.turnCount === 1 ? "turn" : "turns"}{brief.subagentCount ? ` · ${brief.subagentCount} ${brief.subagentCount === 1 ? "subagent" : "subagents"}` : ""}</span>
-      {butlerCase && <ButlerStageLabel stage={butlerCase.stage} prefix="Butler" />}
+      {workStage && <WorkStageLabel stage={workStage} />}
+      {butlerCase && <ButlerStageLabel stage={butlerCase.stage} />}
       {butlerCase?.onOpen && <button type="button" className={styles.link} onClick={butlerCase.onOpen}>Open Butler check <ExternalLink size={12} aria-hidden="true" /></button>}
       <button type="button" className={styles.link} onClick={() => onOpenChat(brief.project.id)}>Open full chat <ExternalLink size={12} aria-hidden="true" /></button>
     </div>

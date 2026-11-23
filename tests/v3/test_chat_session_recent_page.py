@@ -227,4 +227,57 @@ async def test_butler_case_chat_reads_carry_case_status(tmp_path):
     )
 
 
+async def test_chat_reads_carry_the_assigned_work_items_stage(tmp_path):
+    from nebula.v3.domain import WorkItem, WorkStage
+
+    store = NebulaStore(tmp_path / "stage.db")
+    (
+        await store.create(
+            Engagement(
+                id="project-a",
+                name="Project A",
+                work_stages=[WorkStage(key="recon", label="Recon")],
+            )
+        )
+    )
+    (
+        await store.create(
+            ChatSession(
+                id="goal-chat",
+                engagement_id="project-a",
+                title="Map the sample service",
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+    )
+    item = await store.create(
+        WorkItem(
+            engagement_id="project-a",
+            title="Map the sample service",
+            assignee_session_id="goal-chat",
+            stage="recon",
+            status="ready",
+        )
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        listed = await client.get(
+            "/api/v1/chat-sessions",
+            params={"engagement_id": "project-a"},
+            headers=headers,
+        )
+        single = await client.get("/api/v1/chat-sessions/goal-chat", headers=headers)
+    assert listed.status_code == single.status_code == 200
+    expected = {
+        "key": "recon",
+        "label": "Recon",
+        "item_id": item.id,
+        "item_title": "Map the sample service",
+        "item_status": "ready",
+    }
+    assert listed.json()[0]["metadata"]["work_stage"] == expected
+    assert single.json()["metadata"]["work_stage"] == expected
+
+
 pytestmark = pytest.mark.anyio

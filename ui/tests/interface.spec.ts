@@ -4498,7 +4498,7 @@ reloadTest("assistant upgrade Butler case chats show their stage in the list and
   // The open case chat names its stage beside the title, in text.
   const header = mobile ? page.locator(".mobile-conversation-header") : page.locator(".conversation-heading");
   const headerStage = header.locator(".butler-stage");
-  await expect(headerStage).toHaveText("Needs you");
+  await expect(headerStage).toHaveText("Butler · Needs you");
   await expect(headerStage).toHaveAttribute("title", /needs your decision/);
   const headerBox = await header.boundingBox();
   const stageBox = await headerStage.boundingBox();
@@ -4515,7 +4515,7 @@ reloadTest("assistant upgrade Butler case chats show their stage in the list and
   await expect(sidebar.getByRole("heading", { name: "Working" })).toBeVisible();
   const expected: Array<[string, string]> = [[butler.id, "Active"], [blocked.id, "Needs you"], [stalled.id, "Investigating"], [unsure.id, "Uncertain"], [fixed.id, "Resolved"], [thread.id, "Idle"]];
   for (const [id, label] of expected) {
-    await expect(row(id).locator(".butler-stage"), id).toHaveText(label);
+    await expect(row(id).locator(".butler-stage"), id).toHaveText(`Butler · ${label}`);
     const rowBox = await row(id).boundingBox();
     const labelBox = await row(id).locator(".butler-stage").boundingBox();
     expect(rowBox && labelBox && labelBox.x + labelBox.width <= rowBox.x + rowBox.width + 1, `${id} label inside its row`).toBe(true);
@@ -4528,6 +4528,68 @@ reloadTest("assistant upgrade Butler case chats show their stage in the list and
   await expect(row(blocked.id).locator(".conversation-title-text")).toHaveText(/^goal "Fuzz the sample parser"/);
   await expect(row(blocked.id)).toHaveAccessibleName(/Needs you/);
   await expect(row(ordinary.id).locator(".butler-stage")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include("#workbench-conversations").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+reloadTest("assistant upgrade goal chats show their project Work stage in the list and header", async ({ page }) => {
+  test.setTimeout(180_000);
+  const base = { ...entity, engagement_id: "scratch-project", backend: "provider", provider_profile_id: "provider-a", model: "model-a" };
+  const workStage = (key: string, label: string, status: string) => ({ key, label, item_id: `item-${key}`, item_title: `Sample ${label} item with a long title`, item_status: status });
+  const simulation = { ...base, id: "work-simulation", title: "Fuzz the sample parser", metadata: { work_stage: workStage("simulation", "Simulation", "in_progress") } };
+  const validation = { ...base, id: "work-validation", title: "Validate the sample candidate crash with a long title that truncates", metadata: { work_stage: workStage("validation", "Validation and second-pass review", "blocked") } };
+  const recon = { ...base, id: "work-recon", title: "Sweep the sample service", metadata: { work_stage: workStage("recon", "Recon", "ready") } };
+  const plain = { ...base, id: "work-plain", title: "Operator research", metadata: {} };
+  const caseChat = { ...base, id: "work-case", title: "Butler check · host command stalled", parent_session_id: "work-butler",
+    metadata: { control_assistant: true, butler_initiated: true, butler_recovery_case_id: "case-1", butler_case_status: "investigating" } };
+  const butler = { ...base, id: "work-butler", title: "Butler", metadata: { control_assistant: true } };
+  const items = [simulation, validation, recon, plain, caseChat, butler];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") return route.fulfill({ json: items });
+    if (path.endsWith("/chat/control-assistant/session")) return route.fulfill({ json: butler });
+    if (path.endsWith("/chat/session-activity")) return route.fulfill({ json: [] });
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/work-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/work-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, `/?view=chat&session=${validation.id}`, "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+
+  // The open chat names its project stage beside the title; no Butler line on a goal chat.
+  const header = mobile ? page.locator(".mobile-conversation-header") : page.locator(".conversation-heading");
+  const headerStage = header.locator(".chat-work-stage");
+  await expect(headerStage).toHaveAttribute("data-state", "blocked");
+  await expect(headerStage.locator(".chat-work-stage-text")).toHaveText("Validation and second-pass review");
+  await expect(headerStage).toHaveAttribute("title", "Work stage Validation and second-pass review: Sample Validation and second-pass review item with a long title, blocked");
+  await expect(header.locator(".butler-stage")).toHaveCount(0);
+  const headerBox = await header.boundingBox();
+  const stageBox = await headerStage.boundingBox();
+  expect(stageBox && headerBox && stageBox.x + stageBox.width <= headerBox.x + headerBox.width + 1).toBe(true);
+
+  const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const row = (id: string) => sidebar.locator(`[data-session-id="${id}"]`);
+  await expect(row(validation.id)).toBeVisible();
+  // Dots use the Projects page tile states: blue in progress, red blocked, green not started.
+  for (const [chat, state, label] of [[simulation, "active", "Simulation"], [validation, "blocked", "Validation and second-pass review"], [recon, "normal", "Recon"]] as const) {
+    const label_ = row(chat.id).locator(".chat-work-stage");
+    await expect(label_, chat.id).toHaveAttribute("data-state", state);
+    await expect(label_.locator(".chat-work-stage-text")).toHaveText(label);
+    const rowBox = await row(chat.id).boundingBox();
+    const labelBox = await label_.boundingBox();
+    expect(rowBox && labelBox && labelBox.x + labelBox.width <= rowBox.x + rowBox.width + 1 && labelBox.height < 24, `${chat.id} stage on one line inside its row`).toBe(true);
+  }
+  await expect(row(validation.id)).toHaveAccessibleName(/Work stage Validation and second-pass review, blocked/);
+  await expect(row(plain.id).locator(".chat-work-stage")).toHaveCount(0);
+  // Butler's case status stays a quieter "Butler · …" line, never in the stage slot.
+  await sidebar.getByRole("button", { name: /^Expand 1 chat for Butler/ }).click();
+  await expect(row(caseChat.id).locator(".butler-stage")).toHaveText("Butler · Investigating");
+  await expect(row(caseChat.id).locator(".chat-work-stage")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const accessibility = await new AxeBuilder({ page }).include("#workbench-conversations").analyze();
   expect(accessibility.violations).toEqual([]);

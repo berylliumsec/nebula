@@ -3136,9 +3136,9 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .code-editor-files .code-editor-agent-mark[data-state="waiting"] { background: var(--orange); }
 .code-editor-files .code-editor-agent-mark[data-state="working"] { background: var(--blue); }
 .code-editor-files .code-editor-agent-mark[data-state="failed"] { background: var(--red); }
-/* Butler conversation stage: text plus a shape (filled, ring, or dashed ring). */
-.butler-stage { --stage-color: var(--muted); display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 100%; padding: 1px 7px 1px 6px; border: 1px solid color-mix(in srgb, var(--stage-color) 55%, transparent); border-radius: 999px; color: var(--stage-color); font-size: 11px; font-weight: 500; line-height: 16px; white-space: nowrap; }
-.butler-stage-mark { width: 6px; height: 6px; flex: none; border: 1.5px solid currentColor; border-radius: 50%; background: currentColor; }
+/* Butler's status for a conversation: quiet muted text with a coloured shape (filled, ring, or thin ring). */
+.butler-stage { --stage-color: var(--muted); display: inline-flex; flex: none; align-items: center; gap: 4px; max-width: 100%; color: var(--muted); font-size: 11px; font-weight: 400; line-height: 16px; white-space: nowrap; }
+.butler-stage-mark { width: 6px; height: 6px; flex: none; border: 1.5px solid var(--stage-color); border-radius: 50%; background: var(--stage-color); }
 .butler-stage[data-stage="investigating"], .butler-stage[data-stage="active"] { --stage-color: var(--blue); }
 .butler-stage[data-stage="needs-you"] { --stage-color: var(--status-warning); }
 .butler-stage[data-stage="uncertain"] { --stage-color: var(--status-warning); }
@@ -3150,4 +3150,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .conversation-heading-title > strong, .mobile-conversation-title-row > strong { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-conversation-title-row { justify-content: center; gap: 6px; }
 /* The row's text column rule targets its direct spans; the label stays one line. */
-.session-list-item > .session-select > .butler-stage { flex-direction: row; overflow: visible; }
+.session-list-item > .session-select > .conversation-stage-stack { flex-direction: column; align-items: flex-end; gap: 3px; overflow: visible; }
+/* A chat's project Work stage: the Projects page stage-tile name and dot (green, blue in progress or review, red blocked). */
+.chat-work-stage { display: inline-flex; flex: none; align-items: center; gap: 5px; max-width: 100%; padding: 1px 7px; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-raised); color: var(--text); font-size: 11px; font-weight: 600; line-height: 16px; white-space: nowrap; }
+.chat-work-stage > i { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+.chat-work-stage[data-state="active"] > i { background: var(--blue); }
+.chat-work-stage[data-state="blocked"] > i { background: var(--red); }
+.chat-work-stage-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.conversation-stage-stack .chat-work-stage, .conversation-heading-title .chat-work-stage, .mobile-conversation-title-row .chat-work-stage { max-width: 140px; }

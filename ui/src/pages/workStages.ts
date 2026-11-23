@@ -1,4 +1,4 @@
-import type { WorkStage } from "../api/types";
+import type { ChatWorkStage, WorkStage } from "../api/types";
 
 /** The Work item fields stage views read. */
 export interface StagedItem {
@@ -162,4 +162,36 @@ export function stageRollup<T extends StagedItem & { engagement_id: string }>(st
         : open ? `${open.toLocaleString()} not started` : "All done";
     return { key: stage.key, label: stage.label, total: members.size, reached, open, active, blocked, state, detail };
   });
+}
+
+const ITEM_STATUSES: readonly ChatWorkStage["itemStatus"][] = ["backlog", "ready", "in_progress", "blocked", "review", "done"];
+
+/** Core's ``work_stage`` on a chat or board item, or undefined when absent or malformed. */
+export function parseChatWorkStage(value: unknown): ChatWorkStage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const wire = value as Record<string, unknown>;
+  const status = wire.item_status as ChatWorkStage["itemStatus"];
+  if (typeof wire.key !== "string" || typeof wire.label !== "string" || !wire.label.trim()
+    || typeof wire.item_id !== "string" || !ITEM_STATUSES.includes(status)) return undefined;
+  return { key: wire.key, label: wire.label, itemId: wire.item_id, itemTitle: typeof wire.item_title === "string" ? wire.item_title : "", itemStatus: status };
+}
+
+/** The Projects page's stage-tile state for one item, so its dot colour reads the same here. */
+export function chatStageState(status: ChatWorkStage["itemStatus"]): Extract<StageCellState, "active" | "blocked" | "normal"> {
+  if (status === "blocked") return "blocked";
+  return status === "in_progress" || status === "review" ? "active" : "normal";
+}
+
+const ITEM_STATUS_TEXT: Record<ChatWorkStage["itemStatus"], string> = {
+  backlog: "not started", ready: "not started", in_progress: "in progress", blocked: "blocked", review: "in review", done: "done",
+};
+
+/** "Work stage Validation, blocked": what a screen reader hears beside the chat's own name. */
+export function chatStageName(stage: ChatWorkStage): string {
+  return `Work stage ${stage.label}, ${ITEM_STATUS_TEXT[stage.itemStatus]}`;
+}
+
+/** The tooltip also names the Work item: "Work stage Validation: Validate candidate crash, blocked". */
+export function chatStageDescription(stage: ChatWorkStage): string {
+  return `Work stage ${stage.label}: ${stage.itemTitle ? `${stage.itemTitle}, ` : ""}${ITEM_STATUS_TEXT[stage.itemStatus]}`;
 }

@@ -1,5 +1,7 @@
 import type { ApiClient } from "./client";
 import { parseButlerCaseStatus, type ButlerCaseStatus } from "../butlerStage";
+import { parseChatWorkStage } from "../pages/workStages";
+import type { ChatWorkStage } from "./types";
 
 export type ButlerBoardState = "waiting" | "working" | "failed" | "idle";
 
@@ -50,6 +52,8 @@ export interface ButlerBoardItem {
   hold?: BoardChatHold;
   /** Butler's newest open (or freshly resolved) recovery case about this chat. */
   butlerCase?: { id: string; status: ButlerCaseStatus; sessionId?: string; updatedAt?: string };
+  /** The project Work stage of the Work item assigned to this chat. */
+  workStage?: ChatWorkStage;
 }
 
 export type ButlerBoardCounts = Record<ButlerBoardSection, number>;
@@ -92,6 +96,7 @@ interface WireItem {
   priority?: string | null;
   hold?: { id: string; batch_id?: string | null; reason: string; created_at: string } | null;
   butler_case?: { id: string; status: string; session_id?: string | null; updated_at?: string | null } | null;
+  work_stage?: unknown;
 }
 
 interface WireBoard {
@@ -152,6 +157,7 @@ function mapItem(item: WireItem): ButlerBoardItem {
       createdAt: item.hold.created_at,
     } : undefined,
     butlerCase: mapButlerCase(item.butler_case),
+    workStage: parseChatWorkStage(item.work_stage),
   };
 }
 

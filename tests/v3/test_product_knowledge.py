@@ -63,9 +63,19 @@ def test_product_help_explains_butler_check_stage_labels(monkeypatch):
         "Butler check stage label Uncertain Needs you Investigating Resolved"
     )
     text = "\n".join(str(item["text"]) for item in matches).lower()
-    assert "butler stage labels" in text
     assert "core could not confirm the repair" in text
     assert "open butler check" in text
+
+
+def test_product_help_explains_a_chats_project_work_stage(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "What does the stage label on a conversation mean? Work stage assigned Work item"
+    )
+    text = " ".join(" ".join(str(item["text"]) for item in matches).lower().split())
+    assert "conversation stage labels" in text
+    assert "work item assigned to that chat" in text
+    assert "most recently updated" in text
 
 
 def test_product_help_explains_never_permission_bypass(monkeypatch):
