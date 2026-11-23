@@ -62,9 +62,7 @@ async def with_case_status(
 def _shown_on_goal(case: ButlerRecoveryCase, now: datetime) -> bool:
     if case.status in OPEN_CASE_STATUSES:
         return True
-    return (
-        case.status == "resolved" and now - case.updated_at <= RESOLVED_CASE_WINDOW
-    )
+    return case.status == "resolved" and now - case.updated_at <= RESOLVED_CASE_WINDOW
 
 
 async def cases_for_goal_chats(

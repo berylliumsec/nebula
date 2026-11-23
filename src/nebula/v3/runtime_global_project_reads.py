@@ -152,7 +152,9 @@ def mount_global_project_reads(
         session_id: str, response: Response
     ) -> ChatSession:
         response.headers["Cache-Control"] = "no-store"
-        return (await with_case_status(store, [await store.get(ChatSession, session_id)]))[0]
+        return (
+            await with_case_status(store, [await store.get(ChatSession, session_id)])
+        )[0]
 
     @app.get(
         "/api/v1/chat/session-activity", response_model=None, dependencies=dependencies

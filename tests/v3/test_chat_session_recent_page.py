@@ -164,7 +164,6 @@ async def test_older_butler_recovery_chat_has_read_only_sidebar_provenance(tmp_p
     assert "butler_initiated" not in (await store.get(ChatSession, "recovery")).metadata
 
 
-
 async def test_butler_case_chat_reads_carry_case_status(tmp_path):
     from nebula.v3.domain import ButlerRecoveryCase
 
@@ -223,7 +222,9 @@ async def test_butler_case_chat_reads_carry_case_status(tmp_path):
     assert by_id["case-chat"]["butler_case_status"] == "uncertain"
     assert single.json()["metadata"]["butler_case_status"] == "uncertain"
     assert "butler_case_status" not in by_id["ordinary"]
-    assert "butler_case_status" not in (await store.get(ChatSession, "case-chat")).metadata
+    assert (
+        "butler_case_status" not in (await store.get(ChatSession, "case-chat")).metadata
+    )
 
 
 pytestmark = pytest.mark.anyio

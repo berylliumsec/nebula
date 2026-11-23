@@ -76,7 +76,8 @@ it("shows the message and clears the composer before Core reserves the thread", 
   reserved.resolve({ id: "thread-1" });
   await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
   expect(streamChat.mock.calls[0][0]).toMatchObject({ sessionId: "thread-1", messages: [{ role: "user", content: "What needs me today?" }] });
-  expect(within(log()).getAllByText("What needs me today?")).toHaveLength(1);
+  // The reserved thread's log re-renders after the send starts; the message shows once there.
+  await waitFor(() => expect(within(log()).getAllByText("What needs me today?")).toHaveLength(1));
   expect(within(log()).queryByText(/Starting Butler/)).not.toBeInTheDocument();
 });
 
