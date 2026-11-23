@@ -421,9 +421,13 @@ def _register_crud_routes(
                     else item
                     for item in entities
                 ]
-                entities = await with_case_status(
-                    store, [item for item in entities if isinstance(item, ChatSession)]
+                presented: list[Entity] = list(
+                    await with_case_status(
+                        store,
+                        [item for item in entities if isinstance(item, ChatSession)],
+                    )
                 )
+                entities = presented
             if model is HarnessSession and entities:
                 (
                     chat_titles,
