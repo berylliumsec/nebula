@@ -825,3 +825,134 @@ async def test_stopped_detached_command_settles_as_cancelled(
             break
     assert job.outcome == "cancelled" and job.reserved_bytes == 0
     await manager.shutdown()
+
+
+# -- leftover processes (docs/design/host-command-queue.md) -----------------
+
+
+async def _turn_and_execution(store, process_id: str):
+    from nebula.v3.domain import ChatTurn, CommandExecution
+
+    await store.create(
+        ChatTurn(
+            id="turn-" + process_id,
+            engagement_id="project",
+            session_id="chat-a",
+            provider_profile_id="provider-a",
+            model="synthetic-model",
+        )
+    )
+    return await store.create(
+        CommandExecution(
+            id="execution-" + process_id,
+            engagement_id="project",
+            session_id="session-a",
+            process_id=process_id,
+            command="setsid server &",
+            command_sha256="0" * 64,
+            runtime_digest="sha256:" + "0" * 64,
+            policy_revision=1,
+            metadata={"chat_turn_id": "turn-" + process_id},
+        )
+    )
+
+
+async def test_leftover_group_is_killed_once_its_turn_ends_and_noted(
+    host_queue, tmp_path, monkeypatch
+):
+    from nebula.v3.domain import ChatTurn, ChatTurnStatus, CommandExecution
+
+    store, controller, runner = host_queue
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.05)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat-a")
+    execution = await _turn_and_execution(store, "a")
+    await session.admit("a", execution_id="a", labels={})
+    runner.groups["command-a"].update(populated=True, process_count=2)
+    session.settle_after_exit("a", manager._leftover_owner(execution))
+    await asyncio.sleep(0.3)
+    # The turn still runs: what the command started stays, charged and listed.
+    job = await controller.service.get_job("command-a")
+    assert job.state == "running" and job.labels["detached"] is True
+    assert runner.removed == []
+
+    turn = await store.get(ChatTurn, "turn-a")
+    await store.update(
+        ChatTurn,
+        turn.id,
+        {"status": ChatTurnStatus.COMPLETE},
+        expected_revision=turn.revision,
+    )
+    await _until_finished(controller, "command-a")
+    assert runner.removed == ["command-a"]
+    job = await controller.service.get_job("command-a")
+    assert job.outcome == "completed" and job.reserved_bytes == 0
+    for _ in range(50):
+        saved = await store.get(CommandExecution, execution.id)
+        if "leftover_processes" in saved.metadata:
+            break
+        await asyncio.sleep(0.05)
+    note = saved.metadata["leftover_processes"]
+    assert note["reaped_count"] == 2 and note["reason"] == "turn_ended"
+    await manager.shutdown()
+
+
+async def test_command_without_a_turn_keeps_its_detached_group(
+    host_queue, tmp_path, monkeypatch
+):
+    store, controller, runner = host_queue
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.05)
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "mission-a")
+    await session.admit("a", execution_id="a", labels={})
+    runner.groups["command-a"]["populated"] = True
+    session.settle_after_exit("a", None)
+    await asyncio.sleep(0.3)
+    assert (await controller.service.get_job("command-a")).state == "running"
+    assert runner.removed == []
+    await manager.shutdown()
+    assert runner.removed == ["command-a"]
+
+
+@real
+async def test_real_leftover_detached_process_is_killed_when_its_turn_ends(
+    budgets, tmp_path, monkeypatch
+):
+    from nebula.v3.automation_runtime import LeftoverOwner
+
+    monkeypatch.setenv("NEBULA_HOST_MEMORY_RUNNER_SOCKET", REAL_SOCKET)
+    monkeypatch.setattr(ManagedHostRuntimeSession, "DETACHED_CHECK_SECONDS", 0.1)
+    store, controller = budgets
+    await store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, "nebula:automation-policy:project")),
+            engagement_id="project",
+            execution_mode="host",
+            host_access_acknowledged=True,
+        )
+    )
+    manager = _host_manager(store, controller, tmp_path)
+    session = await _host_session(manager, "chat")
+    assert isinstance(session, ManagedHostRuntimeSession)
+    ended = asyncio.Event()
+    reaped: list[int | None] = []
+
+    async def is_ended() -> bool:
+        return ended.is_set()
+
+    async def record(count: int | None) -> None:
+        reaped.append(count)
+
+    owner = LeftoverOwner(turn_id="turn", ended=is_ended, reaped=record)
+    await session.admit("d", execution_id="d", labels={})
+    code, _output = await _run(session, "(setsid sleep 300 &); echo started", "d")
+    session.settle_after_exit("d", owner)
+    assert code == 0
+    await asyncio.sleep(1)
+    job = await controller.service.get_job("command-d")
+    assert job.state == "running" and job.labels["detached"] is True
+    ended.set()
+    await _until_finished(controller, "command-d")
+    job = await controller.service.get_job("command-d")
+    assert job.evidence.group_empty and len(reaped) == 1
+    await manager.shutdown()

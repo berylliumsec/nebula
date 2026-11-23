@@ -105,8 +105,10 @@ def command_specs(
             version="1",
             description=(
                 "Run a Bash command in the session-scoped pinned automation container. "
-                "Use ordinary PATH binaries such as rg, python3, git, or curl."
-                + inventory_prompt
+                "Use ordinary PATH binaries such as rg, python3, git, or curl. "
+                "Processes a finished command leaves running (nohup, setsid, &) "
+                "may be stopped when the turn ends; use background=true for work a "
+                "later turn reads with process_io." + inventory_prompt
             ),
             input_schema={
                 "type": "object",
