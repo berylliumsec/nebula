@@ -3680,6 +3680,33 @@ CORE_GOAL_INSTRUCTIONS = frozenset(
 and are not the operator's words."""
 
 
+GOAL_SUPERVISOR_NOTE_LIMIT = 50
+"""Notes one goal keeps. Adding one more is refused, never silently dropped."""
+GOAL_SUPERVISOR_NOTE_CHARACTERS = 4_000
+GOAL_GUIDANCE_CHANGE_LIMIT = 20
+"""Recent guidance changes a goal keeps for delivery into its running turn."""
+
+
+class GoalSupervisorNote(BaseModel):
+    """Operator or Butler guidance added to a goal without rewriting it."""
+
+    id: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=GOAL_SUPERVISOR_NOTE_CHARACTERS)
+    author: str = Field(default="operator", min_length=1, max_length=200)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class GoalGuidanceChange(BaseModel):
+    """What one edit changed in a goal's guidance, bounded for delivery."""
+
+    guidance_revision: int = Field(ge=1)
+    summary: str = Field(min_length=1, max_length=4_000)
+    # The note this change added; delivery reads its text from the note.
+    note_id: str | None = Field(default=None, max_length=200)
+    author: str = Field(default="operator", min_length=1, max_length=200)
+    created_at: datetime = Field(default_factory=utc_now)
+
+
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
 
@@ -3723,6 +3750,18 @@ class ChatGoal(Entity):
     parent_goal_id: str | None = Field(default=None, max_length=200)
     child_session_ids: list[str] = Field(
         default_factory=list, max_length=CHAT_GOAL_CHILD_LIMIT
+    )
+    # Guidance an operator or Butler adds while the goal runs. Rendered with
+    # each turn's goal progress, not in the cached instruction prefix.
+    supervisor_notes: list[GoalSupervisorNote] = Field(
+        default_factory=list, max_length=GOAL_SUPERVISOR_NOTE_LIMIT
+    )
+    # Counts changes to the objective, criteria, plan and notes, unlike
+    # ``revision``, which every usage charge bumps. A running turn compares
+    # it with what it was prepared with to hear about edits mid-turn.
+    guidance_revision: int = Field(default=0, ge=0)
+    guidance_changes: list[GoalGuidanceChange] = Field(
+        default_factory=list, max_length=GOAL_GUIDANCE_CHANGE_LIMIT
     )
     execution_owner_id: str | None = Field(default=None, max_length=200)
     execution_claim_id: str | None = Field(default=None, max_length=200)
