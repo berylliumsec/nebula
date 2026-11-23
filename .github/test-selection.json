@@ -1,31 +1,28 @@
 {
-  "change_digest": "1ca308ba2001f4629a55fce1da9f32bface234c95cf872ce969546205107d3bf",
-  "reviewed_by": "Claude: DeepSeek V4 empty turns, focused provider/markup/recovery-receipt selection",
-  "reason": "DeepSeek V4 on OpenRouter sometimes writes its DSML tool call into the reasoning channel with no tool_calls and no answer; Core recovered markup from answer text only, so the reply read as reasoning-only and fed final-answer recovery until a goal blocked. ModelResponse now recovers complete DSML / DeepSeek special-token frames from reasoning when an adapter reply has no answer and no call (GLM/Qwen tags stay thoughts; stripped fragments are marked unreadable, never run). Chat Completions replies carry a bounded redacted stream trace recorded in the final-answer receipt and in new providers.stream.empty_reply / failed_trace diagnostics; chat.routing.empty_tool_batch and hook-stop diagnostics now use allowlisted metadata keys; the diagnostics allowlist gains finish_reasons, stream_choices, stream_frames. Select the new synthetic-SSE regression file, the markup recovery suites (dsml, native tool markup, provider leftovers) for the refactored tool_markup.recover, the OpenAI-compatible robustness and reasoning replay suites for the stream adapter and replay fields, the hook-stop and chat tool-loop suites plus the two test_chat.py receipt tests whose expected receipt gained fields, and test_diagnostics.py for the allowlist change.",
-  "exclusions": "No UI, setting or native change: frontend, Playwright and native layers are empty and the settings assistant is unchanged. Other test_chat.py cases do not assert the final-answer receipt shape. No full-suite approval.",
+  "change_digest": "07b4ebe77592b3a28e04f7a4c4e74d03cc7f92c87e1bd7911003fa06400b4ba8",
+  "reviewed_by": "Claude: goal dispatch failure diagnostics, focused goal-dispatch and diagnostics-classification selection",
+  "reason": "A goal whose first or next turn could not be prepared paused with the fixed text 'Goal work could not start' and nothing was logged: the cause was validation-class (ChatConfigurationError when the goal's built-in tools do not fit the model context), which record_caught_exception records at Warning and the default Error level drops. record_caught_exception gains operation_failed, which keeps such a cause at Error; goal dispatch and automatic continuation use it and pause with the cause and error ID. Select the new dispatch-failure and pause-reason regression tests, the two existing dispatch/auto-continue tests that assert budget exhaustion is not a failure, the new and existing record_caught_exception classification tests, and the Kali inventory tests because its standalone fallback signature changed.",
+  "exclusions": "No UI, setting, provider or native change, so frontend, Playwright and native layers are empty and the settings assistant is unchanged. Other goal and diagnostics tests do not reach the changed catch sites or the new flag. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 347,
+    "python": 10,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_deepseek_empty_turns.py",
-    "tests/v3/test_dsml.py",
-    "tests/v3/test_native_tool_markup.py",
-    "tests/v3/test_provider_leftovers.py",
-    "tests/v3/test_openai_compatible_robustness.py",
-    "tests/v3/test_reasoning_replay.py",
-    "tests/v3/test_hook_stop_closing_message.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_diagnostics.py",
-    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_output_exhaustion",
-    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_stop_with_more_room"
+    "tests/v3/test_chat_goals.py::test_goal_dispatch_failure_pauses_with_its_cause_and_a_logged_error",
+    "tests/v3/test_chat_goals.py::test_goal_start_failure_reason_names_the_cause_without_host_detail",
+    "tests/v3/test_chat_goals.py::test_dispatch_of_a_goal_whose_budget_is_spent_is_not_a_failure",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
+    "tests/v3/test_diagnostics.py::test_caught_exception_that_stops_work_is_kept_at_the_default_level",
+    "tests/v3/test_diagnostics.py::test_caught_exception_severity_uses_http_and_integrity_semantics",
+    "tests/v3/test_diagnostics.py::test_operator_detail_drops_os_error_codes_and_host_paths",
+    "tests/v3/test_kali_tool_inventory.py"
   ],
   "frontend": [],
   "native": [],

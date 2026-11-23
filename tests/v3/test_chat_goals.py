@@ -1942,3 +1942,76 @@ async def test_pausing_a_goal_releases_a_claim_no_live_turn_holds(tmp_path):
     )
     assert paused.status == ChatGoalStatus.PAUSED
     assert (paused.execution_owner_id, paused.execution_claim_id) == (None, None)
+
+
+async def test_goal_dispatch_failure_pauses_with_its_cause_and_a_logged_error(
+    tmp_path, monkeypatch
+):
+    store, goals = await setup_goal(tmp_path)
+    draft = await goals.create(
+        "session",
+        GoalCreate(objective="Audit the parser", completion_criteria=["Done"]),
+    )
+    await goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    chat = ChatService(
+        store, provider_factory=lambda _: FakeProvider("provider", local=False)
+    )
+    refusal = (
+        "retained tool definitions and mandatory instructions exceed the selected "
+        "model context capacity; choose a model with a larger context or disable tools"
+    )
+
+    async def refuse(_request):
+        raise ChatConfigurationError(refusal)
+
+    monkeypatch.setattr(chat, "prepare_async", refuse)
+    recorded: list[tuple[str, dict]] = []
+    original = chat_module.record_caught_exception
+
+    def spy(area, code, *args, **kwargs):
+        recorded.append((code, kwargs))
+        return original(area, code, *args, **kwargs)
+
+    monkeypatch.setattr(chat_module, "record_caught_exception", spy)
+
+    assert await chat.dispatch_running_goal("session", "Begin") is None
+
+    goal = await goals.get("session")
+    assert goal.status == ChatGoalStatus.PAUSED
+    assert goal.blocked_reason is not None
+    assert goal.blocked_reason.startswith("Goal work could not start: ")
+    assert refusal in goal.blocked_reason
+    assert goal.blocked_reason.endswith("resume the goal to retry.")
+    assert [code for code, _ in recorded] == ["chat.goal.dispatch_failed"]
+    # The goal stopped, so the refusal is an operation failure the default
+    # diagnostics level keeps, not a dropped warning.
+    assert recorded[0][1]["operation_failed"] is True
+    assert recorded[0][1]["stage"] == "goal-dispatch"
+
+
+def test_goal_start_failure_reason_names_the_cause_without_host_detail():
+    from nebula.v3.chat import _goal_start_failure_reason
+
+    class ForeignError(RuntimeError):
+        pass
+
+    foreign = _goal_start_failure_reason(
+        "Goal work could not start",
+        ForeignError("/home/operator/secret path leaked"),
+        "err_" + "b" * 32,
+    )
+    assert foreign == (
+        "Goal work could not start: an unexpected ForeignError. "
+        f"Error ID err_{'b' * 32}. Resolve it, then resume the goal to retry."
+    )
+    own = _goal_start_failure_reason(
+        "Goal work could not start",
+        ChatConfigurationError("cannot read /home/operator/AGENTS.md\n" + "x" * 900),
+        None,
+    )
+    assert "/home/operator" not in own
+    assert "\n" not in own
+    assert len(own) < 520
+    assert own.startswith("Goal work could not start: cannot read <path>")
