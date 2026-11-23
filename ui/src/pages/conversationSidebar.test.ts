@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSessionSummary } from "../api/types";
-import { groupSidebarConversations } from "./conversationSidebar";
+import { groupSidebarConversations, sidebarActivity } from "./conversationSidebar";
 
 const now = Date.parse("2026-09-22T15:00:00Z");
 
@@ -204,5 +204,44 @@ describe("groupSidebarConversations", () => {
     expect(result.groups.map(group => group.label)).toEqual(["Pinned", "Needs you", "Today"]);
     expect(result.groups[0].rows[0].session.id).toBe("pinned");
     expect(result.groups[2].rows.map(row => row.session.id)).toEqual(["butler"]);
+  });
+});
+
+describe("Butler case chats in the list", () => {
+  const butler = () => session("butler", { title: "Butler", isControlAssistant: true, updatedAt: "2026-09-22T09:00:00Z" });
+  const caseChat = (id: string, status: ChatSessionSummary["butlerCaseStatus"], updatedAt = "2026-09-22T12:00:00Z") => session(id, {
+    title: `Butler check · ${id}`, isControlAssistant: true, isButlerInitiated: true, parentSessionId: "butler",
+    butlerRecoveryCaseId: `case-${id}`, butlerCaseStatus: status, updatedAt,
+  });
+
+  it("nests case chats under the project's Butler chat, never making one the parent", () => {
+    const sessions = [butler(), caseChat("blocked", "needs_attention"), caseChat("stalled", "investigating"),
+      session("started", { isButlerInitiated: true }), session("thread", { isControlAssistant: true, isButlerThread: true, updatedAt: "2026-09-22T13:00:00Z" })];
+    const result = groupSidebarConversations(sessions, {}, "", new Set(["butler"]), now);
+    const rows = result.groups.flatMap(group => group.rows);
+    const parent = rows.find(row => row.session.id === "butler");
+    expect(parent).toMatchObject({ depth: 0, childKind: "chats", childCount: 3 });
+    expect(rows.filter(row => row.depth === 1).map(row => row.session.id).sort()).toEqual(["blocked", "stalled", "started"]);
+    // A Butler thread stays its own conversation and never owns case chats.
+    expect(rows.find(row => row.session.id === "thread")).toMatchObject({ depth: 0, childCount: 0 });
+  });
+
+  it("keeps a case chat under the Butler chat that opened it", () => {
+    const older = session("older-butler", { isControlAssistant: true, archivedAt: "2026-09-21T00:00:00Z" });
+    const opened = caseChat("check", "investigating");
+    const result = groupSidebarConversations([butler(), older, { ...opened, parentSessionId: "older-butler" }], {}, "", new Set(), now);
+    const archivedParent = result.groups.flatMap(group => group.rows).find(row => row.session.id === "older-butler");
+    expect(archivedParent?.childCount).toBe(1);
+  });
+
+  it("lists a case that needs the operator as waiting, and the Butler chat under Needs you", () => {
+    const sessions = [butler(), caseChat("blocked", "needs_attention"), caseChat("done", "resolved")];
+    const activity = sidebarActivity(sessions, { done: "idle" });
+    expect(activity).toMatchObject({ blocked: "waiting", done: "idle" });
+    // A running investigation keeps its turn state.
+    expect(sidebarActivity(sessions, { blocked: "working" }).blocked).toBe("working");
+    const result = groupSidebarConversations(sessions, activity, "", new Set(), now);
+    expect(result.groups[0]).toMatchObject({ label: "Needs you" });
+    expect(result.groups[0].rows[0]).toMatchObject({ waitingChildren: 1, childCount: 2 });
   });
 });

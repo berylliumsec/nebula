@@ -25,7 +25,10 @@ vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
 vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
-vi.mock("./ButlerChatBrief", () => ({ ButlerChatBrief: ({ onAsk }: { onAsk: (value: unknown) => void }) => <button type="button" onClick={() => onAsk(undefined)}>Ask Butler about this</button> }));
+vi.mock("./ButlerChatBrief", () => ({ ButlerChatBrief: ({ onAsk, sessionId, butlerCase }: { onAsk: (value: unknown) => void; sessionId: string; butlerCase?: { stage: { label: string }; onOpen?: () => void } }) => <>
+  <button type="button" onClick={() => onAsk(undefined)}>Ask Butler about this</button>
+  {butlerCase && <p>{`Brief ${sessionId} · Butler · ${butlerCase.stage.label}${butlerCase.onOpen ? " · opens check" : ""}`}</p>}
+</> }));
 
 const research = { id: "p1", name: "Research" };
 const bounty = { id: "p2", name: "Bounty" };
@@ -345,4 +348,30 @@ it("lists high-priority chats first with a chevron and toggles priority from the
   const cards = within(board.querySelector('[data-project="p1"]') as HTMLElement).getAllByRole("article");
   expect(cards[0]).toBe(urgent);
   expect(urgent).toHaveAttribute("data-priority", "high");
+});
+
+it("shows Butler's case stage on a goal card and offers its Butler check", async () => {
+  const withCase = {
+    ...poll,
+    items: [
+      { ...wire("Fuzz parser", research, "active", "working", "running", "Working"), butler_case: { id: "case-1", status: "needs_attention", session_id: "case-chat", updated_at: "2026-11-20T10:02:00Z" } },
+      wire("Paused triage", research, "idle", "idle", "paused", "Paused"),
+    ],
+  };
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    return { value: withCase, etag: '"b"' };
+  });
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const card = await within(board).findByRole("article", { name: "Fuzz parser: Working, Active, Butler needs you" });
+  const stage = within(card).getByText("Butler · Needs you").closest(".butler-stage");
+  expect(stage).toHaveAttribute("data-stage", "needs-you");
+  expect(stage).toHaveAttribute("title", expect.stringMatching(/needs your decision/));
+  // A card without a case shows no Butler stage.
+  const quiet = within(board).getByRole("article", { name: "Paused triage: Paused, Idle" });
+  expect(quiet.querySelector(".butler-stage")).toBeNull();
+  // Opening the card's brief passes the case so the brief can open the Butler check.
+  await userEvent.click(within(card).getByRole("button", { expanded: false }));
+  expect(await screen.findByText("Brief Fuzz parser · Butler · Needs you · opens check")).toBeInTheDocument();
 });
