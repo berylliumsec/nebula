@@ -20,23 +20,34 @@ saved on the delivered step itself, so a crash before the step is saved
 delivers again and a saved step is never delivered twice. A later source,
 such as a check-in reminder, plugs in by adding one more callable to
 ``GoalAddenda.sources`` with its own marker key.
+
+``CheckinReminder`` is such a source. A running goal whose agent has posted
+no Work check-in for a while (by default 30 minutes, or 40 tool calls in the
+turn) is reminded once, in the turn, to post one. It never refuses a tool and
+never escalates to Butler: the Butler escalation for overdue progress was
+removed because it opened a recovery chat for every quiet goal.
 """
 
 from __future__ import annotations
 
 import difflib
+import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Collection, Mapping, Sequence
 
 from .domain import (
     GOAL_GUIDANCE_CHANGE_LIMIT,
+    ButlerGoalWatch,
     ChatGoal,
     ChatGoalStatus,
     ChatTurn,
     GoalGuidanceChange,
+    WorkItem,
+    WorkUpdate,
     utc_now,
 )
-from .storage import NebulaStore, NotFoundError
+from .storage import NebulaStore, NotFoundError, revise_latest
 from .tool_results import model_result_bytes
 
 GOAL_READ_TOOL_NAME = "goal.read"
@@ -275,6 +286,260 @@ async def guidance_addendum(
     )
 
 
+CHECKIN_SOURCE = "checkin"
+CHECKIN_REMINDED_AT = "checkin_reminded_at"
+CHECKIN_REMINDED_TOOL_CALLS = "checkin_reminded_tool_calls"
+# The goal's last reminder, kept on the goal so that its next turn does not
+# remind again within the same window.
+CHECKIN_REMINDER_METADATA = "checkin_reminder"
+CHECKIN_MINUTES_ENV = "NEBULA_GOAL_CHECKIN_REMINDER_MINUTES"
+CHECKIN_TOOL_CALLS_ENV = "NEBULA_GOAL_CHECKIN_REMINDER_TOOL_CALLS"
+DEFAULT_CHECKIN_MINUTES = 30
+DEFAULT_CHECKIN_TOOL_CALLS = 40
+MAX_CHECKIN_MINUTES = 24 * 60
+MAX_CHECKIN_TOOL_CALLS = 10_000
+NATIVE_CHECK_IN_TOOL = "work_check_in"
+NATIVE_CREATE_TOOL = "work_create"
+KNOWN_CHECK_IN_GOALS = 1_024
+
+
+def _bounded_env(name: str, default: int, maximum: int) -> int:
+    """An operator-set threshold, or the default when unset or invalid.
+
+    0 turns that rule off; anything else is clamped to 1..maximum.
+    """
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:  # diagnostic-expected: an invalid setting keeps the default
+        return default
+    return 0 if value <= 0 else min(value, maximum)
+
+
+def checkin_reminder_thresholds() -> tuple[int, int]:
+    """(minutes, tool calls) without a check-in before a goal is reminded."""
+
+    return (
+        _bounded_env(CHECKIN_MINUTES_ENV, DEFAULT_CHECKIN_MINUTES, MAX_CHECKIN_MINUTES),
+        _bounded_env(
+            CHECKIN_TOOL_CALLS_ENV, DEFAULT_CHECKIN_TOOL_CALLS, MAX_CHECKIN_TOOL_CALLS
+        ),
+    )
+
+
+def _as_time(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:  # diagnostic-expected: an unreadable marker is ignored
+            return None
+    return None
+
+
+def _latest(*values: datetime | None) -> datetime | None:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None
+
+
+def calls_after_native_check_in(history: Sequence[Mapping[str, Any]]) -> int | None:
+    """Execution tool calls a provider turn made after its last saved
+    check-in, or None when it has not checked in."""
+
+    calls: int | None = None
+    for entry in history:
+        if (
+            entry.get("name") == NATIVE_CHECK_IN_TOOL
+            and entry.get("status") == "complete"
+        ):
+            calls = 0
+        elif calls is not None and entry.get("budget_class") == "execution":
+            calls += 1
+    return calls
+
+
+@dataclass
+class CheckinReminder:
+    """Reminds a running goal's agent to post a Work check-in.
+
+    Due when the goal has had no check-in for ``minutes`` (since its latest
+    check-in, reminder or start), or when its turn made ``tool_calls`` tool
+    calls since its latest check-in or reminder. A check-in is an agent update
+    posted from the goal's conversation, an update to a Work item assigned to
+    that conversation, or a progress report to Butler. Only a turn that has
+    the Work check-in tool is reminded.
+
+    Monotonic: the marker records when, and at which tool count, it reminded,
+    and a later marker only moves both baselines on. The goal keeps its last
+    reminder too, so the goal's next turn does not repeat it in the window.
+    """
+
+    store: NebulaStore
+    # The provider turn's step history, for check-ins made in the turn. A
+    # harness passes ``calls_after_check_in`` instead.
+    history: Callable[[ChatTurn], Awaitable[list[dict[str, Any]]]] | None = None
+    calls_after_check_in: Callable[[ChatTurn], Awaitable[int | None]] | None = None
+    check_in_tool: str = NATIVE_CHECK_IN_TOOL
+    create_tool: str = NATIVE_CREATE_TOOL
+    # Whether the turn has the Work tools; by default, from the provider
+    # turn's recorded tool names.
+    offered: Callable[[ChatTurn], Awaitable[bool]] | None = None
+    minutes: int = field(default_factory=lambda: checkin_reminder_thresholds()[0])
+    tool_calls: int = field(default_factory=lambda: checkin_reminder_thresholds()[1])
+    clock: Callable[[], datetime] = utc_now
+    # The latest check-in read for each goal. Check-ins only ever get later,
+    # so a remembered one is a safe lower bound that spares the reads.
+    _known_check_ins: dict[str, datetime] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    async def _offered(self, turn: ChatTurn) -> bool:
+        if self.offered is not None:
+            return await self.offered(turn)
+        names = turn.request_snapshot.get("available_tool_names")
+        return isinstance(names, list) and self.check_in_tool in names
+
+    @staticmethod
+    def _reminded(
+        goal: ChatGoal, turn: ChatTurn, seen: Mapping[str, Any]
+    ) -> tuple[datetime | None, int]:
+        """When the goal was last reminded, and the turn's tool count then."""
+
+        kept = goal.metadata.get(CHECKIN_REMINDER_METADATA)
+        kept = kept if isinstance(kept, Mapping) else {}
+        at = _latest(_as_time(seen.get(CHECKIN_REMINDED_AT)), _as_time(kept.get("at")))
+        calls = seen.get(CHECKIN_REMINDED_TOOL_CALLS)
+        calls = calls if isinstance(calls, int) else 0
+        kept_calls = kept.get("tool_calls")
+        if kept.get("turn_id") == turn.id and isinstance(kept_calls, int):
+            calls = max(calls, kept_calls)
+        return at, calls
+
+    async def last_check_in(self, goal: ChatGoal) -> datetime | None:
+        """The latest check-in Core knows of for the goal's conversation."""
+
+        updates = await self.store.find_entities(
+            WorkUpdate,
+            {"source_session_id": goal.session_id},
+            newest_first=True,
+            limit=1,
+        )
+        items = await self.store.find_entities(
+            WorkItem,
+            {"assignee_session_id": goal.session_id},
+            engagement_id=goal.engagement_id,
+        )
+        from .butler_oversight import watch_id
+
+        try:
+            watch: ButlerGoalWatch | None = await self.store.get(
+                ButlerGoalWatch, watch_id(goal.id)
+            )
+        except NotFoundError:  # diagnostic-expected: Butler does not watch every goal
+            watch = None
+        return _latest(
+            updates[0].created_at if updates else None,
+            *(item.last_update_at for item in items),
+            watch.last_progress_at if watch is not None else None,
+        )
+
+    async def __call__(
+        self, goal: ChatGoal, turn: ChatTurn, seen: Mapping[str, Any]
+    ) -> GoalAddendum | None:
+        if goal.status != ChatGoalStatus.RUNNING or not (
+            self.minutes or self.tool_calls
+        ):
+            return None
+        now = self.clock()
+        reminded_at, reminded_calls = self._reminded(goal, turn, seen)
+        started = goal.started_at or goal.created_at
+        calls = max(0, turn.execution_tool_calls - reminded_calls)
+
+        def due(quiet_since: datetime | None, calls_since: int) -> bool:
+            return bool(
+                self.minutes
+                and quiet_since is not None
+                and (now - quiet_since).total_seconds() >= self.minutes * 60
+            ) or bool(self.tool_calls and calls_since >= self.tool_calls)
+
+        # A check-in only moves the baselines on, so nothing due before the
+        # check-ins are read, with the latest one already known, means
+        # nothing is due: most calls stop here without a read.
+        known = self._known_check_ins.get(goal.id)
+        if not due(_latest(started, reminded_at, known), calls):
+            return None
+        if not await self._offered(turn):
+            return None
+        checked_in = _latest(known, await self.last_check_in(goal))
+        if checked_in is not None:
+            self._known_check_ins.pop(goal.id, None)
+            self._known_check_ins[goal.id] = checked_in
+            while len(self._known_check_ins) > KNOWN_CHECK_IN_GOALS:
+                self._known_check_ins.pop(next(iter(self._known_check_ins)))
+        in_turn: int | None = None
+        if self.calls_after_check_in is not None:
+            in_turn = await self.calls_after_check_in(turn)
+        elif self.history is not None:
+            in_turn = calls_after_native_check_in(await self.history(turn))
+        if in_turn is not None:
+            calls = min(calls, in_turn)
+        if not due(_latest(started, reminded_at, checked_in), calls):
+            return None
+        quiet_since = _latest(started, checked_in) or now
+        minutes = max(0, int((now - quiet_since).total_seconds() // 60))
+        if checked_in is None:
+            quiet = f"No Work check-in since this goal started {minutes} min ago"
+        else:
+            quiet = f"No Work check-in for {minutes} min"
+        counted = (
+            f"{in_turn} tool calls since your last one in this turn"
+            if in_turn is not None
+            else f"{turn.execution_tool_calls} tool calls in this turn"
+        )
+        text = (
+            f"{quiet} ({counted}). Post {self.check_in_tool} on the Work item "
+            "you are working on, with your progress and next step, before "
+            f"continuing. If no item fits, create one with {self.create_tool}."
+        )
+        return GoalAddendum(
+            CHECKIN_SOURCE,
+            text,
+            {
+                CHECKIN_REMINDED_AT: now.isoformat(),
+                CHECKIN_REMINDED_TOOL_CALLS: turn.execution_tool_calls,
+            },
+        )
+
+    async def remember(
+        self, goal_id: str, turn: ChatTurn, marker: Mapping[str, Any]
+    ) -> None:
+        """Keep a delivered reminder on the goal, for its later turns."""
+
+        at = marker.get(CHECKIN_REMINDED_AT)
+        record = {
+            "at": at,
+            "turn_id": turn.id,
+            "tool_calls": marker.get(CHECKIN_REMINDED_TOOL_CALLS),
+        }
+        new_at = _as_time(at)
+
+        def plan(latest: ChatGoal) -> dict[str, Any] | None:
+            kept = latest.metadata.get(CHECKIN_REMINDER_METADATA)
+            kept_at = _as_time(kept.get("at")) if isinstance(kept, Mapping) else None
+            if kept_at is not None and new_at is not None and kept_at >= new_at:
+                return None
+            return {"metadata": {**latest.metadata, CHECKIN_REMINDER_METADATA: record}}
+
+        try:
+            (await revise_latest(self.store, ChatGoal, goal_id, plan))
+        except NotFoundError:  # diagnostic-expected: goal deleted after its reminder
+            return
+
+
 def seen_from(
     snapshot: Mapping[str, Any], history: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -307,13 +572,22 @@ def addendum_text(addenda: Sequence[GoalAddendum]) -> str:
 
 
 def addendum_output(goal: ChatGoal, addenda: Sequence[GoalAddendum]) -> dict[str, Any]:
-    return {
-        "delivered_by": "nebula",
-        "note": (
+    sources = {item.source for item in addenda}
+    notes: list[str] = []
+    if sources - {CHECKIN_SOURCE}:
+        notes.append(
             "Core delivered this because the goal's supervisor changed it while "
             "you worked. It supersedes the goal context you started with; "
             "continue under the updated goal."
-        ),
+        )
+    if CHECKIN_SOURCE in sources:
+        notes.append(
+            "Core reminds a goal that has not posted a Work check-in for a "
+            "while. Your tools are unchanged."
+        )
+    return {
+        "delivered_by": "nebula",
+        "note": " ".join(notes),
         "goal_id": goal.id,
         GUIDANCE_MARKER: goal.guidance_revision,
         "addendum": addendum_text(addenda),
@@ -326,7 +600,14 @@ class GoalAddenda:
 
     store: NebulaStore
     history: Callable[[ChatTurn], Awaitable[list[dict[str, Any]]]]
-    sources: list[AddendumSource] = field(default_factory=lambda: [guidance_addendum])
+    sources: list[AddendumSource] | None = None
+
+    def __post_init__(self) -> None:
+        if self.sources is None:
+            self.sources = [
+                guidance_addendum,
+                CheckinReminder(self.store, history=self.history),
+            ]
 
     async def pending(
         self, turn: ChatTurn
@@ -343,7 +624,7 @@ class GoalAddenda:
         async def collect(seen: Mapping[str, Any]) -> list[GoalAddendum]:
             return [
                 item
-                for source in self.sources
+                for source in self.sources or ()
                 if (item := await source(goal, turn, seen)) is not None
             ]
 
@@ -372,11 +653,22 @@ class GoalAddenda:
         marker: dict[str, Any] = {}
         for item in addenda:
             marker.update(item.marker)
-        sources = ", ".join(sorted({item.source for item in addenda}))
+        names = {item.source for item in addenda}
+        if CHECKIN_SOURCE in names:
+            # Kept on the goal before the step is saved: a crash in between
+            # loses this one reminder, and the window starts again.
+            for source in self.sources or ():
+                if isinstance(source, CheckinReminder):
+                    (await source.remember(goal.id, turn, marker))
+        summary = (
+            "Check-in reminder delivered"
+            if names == {CHECKIN_SOURCE}
+            else f"Supervisor addendum delivered ({', '.join(sorted(names))})"
+        )
         return (
             GOAL_READ_TOOL_NAME,
             addendum_output(goal, addenda),
-            f"Supervisor addendum delivered ({sources})",
+            summary,
             marker,
         )
 
