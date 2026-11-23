@@ -166,7 +166,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "harness-settings",
-    keywords: ["harness", "codex", "grok", "claude", "claude agent sdk", "claude code", "add claude", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
+    keywords: ["harness", "codex", "grok", "claude", "claude agent sdk", "claude code", "add claude", "provider", "assistant", "steer", "interrupt", "capabilities", "plan before acting", "ask for a plan", "advisory plan", "share plan", "main agent planning", "subagent plan", "mixed runtimes", "lifecycle hooks", "guarded workers", "plan only", "safe handoff", "provider goal", "main agent switch", "pending runtime switch", "harness to provider", "goal resume", "goal closure review", "hold completion for review", "approve goal completion", "send goal back", "test turn", "external session", "import session history", "standing instructions", "instruction updates", "compaction", "reconnect"],
   },
   {
     id: "settings.mcp",

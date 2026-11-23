@@ -432,6 +432,18 @@ def test_product_search_finds_goal_resume_instruction_editor(monkeypatch):
     )
 
 
+def test_product_search_explains_goal_closure_review(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I review an agent's goal completion before the goal closes?"
+    )
+    assert any(
+        "Review a goal's completion" in str(item["text"])
+        and "Approve completion" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_explains_core_goal_capacity_recovery(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
