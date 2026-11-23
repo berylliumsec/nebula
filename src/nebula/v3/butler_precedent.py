@@ -24,6 +24,8 @@ _QUERIES = {
     "goal.progress_overdue": "progress checkpoint overdue parent agent status lesson",
     "goal.plan_changed": "investigation plan change correction precedent lesson",
     "goal.blocked": "blocked investigation recovery parent agent precedent lesson",
+    "goal.completion_review_requested": "goal completion closure review evidence criteria premature lesson",
+    "goal.completed": "goal completion closure review evidence criteria premature lesson",
     "goal.read_only_tool_failures_repeated": "repeated read only tool failure parent agent reassessment lesson",
     "agent.subagent_start_failed": "subagent start refusal harness provider runtime recovery parent lesson",
     "butler.periodic_check": "running goal stalled work blocker provider tools parent agent lesson",
