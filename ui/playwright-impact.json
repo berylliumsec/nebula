@@ -40,6 +40,7 @@
     {"name": "workspace-quota", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "tests/v3/application_model_fixture.py", "ui/playwright.workspace-quota.config.ts"], "areas": ["workspace-quota"]},
     {"name": "workspace-recovery", "patterns": ["ui/src/components/ActivityLedger*", "ui/src/pages/chatFollowUpStorage*", "src/nebula/v3/workspace.py", "tests/v3/workspace_recovery_fixture.py", "ui/playwright.workspace-recovery.config.ts"], "areas": ["workspace-recovery"]},
     {"name": "chat-planning", "patterns": ["src/nebula/v3/chat_planning.py", "src/nebula/v3/chat_assistant_config.py", "ui/src/pages/SessionsPage.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["chat-planning"]},
+    {"name": "goal-supervisor-notes", "patterns": ["ui/src/components/ProviderGoalPanel.tsx", "src/nebula/v3/chat_goal_addenda.py"], "areas": ["goal-supervisor-notes"]},
     {"name": "goal-handoff", "patterns": ["src/nebula/v3/chat_goals.py", "src/nebula/v3/butler_global_capabilities.py", "ui/src/components/ProviderGoalPanel.tsx", "ui/tests/fixtures/approval_core.py"], "areas": ["goal-handoff"]},
     {"name": "storage-integrations", "patterns": ["src/nebula/v3/storage_integrations.py", "ui/src/components/Storage*", "ui/src/pages/StoragePage.tsx", "ui/src/storage.css", "docs/storage-integrations.md"], "areas": ["storage-integrations"]},
     {"name": "butler-storage", "patterns": ["src/nebula/v3/butler_storage.py", "ui/src/components/butlerStorageAction*", "ui/src/components/StorageIntegrations.tsx"], "areas": ["butler-storage"]},
@@ -1574,6 +1575,11 @@
       {"area":"provider-goal-skills-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-skills-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-skills-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"}
+    ],
+    "goal-supervisor-notes": [
+      {"area":"goal-supervisor-notes","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant live guidance adds a goal supervisor note and says when the agent hears it","runtime":"mock","shard":"1/1"},
+      {"area":"goal-supervisor-notes","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant live guidance adds a goal supervisor note and says when the agent hears it","runtime":"mock","shard":"1/1"},
+      {"area":"goal-supervisor-notes","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant live guidance adds a goal supervisor note and says when the agent hears it","runtime":"mock","shard":"1/1"}
     ],
     "goal-live-tokens": [
       {"area":"goal-live-tokens","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"},
