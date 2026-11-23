@@ -36,10 +36,22 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .artifacts import ArtifactStore
-from .diagnostics import create_diagnostic_task, record_caught_exception
+from .diagnostics import (
+    create_diagnostic_task,
+    record_caught_exception,
+    record_diagnostic,
+)
 from .memory_budget import HOST_COMMAND_KIND, host_command_labels
 from .memory_policy import MemoryAdmissionTimeout
 from .memory_runtime import HostCommandCancelled
+from .process_reaping import (
+    kill_marked,
+    marked_processes,
+    marker_supported,
+    new_owner_token,
+    orphaned_marked,
+    owner_environment,
+)
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -49,6 +61,8 @@ from .domain import (
     AutomationProjectPolicy,
     AutomationSession,
     AutomationSessionStatus,
+    ChatTurn,
+    ChatTurnStatus,
     CommandExecution,
     CommandExecutionStatus,
     Engagement,
@@ -56,6 +70,7 @@ from .domain import (
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
     VpnProfile,
+    ToolCall,
     ToolCallOrigin,
     WorkspaceChange,
     utc_now,
@@ -97,6 +112,36 @@ MAX_CAPTURE_BYTES = 100 * 1024 * 1024
 DRAIN_SETTLE_SECONDS = 5.0
 HOST_EXIT_POLL_SECONDS = 0.25
 HOST_PIPE_RELEASE_SECONDS = 2.0
+# Marker kind for Host command process trees (process_reaping.OWNER_ENV).
+HOST_COMMAND_MARKER = "host-command"
+# Leftover Host processes (docs/design/host-command-queue.md, "Leftover
+# processes"): a process is leftover when the shell of the command that started
+# it has exited -- so ``process_io`` reports that command terminal and nothing
+# in Nebula can address the process -- and the chat turn that ran the command
+# has ended (complete, failed, cancelled, interrupted or deleted). Core then
+# kills it and records the count. A background command whose own shell still
+# runs is addressable and is never leftover; it keeps its timeout. Commands
+# without a chat turn (missions, the API) keep their leftovers until their
+# automation session closes.
+_TURN_ENDED = frozenset(
+    {
+        ChatTurnStatus.COMPLETE,
+        ChatTurnStatus.FAILED,
+        ChatTurnStatus.CANCELLED,
+        ChatTurnStatus.INTERRUPTED,
+    }
+)
+
+
+@dataclass(frozen=True)
+class LeftoverOwner:
+    """The chat turn whose end makes a command's leftover processes reapable."""
+
+    turn_id: str
+    ended: Callable[[], Awaitable[bool]]
+    reaped: Callable[[int | None], Awaitable[None]]
+
+
 # Per-command capture directories: ``<process uuid4>-<mkdtemp suffix>``.
 _CAPTURE_DIRECTORY_NAME = re.compile(
     r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[a-z0-9_]{8}"
@@ -438,7 +483,18 @@ class HostRuntimeProcess(RuntimeBackendProcess):
 
 
 class HostRuntimeSession(RuntimeBackendSession):
-    """Explicitly opted-in execution as Core's OS user, without OCI isolation."""
+    """Explicitly opted-in execution as Core's OS user, without OCI isolation.
+
+    Each command runs in its own process group, which is killed when the
+    command's shell exits. Descendants that left that group (``setsid``, a
+    double fork) are found by the process marker (``process_reaping``) and
+    killed once they are leftover (see ``LeftoverOwner``) or the session
+    closes. A process that clears its environment is not found; only the
+    protected memory runner (``ManagedHostRuntimeSession``) contains those.
+    """
+
+    # How often a command that left detached processes is checked again.
+    DETACHED_CHECK_SECONDS = 2.0
 
     def __init__(self, workspace: Path) -> None:
         if os.name != "posix" or not Path("/bin/bash").is_file():
@@ -448,6 +504,15 @@ class HostRuntimeSession(RuntimeBackendSession):
         self.workspace = workspace
         self._closed = False
         self.processes: list[HostRuntimeProcess] = []
+        self._markers: dict[str, str] = {}
+        self._leftover_watches: set[asyncio.Task[None]] = set()
+
+    def _marked_environment(
+        self, process_id: str, environment: dict[str, str]
+    ) -> dict[str, str]:
+        token = new_owner_token(HOST_COMMAND_MARKER, process_id)
+        self._markers[process_id] = token
+        return {**environment, **owner_environment(token)}
 
     @property
     def network_enabled(self) -> bool:
@@ -492,7 +557,7 @@ class HostRuntimeSession(RuntimeBackendSession):
             "-c",
             command,
             cwd=str(directory),
-            env=environment,
+            env=self._marked_environment(process_id, environment),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -502,11 +567,81 @@ class HostRuntimeSession(RuntimeBackendSession):
         self.processes.append(backend)
         return backend
 
+    def settle_after_exit(
+        self, process_id: str, owner: LeftoverOwner | None = None
+    ) -> None:
+        """Watch a finished command's escaped descendants until they are leftover."""
+
+        token = self._markers.get(process_id)
+        if token is None or owner is None or not marker_supported():
+            return
+        task = create_diagnostic_task(
+            self._reap_when_leftover(token, owner),
+            feature="runtime",
+            event_code="runtime.host_leftover_watch",
+            failure_message="A Host command's leftover processes could not be stopped.",
+        )
+        self._leftover_watches.add(task)
+        task.add_done_callback(self._leftover_watches.discard)
+
+    async def _reap_when_leftover(self, token: str, owner: LeftoverOwner) -> None:
+        while await asyncio.to_thread(marked_processes, token):
+            if await _owner_ended(owner):
+                count = await _kill_marked_until_gone(token)
+                await owner.reaped(count)
+                return
+            await asyncio.sleep(self.DETACHED_CHECK_SECONDS)
+
     async def close(self) -> None:
         self._closed = True
+        for task in list(self._leftover_watches):
+            task.cancel()
+        await asyncio.gather(*self._leftover_watches, return_exceptions=True)
         for process in self.processes:
             if process.process.returncode is None:
                 await process.terminate()
+        # Escaped descendants of every command end with their session.
+        reaped = 0
+        for token in self._markers.values():
+            reaped += await _kill_marked_until_gone(token)
+        if reaped:
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.host_session_leftovers_reaped",
+                "Core stopped processes Host commands left running when their session closed.",
+                stage="host-session-close",
+                outcome="success",
+                metadata={"count": reaped},
+            )
+
+
+async def _owner_ended(owner: LeftoverOwner) -> bool:
+    try:
+        return await owner.ended()
+    except Exception as caught_error:
+        # Unknown is not ended: the processes stay until a later check.
+        record_caught_exception(
+            "runtime",
+            "runtime.host_leftover_owner_unread",
+            "The turn that owns a Host command's leftover processes could not be read.",
+            caught_error,
+            stage="host-leftover",
+        )
+        return False
+
+
+async def _kill_marked_until_gone(token: str) -> int:
+    """Kill marked processes, again for ones forked while the first pass ran."""
+
+    total = 0
+    for _ in range(5):
+        killed = await asyncio.to_thread(kill_marked, token)
+        total += killed
+        if not killed:
+            break
+        await asyncio.sleep(0.05)
+    return total
 
 
 class ManagedHostRuntimeProcess(RuntimeBackendProcess):
@@ -563,9 +698,6 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
     (docs/design/host-command-queue.md).
     """
 
-    # How often a command that left detached processes is checked again.
-    DETACHED_CHECK_SECONDS = 2.0
-
     def __init__(
         self, workspace: Path, runner, memory_compute, project_id: str
     ) -> None:
@@ -617,7 +749,7 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
             job.job_id,
             ["/bin/bash", "--noprofile", "--norc", "-c", command],
             str(directory),
-            environment,
+            self._marked_environment(process_id, environment),
         )
         backend = ManagedHostRuntimeProcess(process)
         self.processes.append(backend)  # type: ignore[arg-type]
@@ -630,14 +762,20 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
         current = await self.memory_compute.service.get_job(job.job_id)
         return bool((current.labels or {}).get("cancel_requested"))
 
-    def settle_after_exit(self, process_id: str) -> None:
-        """Release the command's reservation once its group is empty."""
+    def settle_after_exit(
+        self, process_id: str, owner: LeftoverOwner | None = None
+    ) -> None:
+        """Release the command's reservation once its group is empty.
+
+        Processes left in the group are killed (``cgroup.kill``) once they
+        are leftover: the command exited and ``owner``'s turn has ended.
+        """
 
         job = self.jobs.get(process_id)
         if job is None:
             return
         task = create_diagnostic_task(
-            self._settle(process_id, job),
+            self._settle(process_id, job, owner),
             feature="runtime",
             event_code="runtime.host_command_settle",
             failure_message="A Host command's memory could not be released yet.",
@@ -645,7 +783,7 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
         self._settling.add(task)
         task.add_done_callback(self._settling.discard)
 
-    async def _settle(self, process_id: str, job) -> None:
+    async def _settle(self, process_id: str, job, owner=None) -> None:
         marked = False
         while not job.ended:
             try:
@@ -669,6 +807,12 @@ class ManagedHostRuntimeSession(HostRuntimeSession):
                     job.job_id, detached=True
                 )
                 marked = True
+            if owner is not None and await _owner_ended(owner):
+                # Leftover: nothing can address these processes any more.
+                count = report.get("process_count")
+                await job.close("completed")
+                await owner.reaped(count if isinstance(count, int) else None)
+                break
             await asyncio.sleep(self.DETACHED_CHECK_SECONDS)
         self.jobs.pop(process_id, None)
         current = await self.memory_compute.service.get_job(job.job_id)
@@ -1272,7 +1416,50 @@ class AutomationRuntimeManager:
                     expected_revision=execution.revision,
                 )
             )
+        await self._reap_orphaned_host_processes()
         await asyncio.to_thread(self._sweep_stale_captures)
+
+    async def _reap_orphaned_host_processes(self) -> int:
+        """Kill Host command processes whose launching Core process has ended.
+
+        A worker that crashed or was evicted leaves its commands, and anything
+        they detached, running with no owner. Only processes whose marker names
+        a launcher that has ended and a command in this Core's store are
+        killed, so another live worker or another Core on this host is never
+        touched.
+        """
+
+        orphans = await asyncio.to_thread(orphaned_marked, HOST_COMMAND_MARKER)
+        reaped = 0
+        for token in orphans:
+            process_id = token.split(":", 1)[1].rsplit("@", 1)[0]
+            try:
+                await self.store.get(CommandExecution, self._execution_id(process_id))
+            except NotFoundError:
+                # diagnostic-expected: another Core's command, or a deleted one.
+                continue
+            except Exception as caught_error:
+                # Unreadable here (another project's worker owns it): leave it.
+                record_caught_exception(
+                    "runtime",
+                    "runtime.host_orphan_unread",
+                    "An orphaned Host command could not be matched to this Core.",
+                    caught_error,
+                    stage="host-orphan-sweep",
+                )
+                continue
+            reaped += await _kill_marked_until_gone(token)
+        if reaped:
+            record_diagnostic(
+                "info",
+                "runtime",
+                "runtime.host_orphans_reaped",
+                "Core stopped Host command processes a previous Core process left running.",
+                stage="host-orphan-sweep",
+                outcome="success",
+                metadata={"count": reaped, "item_count": len(orphans)},
+            )
+        return reaped
 
     def _sweep_stale_captures(self) -> int:
         """Remove per-command capture directories left by a previous Core."""
@@ -2444,15 +2631,79 @@ class AutomationRuntimeManager:
             released.append(session_id)
         return released
 
-    def _managed_host_for(
-        self, process: _ManagedProcess
-    ) -> ManagedHostRuntimeSession | None:
+    def _host_backend_for(self, process: _ManagedProcess) -> HostRuntimeSession | None:
         managed = self._sessions.get(process.execution.session_id)
-        if managed is not None and isinstance(
-            managed.backend, ManagedHostRuntimeSession
-        ):
+        if managed is not None and isinstance(managed.backend, HostRuntimeSession):
             return managed.backend
         return None
+
+    def _leftover_owner(self, execution: CommandExecution) -> LeftoverOwner | None:
+        """The turn whose end makes this command's leftover processes reapable."""
+
+        turn_id = execution.metadata.get("chat_turn_id")
+        if not isinstance(turn_id, str) or not turn_id:
+            return None
+
+        async def ended() -> bool:
+            try:
+                turn = await self.store.get(ChatTurn, turn_id)
+            except NotFoundError:
+                # diagnostic-expected: a deleted turn has ended.
+                return True
+            return turn.status in _TURN_ENDED
+
+        async def reaped(count: int | None) -> None:
+            await self._record_leftovers_reaped(execution, turn_id, count)
+
+        return LeftoverOwner(turn_id=turn_id, ended=ended, reaped=reaped)
+
+    async def _record_leftovers_reaped(
+        self, execution: CommandExecution, turn_id: str, count: int | None
+    ) -> None:
+        """Record on the command and its tool call that Core reaped leftovers."""
+
+        note = {
+            "reaped_count": count,
+            "reaped_at": utc_now().isoformat(),
+            "reason": "turn_ended",
+            "chat_turn_id": turn_id,
+        }
+        record_diagnostic(
+            "info",
+            "runtime",
+            "runtime.host_leftovers_reaped",
+            "Core stopped processes a Host command left running after its turn ended.",
+            project_id=execution.engagement_id,
+            execution_id=execution.id,
+            session_id=execution.session_id,
+            stage="host-leftover",
+            outcome="success",
+            metadata={"entity_type": "chat_turn", "entity_id": turn_id, "count": count},
+        )
+        targets: list[tuple[type[Any], str | None]] = [
+            (CommandExecution, execution.id),
+            (ToolCall, execution.metadata.get("tool_call_id")),
+        ]
+        for kind, entity_id in targets:
+            if not isinstance(entity_id, str):
+                continue
+            for attempt in range(1, REVISE_ATTEMPTS + 1):
+                try:
+                    current = await self.store.get(kind, entity_id)
+                    await self.store.update(
+                        kind,
+                        entity_id,
+                        {"metadata": {**current.metadata, "leftover_processes": note}},
+                        expected_revision=current.revision,
+                    )
+                    break
+                except NotFoundError:
+                    # diagnostic-expected: the record was deleted with its chat.
+                    break
+                except RevisionConflict:
+                    # diagnostic-expected: retry on the newest record.
+                    if attempt == REVISE_ATTEMPTS:
+                        raise
 
     def _owner_lock(self, key: tuple[str, str, str]) -> asyncio.Lock:
         lock = self._owner_locks.get(key)
@@ -2977,13 +3228,18 @@ class AutomationRuntimeManager:
             exit_code = await process.backend.wait()
             if process.drain_tasks is not None:
                 await self._settle_drains(process.drain_tasks)
-            host = self._managed_host_for(process)
+            host = self._host_backend_for(process)
             if host is not None:
-                if process.forced_status is None and await host.cancel_requested(
-                    process.execution.process_id
+                if (
+                    isinstance(host, ManagedHostRuntimeSession)
+                    and process.forced_status is None
+                    and await host.cancel_requested(process.execution.process_id)
                 ):
                     process.forced_status = CommandExecutionStatus.CANCELLED
-                host.settle_after_exit(process.execution.process_id)
+                host.settle_after_exit(
+                    process.execution.process_id,
+                    self._leftover_owner(process.execution),
+                )
             status = process.forced_status or (
                 CommandExecutionStatus.COMPLETED
                 if exit_code == 0

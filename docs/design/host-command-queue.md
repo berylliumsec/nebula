@@ -59,7 +59,35 @@ a 30-minute safety limit.)
 `queued → running → completed | failed | timed_out | cancelled | interrupted`.
 A foreground command returns when its main process exits. If it left detached
 processes (`nohup`, `setsid`, `&`), its group stays charged and listed as "detached"
-until those exit or the operator cancels it.
+until those exit, the operator cancels it, or they become leftover (below).
+
+**Leftover processes.** A process is *leftover* when the shell of the command that
+started it has exited, so `process_io` reports that command terminal and nothing in
+Nebula can address the process, and the chat turn that ran the command has ended
+(complete, failed, cancelled, interrupted, or deleted). Core kills leftovers: in a
+protected group with `cgroup.kill` (the group's settle loop checks the turn every
+2 s), and on the unmanaged Host path by the `NEBULA_PROCESS_OWNER` marker every
+command's processes inherit (`process_reaping.py`). Each reap records the
+`runtime.host_leftovers_reaped` diagnostic with the count (the runner's
+`process_count`; unknown from older runners) and a `leftover_processes` note on the
+command execution and its tool call. Not leftover:
+
+- a background command (`background=true`) whose own shell still runs: it is
+  addressable through `process_io` and keeps its timeout;
+- anything while the turn that ran it is still running, waiting for approval or
+  waiting for a background callback;
+- commands without a chat turn (missions, the automation API): their leftovers stay
+  until the automation session closes, as before.
+
+Work a later turn must reach (a server, a long scan a goal polls) runs as a
+background command; `run_command`'s description tells agents so. On the unmanaged
+path, a process that clears or rewrites its environment (`env -i`, `sudo`,
+`systemd-run`, `at`, `docker`) is not found; only the protected group contains it.
+On Core start, marked processes whose launching worker has ended and whose command
+is in this Core's store are killed, so a crash or eviction no longer orphans
+unmanaged Host commands. Harness CLIs (Codex app-server, Grok ACP) run in their own
+process group with the same marker, and closing one stops its whole process tree
+(TERM, then KILL after 3 s).
 
 **Cancel.** `POST /host-commands/{execution_id}/cancel`. A queued command is removed
 before it starts; a running one has its group killed (`cgroup.kill`). Stopping the

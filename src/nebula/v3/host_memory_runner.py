@@ -286,6 +286,8 @@ class Runner:
             "peak_bytes": int(_read(peak_path)) if peak_path.exists() else None,
             "oom_kill_count": events.get("oom_kill", 0),
             "populated": _keyed(group / "cgroup.events").get("populated", 0) == 1,
+            # How many processes a reap would kill; older runners omit it.
+            "process_count": len(_read(group / "cgroup.procs").split()),
         }
 
     def create(self, request: dict[str, Any]) -> dict[str, Any]:
