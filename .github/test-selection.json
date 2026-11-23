@@ -1,28 +1,31 @@
 {
-  "change_digest": "40eae1472c9584dc17e47ce3db96193f0c9a14edd13ca121a250913008be4a5a",
-  "reviewed_by": "Claude: goal check-in reminder addendum source, focused backend selection",
-  "reason": "Stacked on #1303 (baseline is its branch tip). A running goal that has posted no Work check-in for N minutes (default 30) or made M tool calls in its turn since its last check-in or reminder (default 40) is reminded once per window inside the running turn. CheckinReminder is a new GoalAddenda source: provider turns receive it as a Core-added goal.read result before the next routing call; harness turns are steered from the gateway tool-call bookkeeping hook (_attach_gateway_tool_call) and a successful work.check_in resets the count; Grok is not reminded. The last reminder is kept in goal metadata so the goal's next turn does not repeat it. Only turns offered the Work check-in tool are reminded; tools are never refused and Butler is not involved. Selected: the new regression file (due by time once per window and across turns, due by tool count, check-ins from the session, assigned items and Butler reports reset it, in-turn check-in resets the count, no Work tools means no reminder, bounded env thresholds, harness steer/reset/Grok, and one real routing-loop turn), #1303's addenda file, goal lifecycle, harness goals, Core delivery steps, turn tool bookkeeping and the harness Work gateway (both touched by the harness hook), and goal tool budgets.",
-  "exclusions": "No frontend, native or Playwright change: the reminder has no UI control and appears as an existing goal.read transcript step, so those layers are empty. The settings-assistant document gains a behaviour row (the product knowledge index was rebuilt and verified locally); no destination or settingsCatalog entry is added because nothing is configurable in the UI. Real-Core Playwright is not selected: the provider journey was exercised on a disposable LAN Core. The harness steer is covered by pytest only. No full-suite approval.",
+  "change_digest": "1ca308ba2001f4629a55fce1da9f32bface234c95cf872ce969546205107d3bf",
+  "reviewed_by": "Claude: DeepSeek V4 empty turns, focused provider/markup/recovery-receipt selection",
+  "reason": "DeepSeek V4 on OpenRouter sometimes writes its DSML tool call into the reasoning channel with no tool_calls and no answer; Core recovered markup from answer text only, so the reply read as reasoning-only and fed final-answer recovery until a goal blocked. ModelResponse now recovers complete DSML / DeepSeek special-token frames from reasoning when an adapter reply has no answer and no call (GLM/Qwen tags stay thoughts; stripped fragments are marked unreadable, never run). Chat Completions replies carry a bounded redacted stream trace recorded in the final-answer receipt and in new providers.stream.empty_reply / failed_trace diagnostics; chat.routing.empty_tool_batch and hook-stop diagnostics now use allowlisted metadata keys; the diagnostics allowlist gains finish_reasons, stream_choices, stream_frames. Select the new synthetic-SSE regression file, the markup recovery suites (dsml, native tool markup, provider leftovers) for the refactored tool_markup.recover, the OpenAI-compatible robustness and reasoning replay suites for the stream adapter and replay fields, the hook-stop and chat tool-loop suites plus the two test_chat.py receipt tests whose expected receipt gained fields, and test_diagnostics.py for the allowlist change.",
+  "exclusions": "No UI, setting or native change: frontend, Playwright and native layers are empty and the settings assistant is unchanged. Other test_chat.py cases do not assert the final-answer receipt shape. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 120,
+    "python": 347,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_goal_checkin_reminder.py",
-    "tests/v3/test_goal_supervisor_addenda.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_turn_tool_bookkeeping.py",
-    "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_work_gateway.py",
-    "tests/v3/test_tool_capacity_starvation.py"
+    "tests/v3/test_deepseek_empty_turns.py",
+    "tests/v3/test_dsml.py",
+    "tests/v3/test_native_tool_markup.py",
+    "tests/v3/test_provider_leftovers.py",
+    "tests/v3/test_openai_compatible_robustness.py",
+    "tests/v3/test_reasoning_replay.py",
+    "tests/v3/test_hook_stop_closing_message.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_diagnostics.py",
+    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_output_exhaustion",
+    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_stop_with_more_room"
   ],
   "frontend": [],
   "native": [],

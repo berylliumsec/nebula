@@ -597,6 +597,20 @@ stall limit blocks it. A real answer from that synthesis is kept. Recovery
 receipts for empty answers record `http_status` and the routed
 `upstream_provider` (OpenRouter's `provider`) when the route reports them.
 
+DeepSeek V4 on some routes writes its tool call into the reasoning channel and
+sends no `tool_calls` and no answer. When a reply has neither answer text nor a
+call, Core reads a complete DSML or DeepSeek special-token frame in its
+reasoning as the call, through the same broker, policy and approval path as any
+other; GLM and Qwen `<tool_call>` tags there stay thoughts. Markup Core cannot
+read (for example closing tags left after a route stripped the special tokens)
+is never run: the reply stays empty and is marked `reasoning_tool_markup:
+unreadable`. Each Chat Completions reply also carries a bounded trace (frame
+count, finish reasons, per-choice content, reasoning and tool-call delta
+counts, and the last six frames with model text replaced by its length). The
+recovery receipt stores it as `stream`, and an empty or failed stream records
+it in the `providers.stream.empty_reply` or `providers.stream.failed_trace`
+diagnostic.
+
 G9 operator-workflow checkpoint (2026-09-18): provider Assistant settings discover
 project `.agents/hooks`, allow explicit per-turn selection, and send exact hook IDs
 only on provider requests. Durable outcomes reload with the conversation. Restart

@@ -74,7 +74,9 @@ from .model_catalog import (
 )
 from .model_pricing import provider_token_rates
 from .redaction import redact_text
+from .tool_markup import control_fragment as _tool_markup_fragment
 from .tool_markup import recover as _recover_tool_markup
+from .tool_markup import recover_reasoning as _recover_reasoning_tool_markup
 
 
 class ProviderError(RuntimeError):
@@ -744,6 +746,14 @@ class ModelResponse(BaseModel):
     reasoning_state: dict[str, Any] | None = Field(
         default=None, exclude=True, repr=False
     )
+    # Whether the reasoning held tool markup: "recovered" when Core read a
+    # call the model wrote there instead of ``tool_calls``, "unreadable" when
+    # markup was there but no whole frame could be read. Evidence only.
+    reasoning_tool_markup: str | None = Field(default=None, exclude=True)
+    # A bounded, redacted account of what the route sent (frame count, finish
+    # reasons, per-choice lengths, the last few frames with their text
+    # replaced by lengths), for diagnosing an empty or failed reply.
+    stream_trace: dict[str, Any] | None = Field(default=None, exclude=True, repr=False)
 
     @field_validator("reasoning_state")
     @classmethod
@@ -776,7 +786,107 @@ class ModelResponse(BaseModel):
 
         found = _recover_tool_markup(self.text)
         if not found.recovered:
+            return self._recover_reasoning_tool_calls(info)
+        recovered = self._recovered_calls(found, info)
+        if recovered is None:
             return self
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.dsml.recovered_tool_calls",
+            "A route serialized tool calls into assistant content; Core "
+            "recovered them instead of discarding the turn.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={
+                "provider": self.provider_id,
+                "model_id": self.model,
+                "recovered_count": len(recovered),
+                "count": found.unparsed_frames,
+                "format": ",".join(sorted({call.markup for call in found.calls})),
+            },
+        )
+        # An after-validator has to settle the model in place; a copy is
+        # discarded when the model is built through ``__init__``.
+        self.text = found.text
+        self.tool_calls = [*self.tool_calls, *recovered]
+        return self
+
+    def _recover_reasoning_tool_calls(self, info: ValidationInfo) -> "ModelResponse":
+        """Read a call the model wrote into its reasoning, when nothing else came.
+
+        DeepSeek V4 on some routes writes its DSML call inside the reasoning
+        channel and sends no ``tool_calls`` and no answer. Read as it stands,
+        that reply is empty: chat asks again for an answer and a goal blocks
+        after enough of them. Only a reply with no answer text and no call is
+        read this way, and only DSML or DeepSeek's special tokens, which are
+        never prose. The calls take the same broker, policy and approval path
+        as any other.
+        """
+
+        context = info.context if isinstance(info.context, dict) else {}
+        if (
+            self.text.strip()
+            or self.tool_calls
+            or not self.reasoning
+            # Only a reply an adapter is reading from its route; a response
+            # Core builds or reloads itself is taken as it is.
+            or not isinstance(context.get(_RESPONSE_REQUEST), ModelRequest)
+        ):
+            return self
+        found = _recover_reasoning_tool_markup(self.reasoning)
+        recovered = self._recovered_calls(found, info) if found.recovered else None
+        if recovered is None:
+            if _tool_markup_fragment(self.reasoning):
+                self.reasoning_tool_markup = "unreadable"
+                record_diagnostic(
+                    "warning",
+                    "providers",
+                    "providers.dsml.unreadable_reasoning_markup",
+                    "A reply with no answer and no tool call held tool markup in "
+                    "its reasoning that Core could not read as a call.",
+                    outcome="fallback",
+                    stage="providers",
+                    retryable=True,
+                    metadata={
+                        "provider": self.provider_id,
+                        "model_id": self.model,
+                        "status": self.finish_reason,
+                        "vendor_request_id": self.provider_request_id,
+                        "count": found.unparsed_frames,
+                    },
+                )
+            return self
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.dsml.recovered_reasoning_tool_calls",
+            "A route returned a tool call inside the model's reasoning and no "
+            "answer; Core recovered the call instead of reading an empty reply.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={
+                "provider": self.provider_id,
+                "model_id": self.model,
+                "status": self.finish_reason,
+                "vendor_request_id": self.provider_request_id,
+                "recovered_count": len(recovered),
+                "count": found.unparsed_frames,
+                "format": ",".join(sorted({call.markup for call in found.calls})),
+            },
+        )
+        self.reasoning = found.text
+        self.reasoning_tool_markup = "recovered"
+        self.tool_calls = recovered
+        return self
+
+    def _recovered_calls(
+        self, found: Any, info: ValidationInfo
+    ) -> list[ToolCall] | None:
+        """``found``'s calls as tool calls, or None when one is unusable."""
+
         context = info.context if isinstance(info.context, dict) else {}
         request = context.get(_RESPONSE_REQUEST)
         recovered: list[ToolCall] = []
@@ -805,29 +915,8 @@ class ModelResponse(BaseModel):
                 )
                 # One unusable call makes the whole frame untrustworthy, so
                 # the text is left exactly as it arrived.
-                return self
-        record_diagnostic(
-            "warning",
-            "providers",
-            "providers.dsml.recovered_tool_calls",
-            "A route serialized tool calls into assistant content; Core "
-            "recovered them instead of discarding the turn.",
-            outcome="fallback",
-            stage="providers",
-            retryable=False,
-            metadata={
-                "provider_id": self.provider_id,
-                "model": self.model,
-                "recovered_calls": len(recovered),
-                "unparsed_frames": found.unparsed_frames,
-                "markup": ",".join(sorted({call.markup for call in found.calls})),
-            },
-        )
-        # An after-validator has to settle the model in place; a copy is
-        # discarded when the model is built through ``__init__``.
-        self.text = found.text
-        self.tool_calls = [*self.tool_calls, *recovered]
-        return self
+                return None
+        return recovered
 
 
 class StreamEventType(str, Enum):
@@ -4562,6 +4651,7 @@ class OpenAICompatibleProvider(ModelProvider):
             finish_reason=choice.get("finish_reason"),
             provider_request_id=data.get("id"),
             http_status=response.status_code,
+            stream_trace=_message_trace(data),
             raw=data,
             raw_body=response.content,
             reasoning_state=_reasoning_state(
@@ -4983,6 +5073,217 @@ class OpenAICompatibleProvider(ModelProvider):
             raise ProviderError("OpenRouter endpoint discovery failed") from exc
 
 
+# Model output a stream trace never keeps: each such string is replaced by its
+# length, so a trace shows a frame's shape without what the model wrote.
+_TRACE_TEXT_KEYS = frozenset(
+    {
+        "arguments",
+        "content",
+        "data",
+        "encrypted_content",
+        "reasoning",
+        "reasoning_content",
+        "refusal",
+        "signature",
+        "summary",
+        "text",
+    }
+)
+_TRACE_FRAMES = 6
+_TRACE_FRAME_CHARACTERS = 400
+_TRACE_STRING_CHARACTERS = 80
+_TRACE_MESSAGE_CHARACTERS = 160
+_TRACE_LIST_ITEMS = 8
+_TRACE_CHOICES = 4
+_TRACE_FINISH_REASONS = 8
+
+
+def _trace_value(value: Any, key: str = "", depth: int = 0) -> Any:
+    if depth > 6:
+        return "<...>"
+    if isinstance(value, str):
+        if key in _TRACE_TEXT_KEYS:
+            return f"<{len(value)} chars>"
+        if key == "message" and len(value) <= _TRACE_MESSAGE_CHARACTERS:
+            # An error's own words name the failure; secrets are redacted.
+            return redact_text(value)
+        if len(value) > _TRACE_STRING_CHARACTERS:
+            return f"<{len(value)} chars>"
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {
+            str(name)[:40]: _trace_value(item, str(name), depth + 1)
+            for name, item in list(value.items())[:24]
+        }
+    if isinstance(value, list):
+        kept = [
+            _trace_value(item, key, depth + 1) for item in value[:_TRACE_LIST_ITEMS]
+        ]
+        if len(value) > _TRACE_LIST_ITEMS:
+            kept.append(f"<+{len(value) - _TRACE_LIST_ITEMS} items>")
+        return kept
+    return value
+
+
+def _trace_frame(encoded: str, data: Any) -> str:
+    """One SSE frame for a trace: its JSON shape, the model's words as lengths."""
+
+    if encoded == "[DONE]":
+        return "[DONE]"
+    if data is None:
+        return f"<non-JSON frame, {len(encoded)} chars>"
+    shown = json.dumps(_trace_value(data), separators=(",", ":"), default=str)
+    if len(shown) > _TRACE_FRAME_CHARACTERS:
+        shown = shown[: _TRACE_FRAME_CHARACTERS - 3] + "..."
+    return shown
+
+
+class _StreamTrace:
+    """A bounded, redacted account of a Chat Completions reply.
+
+    It counts frames, keeps the finish reasons in arrival order, tallies the
+    characters each choice carried on each channel, and keeps the last few
+    frames with model text replaced by its length. It is what an empty or
+    failed reply leaves for diagnosis; it never holds what the model wrote.
+    """
+
+    def __init__(self) -> None:
+        self.frames = 0
+        self.keepalives = 0
+        self.done = False
+        self.finish_reasons: list[str] = []
+        self.finish_chunks = 0
+        self.choices: dict[int, dict[str, int]] = {}
+        self.last: list[str] = []
+
+    def _keep(self, frame: str) -> None:
+        self.last.append(frame)
+        del self.last[:-_TRACE_FRAMES]
+
+    def observe(self, encoded: str, data: Any) -> None:
+        """One streamed frame: ``[DONE]``, a keepalive (``None``) or a chunk."""
+
+        self.frames += 1
+        if encoded == "[DONE]":
+            self.done = True
+        elif data is None:
+            self.keepalives += 1
+        self._keep(_trace_frame(encoded, data))
+        self._choices(data, "delta")
+
+    def observe_message(self, data: Any) -> None:
+        """A whole (non-streamed) Chat Completions body."""
+
+        self.frames += 1
+        self._keep(_trace_frame("", data))
+        self._choices(data, "message")
+
+    def _choices(self, data: Any, field: str) -> None:
+        choices = data.get("choices") if isinstance(data, dict) else None
+        for position, choice in enumerate(choices if isinstance(choices, list) else []):
+            if isinstance(choice, dict):
+                self._choice(position, choice, field)
+
+    def _choice(self, position: int, choice: dict[str, Any], field: str) -> None:
+        raw_index = choice.get("index")
+        index = (
+            raw_index
+            if isinstance(raw_index, int) and not isinstance(raw_index, bool)
+            else position
+        )
+        reason = choice.get("finish_reason")
+        if isinstance(reason, str) and reason:
+            self.finish_chunks += 1
+            if len(self.finish_reasons) < _TRACE_FINISH_REASONS:
+                self.finish_reasons.append(reason[:40])
+        if index not in self.choices and len(self.choices) >= _TRACE_CHOICES:
+            return
+        tally = self.choices.setdefault(
+            index,
+            {"content_characters": 0, "reasoning_characters": 0, "tool_call_deltas": 0},
+        )
+        delta = choice.get(field)
+        if not isinstance(delta, dict):
+            return
+        tally["content_characters"] += len(
+            _openai_message_content(delta) or _openai_refusal(delta) or ""
+        )
+        tally["reasoning_characters"] += len(_openai_message_reasoning(delta))
+        calls = delta.get("tool_calls")
+        tally["tool_call_deltas"] += len(calls) if isinstance(calls, list) else 0
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "frames": self.frames,
+            "keepalives": self.keepalives,
+            "done": self.done,
+            "finish_reasons": list(self.finish_reasons),
+            "finish_chunks": self.finish_chunks,
+            "choices": [
+                {"index": index, **tally}
+                for index, tally in sorted(self.choices.items())
+            ],
+            "last_events": list(self.last),
+        }
+
+    def metadata(self) -> dict[str, Any]:
+        """The trace under diagnostic metadata keys (see ``diagnostics``)."""
+
+        return {
+            "chunk_count": self.frames,
+            "finish_reasons": list(self.finish_reasons),
+            "stream_choices": [
+                f"{index}:content={tally['content_characters']},"
+                f"reasoning={tally['reasoning_characters']},"
+                f"tool_call_deltas={tally['tool_call_deltas']}"
+                for index, tally in sorted(self.choices.items())
+            ],
+            "stream_frames": list(self.last),
+        }
+
+
+def _message_trace(data: Any) -> dict[str, Any]:
+    trace = _StreamTrace()
+    trace.observe_message(data)
+    return trace.summary()
+
+
+def _record_stream_trace(
+    event_code: str,
+    message: str,
+    trace: _StreamTrace,
+    *,
+    provider: OpenAICompatibleProvider,
+    model: str,
+    finish_reason: str | None,
+    vendor_request_id: str | None,
+    http_status: Any,
+    upstream_provider: str | None,
+    reason_code: str,
+    retryable: bool,
+) -> None:
+    record_diagnostic(
+        "warning",
+        "providers",
+        event_code,
+        message,
+        outcome="fallback",
+        stage="providers",
+        retryable=retryable,
+        metadata={
+            "provider": provider.config.id,
+            "adapter": provider.config.flavor.value,
+            "model_id": model,
+            "status": finish_reason,
+            "vendor_request_id": vendor_request_id,
+            "http_status": http_status,
+            "route": upstream_provider,
+            "reason_code": reason_code,
+            **trace.metadata(),
+        },
+    )
+
+
 def _reply_piece_events(
     pieces: list[Piece], text_parts: list[str], reasoning_parts: list[str]
 ) -> list[ModelStreamEvent]:
@@ -5028,6 +5329,7 @@ async def _stream_openai_compatible(
     response_model = model
     upstream_provider: str | None = None
     opened: dict[str, Any] = {}
+    trace = _StreamTrace()
     terminated = False
     keepalives = 0
     try:
@@ -5050,9 +5352,11 @@ async def _stream_openai_compatible(
                     if encoded == "[DONE]":
                         # Nothing follows [DONE]. A proxy that holds the socket
                         # open after it must not turn the reply into a timeout.
+                        trace.observe(encoded, None)
                         terminated = True
                         break
                     data = _stream_frame_data(encoded)
+                    trace.observe(encoded, data)
                     if data is None:
                         if not keepalives:
                             _record_keepalive_skipped(provider.config, encoded)
@@ -5159,6 +5463,7 @@ async def _stream_openai_compatible(
             provider_request_id=response_id,
             http_status=opened.get("status_code"),
             upstream_provider=upstream_provider,
+            stream_trace=trace.summary(),
             reasoning_state=_reasoning_state(
                 provider.config.id,
                 model,
@@ -5166,6 +5471,26 @@ async def _stream_openai_compatible(
                 calls,
             ),
         )
+        if not final.text and not final.tool_calls:
+            _record_stream_trace(
+                "providers.stream.empty_reply",
+                "A provider stream completed with no answer and no tool call.",
+                trace,
+                provider=provider,
+                model=response_model,
+                finish_reason=finish_reason,
+                vendor_request_id=response_id,
+                http_status=opened.get("status_code"),
+                upstream_provider=upstream_provider,
+                reason_code=(
+                    "reasoning_markup_unreadable"
+                    if final.reasoning_tool_markup == "unreadable"
+                    else "reasoning_only"
+                    if final.reasoning
+                    else "empty"
+                ),
+                retryable=True,
+            )
         yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=final)
     except asyncio.CancelledError as caught_error:
         record_caught_exception(
@@ -5184,6 +5509,24 @@ async def _stream_openai_compatible(
             exc,
             stage="providers",
         )
+        if trace.frames:
+            # What the route sent before the failure, for its diagnosis.
+            _record_stream_trace(
+                "providers.stream.failed_trace",
+                "A provider stream failed; Core kept a redacted trace of its "
+                "last frames.",
+                trace,
+                provider=provider,
+                model=response_model,
+                finish_reason=finish_reason,
+                vendor_request_id=response_id,
+                http_status=opened.get("status_code"),
+                upstream_provider=upstream_provider,
+                reason_code=type(exc).__name__,
+                retryable=isinstance(
+                    exc, (ProviderOverloadedError, ProviderStreamInterruptedError)
+                ),
+            )
         yield ModelStreamEvent.failure(exc)
 
 
