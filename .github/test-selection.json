@@ -1,28 +1,21 @@
 {
-  "change_digest": "07b4ebe77592b3a28e04f7a4c4e74d03cc7f92c87e1bd7911003fa06400b4ba8",
-  "reviewed_by": "Claude: goal dispatch failure diagnostics, focused goal-dispatch and diagnostics-classification selection",
-  "reason": "A goal whose first or next turn could not be prepared paused with the fixed text 'Goal work could not start' and nothing was logged: the cause was validation-class (ChatConfigurationError when the goal's built-in tools do not fit the model context), which record_caught_exception records at Warning and the default Error level drops. record_caught_exception gains operation_failed, which keeps such a cause at Error; goal dispatch and automatic continuation use it and pause with the cause and error ID. Select the new dispatch-failure and pause-reason regression tests, the two existing dispatch/auto-continue tests that assert budget exhaustion is not a failure, the new and existing record_caught_exception classification tests, and the Kali inventory tests because its standalone fallback signature changed.",
-  "exclusions": "No UI, setting, provider or native change, so frontend, Playwright and native layers are empty and the settings assistant is unchanged. Other goal and diagnostics tests do not reach the changed catch sites or the new flag. No full-suite approval.",
+  "change_digest": "187d59723c51b76babb6fa3926a4cb2084a60430f7b1dea0e4a2e9b6f3787a68",
+  "reviewed_by": "Claude: bound selected pytest runs in CI and keep a stack for hangs",
+  "reason": "The selected python job runs pytest through scripts/run_pytest_thread_guard.py, which had no overall time bound and only stopped pytest after a reported thread leak; the job had no timeout-minutes and no faulthandler timeout. On 2026-11-23 the Python 3.12 job hung four times in its Test step (20-80 min) on PRs #1303/#1304 while the same selections passed locally on 3.11 and 3.12 in 1-2.5 min; cancelled jobs keep no logs, so the hanging test was never identified. The runner gains --max-seconds (stops pytest's owned process group, exit 1), CI passes --max-seconds 1200 and -o faulthandler_timeout=180 so a hung test dumps every thread's stack before the bound, and the job gets timeout-minutes: 45 as a backstop. Select the thread leak guard tests, including a new one that hangs a synthetic test and asserts the bound and the dumped stack.",
+  "exclusions": "No product code change; frontend, Playwright and native layers are empty. The full-source job's guard invocation is unchanged. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 10,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_goals.py::test_goal_dispatch_failure_pauses_with_its_cause_and_a_logged_error",
-    "tests/v3/test_chat_goals.py::test_goal_start_failure_reason_names_the_cause_without_host_detail",
-    "tests/v3/test_chat_goals.py::test_dispatch_of_a_goal_whose_budget_is_spent_is_not_a_failure",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
-    "tests/v3/test_diagnostics.py::test_caught_exception_that_stops_work_is_kept_at_the_default_level",
-    "tests/v3/test_diagnostics.py::test_caught_exception_severity_uses_http_and_integrity_semantics",
-    "tests/v3/test_diagnostics.py::test_operator_detail_drops_os_error_codes_and_host_paths",
-    "tests/v3/test_kali_tool_inventory.py"
+    "tests/test_thread_leak_guard.py"
   ],
   "frontend": [],
   "native": [],
