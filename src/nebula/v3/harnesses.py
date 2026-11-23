@@ -196,6 +196,7 @@ from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .providers import REASONING_EFFORTS
 from .policy import PolicyEffect, PolicyEngine, PolicyRequest
+from .process_reaping import new_owner_token, owner_environment, stop_process_tree
 from .redaction import redact_text, sanitize_display_text
 from .storage import (
     ConflictError,
@@ -2265,9 +2266,12 @@ class _CodexRpc:
         *,
         process: asyncio.subprocess.Process | None = None,
         websocket: Any = None,
+        process_marker: str | None = None,
     ) -> None:
         self.process = process
         self.websocket = websocket
+        # process_reaping marker every process the CLI starts inherits.
+        self.process_marker = process_marker
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self.events: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
@@ -2629,20 +2633,22 @@ class _CodexRpc:
                 task.cancel()
         if self.websocket is not None:
             await self.websocket.close()
-        if self.process is not None and self.process.returncode is None:
-            self.process.terminate()
-            try:
-                await asyncio.wait_for(self.process.wait(), timeout=3)
-            except asyncio.TimeoutError as caught_error:
-                record_caught_exception(
+        if self.process is not None:
+            # The CLI's own tools start shells and terminals as its children,
+            # often in their own sessions; stop the whole tree, not one PID.
+            reaped = await stop_process_tree(
+                self.process, token=self.process_marker, grace_seconds=3
+            )
+            if reaped:
+                record_diagnostic(
+                    "info",
                     "harnesses",
-                    "harnesses.harnesses.caught_failure_005",
-                    "A handled harnesses operation raised an exception.",
-                    caught_error,
-                    stage="harnesses",
+                    f"harnesses.{self.diagnostic_namespace}.children_reaped",
+                    f"Core stopped processes the {self.transport_name} left running when it closed.",
+                    stage="cleanup",
+                    outcome="success",
+                    metadata={"count": reaped},
                 )
-                self.process.kill()
-                await self.process.wait()
         await gather_diagnostic(
             *(task for task in (self._reader_task, self._stderr_task) if task),
             feature="harnesses",
@@ -5158,21 +5164,28 @@ class CodexAppServerAdapter(HarnessAdapter):
             if profile.home_directory:
                 argv.extend(["-c", 'cli_auth_credentials_store="file"'])
             argv.extend(["--strict-config", "--listen", "stdio://"])
+            marker = new_owner_token("harness-codex")
             process = await asyncio.create_subprocess_exec(
                 *argv,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
-                env=_harness_environment(
-                    profile,
-                    child_env,
-                    host_session=effective_native_capabilities.shell,
-                ),
+                env={
+                    **_harness_environment(
+                        profile,
+                        child_env,
+                        host_session=effective_native_capabilities.shell,
+                    ),
+                    **owner_environment(marker),
+                },
                 # Read-ahead only: _CodexRpc splits lines itself.
                 limit=CODEX_APP_SERVER_READ_CHUNK_BYTES,
+                # Its own group, still in the worker's session: close can stop
+                # the CLI's tree, and a worker eviction still ends it.
+                process_group=0,
             )
-            rpc = _CodexRpc(process=process)
+            rpc = _CodexRpc(process=process, process_marker=marker)
             await rpc.start()
             return rpc
 
@@ -8433,16 +8446,19 @@ class GrokAcpAdapter(HarnessAdapter):
                 environment["HOME"] = str(isolated_home)
         if core_planned:
             await self._verify_plan_isolation(executable, workspace, environment)
+        marker = new_owner_token("harness-grok")
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
-            env=environment,
+            env={**environment, **owner_environment(marker)},
             limit=MAX_MCP_MESSAGE_BYTES,
+            # Own group, worker's session: see the Codex app-server spawn.
+            process_group=0,
         )
-        rpc = _AcpRpc(process=process)
+        rpc = _AcpRpc(process=process, process_marker=marker)
         await rpc.start()
         return rpc
 
