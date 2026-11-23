@@ -94,6 +94,9 @@ class ProviderSchedulerConfig:
     background_limit: int = 58
     per_turn_tool_limit: int = 4
     global_tool_limit: int = 8
+    # How long one tool call may wait for a tool slot before it is refused
+    # with CapacityReached. Bounds only the wait, never the tool's run time.
+    tool_capacity_wait_seconds: int = 600
 
     @classmethod
     def from_environment(cls) -> "ProviderSchedulerConfig":
@@ -107,6 +110,9 @@ class ProviderSchedulerConfig:
             ),
             per_turn_tool_limit=_bounded_env("NEBULA_TURN_TOOL_CONCURRENCY", 4),
             global_tool_limit=_bounded_env("NEBULA_GLOBAL_TOOL_CONCURRENCY", 8),
+            tool_capacity_wait_seconds=_bounded_env(
+                "NEBULA_TOOL_CAPACITY_WAIT_SECONDS", 600, maximum=86_400
+            ),
         )
         if config.background_limit > config.provider_limit:
             raise ValueError(

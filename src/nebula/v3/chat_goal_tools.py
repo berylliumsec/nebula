@@ -187,6 +187,7 @@ def goal_completion_spec() -> ToolSpec:
         idempotency=IdempotencyBehavior.KEY_REQUIRED,
         budget_class="execution",
         timeout_seconds=30,
+        uses_execution_capacity=False,
     )
 
 

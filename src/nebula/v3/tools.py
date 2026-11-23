@@ -360,6 +360,12 @@ class ToolSpec(BaseModel):
     parser_contract: dict[str, Any] | None = None
     budget_class: Literal["execution", "artifact_query"] = "execution"
     capture_paths: list[str] = Field(default_factory=list, max_length=32)
+    # Whether a call holds a process and host tool slot while it runs. Only
+    # Core's own control-plane built-ins, which read or write Core records in
+    # process, set this false, so long commands holding every slot cannot
+    # starve them. Never serialized: a spec read back from data always takes
+    # a slot.
+    uses_execution_capacity: bool = Field(default=True, exclude=True)
 
     @field_validator("input_schema", "output_schema")
     @classmethod
@@ -436,6 +442,20 @@ class ToolSpec(BaseModel):
             and not self.target_argument
         ):
             raise ValueError("distinct-target parallelism requires target_argument")
+        if not self.uses_execution_capacity and (
+            self.network_access
+            or self.opaque_network_access
+            or self.cloud_transfer
+            or self.filesystem_access != "none"
+            or self.credential_classes
+            or self.path_arguments
+            or self.capture_paths
+            or self.source_id
+            or self.requires_approval
+        ):
+            raise ValueError(
+                "only in-process control-plane tools may skip execution capacity"
+            )
         return self
 
 

@@ -25,6 +25,7 @@ from .diagnostics import (
 )
 
 import asyncio
+from contextlib import aclosing
 from contextvars import copy_context
 import base64
 import hashlib
@@ -35,6 +36,7 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import (
+    AsyncGenerator,
     AsyncIterator,
     Callable,
     Collection,
@@ -93,6 +95,7 @@ from .chat_turn_ledger import (
 )
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .runtime_capacity import RuntimeCapacity
+from .tool_capacity import ToolCapacityAdmission
 from .execution_scope import current_execution_lease
 from .runtime_coordination import LeaseLost
 from .research_results import HANDLE as RESEARCH_RESULT_HANDLE
@@ -9788,6 +9791,7 @@ class ChatService:
                             specs=components.specs
                             if prepared.tool_manifest is not None
                             else None,
+                            spec=components.specs.get(call.name),
                         )
                         output = result.model_result()
                     except Exception as exc:
@@ -10585,14 +10589,29 @@ class ChatService:
                             maximum=MAX_CATALOG_CALLS_PER_TURN,
                             current=searched,
                         )
-                    result = await self._invoke_tool_broker(
-                        components.broker,
-                        invocation,
-                        components.scope,
-                        specs=components.specs
-                        if prepared.tool_manifest is not None
-                        else None,
+                    admission = await self._tool_admission(
+                        invocation, spec, parallel=False
                     )
+                    try:
+                        if admission is not None:
+                            async with aclosing(
+                                self._admit_tool_step(admission, turn, entry, spec)
+                            ) as admitted:
+                                async for admission_event in admitted:
+                                    yield admission_event
+                        result = await self._invoke_tool_broker(
+                            components.broker,
+                            invocation,
+                            components.scope,
+                            specs=components.specs
+                            if prepared.tool_manifest is not None
+                            else None,
+                            spec=spec,
+                            admission=admission,
+                        )
+                    finally:
+                        if admission is not None:
+                            await admission.release()
                 except ApprovalRequired as paused:
                     record_caught_exception(
                         "chat",
@@ -12762,6 +12781,101 @@ class ChatService:
             )
             return await self._complete_with_context_recovery(prepared, request)
 
+    async def _tool_admission(
+        self,
+        invocation: ToolInvocation,
+        spec: ToolSpec | None,
+        *,
+        parallel: bool,
+    ) -> ToolCapacityAdmission | None:
+        """The capacity claim ``invocation`` needs, or None when it takes none.
+
+        Control-plane built-ins (``uses_execution_capacity`` false) never wait
+        for a slot that long commands hold. A spec Core cannot resolve takes
+        a slot, as every tool did before the exemption.
+        """
+
+        if spec is not None and not spec.uses_execution_capacity:
+            return None
+        if self.runtime_capacity is None and not parallel:
+            return None
+        config = self.provider_scheduler.config
+        host_slot = None
+        if self.runtime_capacity is not None:
+            lease = current_execution_lease()
+            if lease is None or lease.project_id != invocation.engagement_id:
+                raise LeaseLost(
+                    "Tool capacity requires the exact project execution context"
+                )
+            capacity = self.runtime_capacity
+            high = await is_high(
+                self.store, invocation.engagement_id, invocation.chat_session_id
+            )
+
+            def host_slot(on_wait):
+                return capacity.slot(
+                    lease,
+                    "tool:" + invocation.id,
+                    {"tool": 1},
+                    on_wait=on_wait,
+                    high=high,
+                )
+
+        return ToolCapacityAdmission(
+            self._global_tool_slots,
+            limit=config.global_tool_limit,
+            wait_seconds=config.tool_capacity_wait_seconds,
+            host_slot=host_slot,
+        )
+
+    async def _admit_tool_step(
+        self,
+        admission: ToolCapacityAdmission,
+        turn: ChatTurn,
+        entry: dict[str, Any],
+        spec: ToolSpec,
+    ) -> AsyncGenerator[tuple[str, dict[str, Any]], None]:
+        """Hold ``admission``, streaming and recording any wait for it.
+
+        While the call waits its step reads ``queued`` with the reason, in
+        the ledger and the stream; once admitted it reads ``running`` again.
+        """
+
+        waited = 0
+        common = {
+            "turn_id": turn.id,
+            "tool_call_id": entry["tool_call_id"],
+            "capability": entry["name"],
+            "display_name": spec.display_name,
+            "step": entry["step"],
+        }
+        async with aclosing(admission.waits()) as waits:
+            async for detail in waits:
+                waited += 1
+                await self.turn_ledger.append(
+                    turn.id,
+                    {**entry, "status": "queued", "queue_detail": detail},
+                    idempotency_key=(
+                        f"capacity-wait:{entry['step']}:{entry['model_call_id']}:"
+                        f"{waited}"
+                    ),
+                    event_type="queued",
+                )
+                yield (
+                    "tool_queued",
+                    {"type": "tool_queued", **common, "detail": detail},
+                )
+        if waited:
+            await self.turn_ledger.append(
+                turn.id,
+                {**entry, "status": "running"},
+                idempotency_key=(
+                    f"capacity-admitted:{entry['step']}:{entry['model_call_id']}"
+                ),
+                event_type="started",
+            )
+            yield ("tool_admitted", {"type": "tool_admitted", **common})
+
     async def _invoke_tool_broker(
         self,
         broker,
@@ -12771,7 +12885,16 @@ class ChatService:
         approval=None,
         parallel=False,
         specs: Mapping[str, ToolSpec] | None = None,
+        spec: ToolSpec | None = None,
+        admission: ToolCapacityAdmission | None = None,
     ):
+        """Run ``invocation`` under tool capacity.
+
+        ``admission``, when given, is already held by the caller, which also
+        releases it. Otherwise the call takes and releases its own claim; a
+        call that cannot get one in time fails with ``CapacityReached``.
+        """
+
         async def invoke():
             if specs is not None:
                 try:
@@ -12795,25 +12918,18 @@ class ChatService:
             options = {"approval": approval} if approval is not None else {}
             return await broker.execute(invocation, scope, **options)
 
-        if self.runtime_capacity is None and not parallel:
+        if admission is not None:
             return await invoke()
-        async with self._global_tool_slots:
-            if self.runtime_capacity is None:
-                return await invoke()
-            lease = current_execution_lease()
-            if lease is None or lease.project_id != invocation.engagement_id:
-                raise LeaseLost(
-                    "Tool capacity requires the exact project execution context"
-                )
-            async with self.runtime_capacity.slot(
-                lease,
-                "tool:" + invocation.id,
-                {"tool": 1},
-                high=await is_high(
-                    self.store, invocation.engagement_id, invocation.chat_session_id
-                ),
-            ):
-                return await invoke()
+        if spec is None and specs is not None:
+            spec = specs.get(invocation.tool_name)
+        claim = await self._tool_admission(invocation, spec, parallel=parallel)
+        if claim is None:
+            return await invoke()
+        try:
+            await claim.acquire()
+            return await invoke()
+        finally:
+            await claim.release()
 
     def _parallel_safe_wave(
         self,
@@ -12955,17 +13071,18 @@ class ChatService:
                 )
             )
 
-        async def execute(invocation: ToolInvocation) -> Any:
+        async def execute(invocation: ToolInvocation, spec: ToolSpec) -> Any:
             return await self._invoke_tool_broker(
                 components.broker,
                 invocation,
                 components.scope,
                 parallel=True,
                 specs=components.specs if prepared.tool_manifest is not None else None,
+                spec=spec,
             )
 
         results = await asyncio.gather(
-            *(execute(invocation) for _, _, _, invocation in work),
+            *(execute(invocation, spec) for _, spec, _, invocation in work),
             return_exceptions=True,
         )
         for (call, spec, entry, invocation), result in zip(work, results, strict=True):
@@ -13941,6 +14058,7 @@ class ChatService:
                 components.scope,
                 approval=approval,
                 specs=components.specs if prepared.tool_manifest is not None else None,
+                spec=components.specs.get(invocation.tool_name),
             )
         except PolicyDenied as exc:
             record_caught_exception(

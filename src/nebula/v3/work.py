@@ -1274,6 +1274,7 @@ def work_roster_components(
                 risk_class=RiskClass.LOCAL_READ,
                 idempotency=IdempotencyBehavior.SAFE,
                 budget_class="artifact_query",
+                uses_execution_capacity=False,
             )
         },
         runtime_digest="work-roster-v1",
@@ -1503,6 +1504,7 @@ def work_components(
             if name in {"work_list", "work_get"}
             else IdempotencyBehavior.KEY_REQUIRED,
             budget_class="artifact_query",
+            uses_execution_capacity=False,
         )
         for name, (description, properties, required) in fields.items()
     }

@@ -1,28 +1,26 @@
 {
-  "change_digest": "dcb5260a767dc1aa43f9d4d930a23f3b44da684135dfcbfb39d9db1355474d13",
-  "reviewed_by": "Claude: hook-stop closing message and empty-reply route evidence, focused provider-chat selection",
-  "reason": "Native provider chat: after the same project hook refuses three calls and routing stops, an empty or reasoning-only tool-free synthesis now completes the turn with a Core-written closing message instead of spending final-answer recovery until the goal stall limit blocks the goal. Empty-reply recovery receipts and ModelResponse gain optional http_status and upstream_provider (OpenRouter provider) fields. Select the new regression file (hook stop + empty answer completes and continues the goal, closing text, real answer kept, no-hook empty answer still retries, record fields, OpenRouter stream/complete metadata), the existing hook-denial routing, final-synthesis recovery, reasoning recovery and tool-loop suites, provider adapters (status/upstream plumbing through _adapter_response and the shared stream opener), DSML response round-trip, and the one test_chat.py case whose exact recovery-record dict gained the new keys.",
-  "exclusions": "No UI, setting, harness-path or native-shell change, so frontend, Playwright and native layers are empty and the settings assistant catalog is unchanged. Stream-cut retry and Response failed pause handling are untouched. Remaining test_chat.py cases are unaffected beyond the one exact-dict assertion selected. No full-suite approval.",
+  "change_digest": "5758ad7299b1ea5a33781343f4d5f56a8485ff8ea58984af195b205e33ad1c9c",
+  "reviewed_by": "Claude: tool-slot starvation fix, focused Core selection",
+  "reason": "Control-plane built-ins (work_*, agent messages, notes.write, tool_catalog.search/load, goal.complete) skip the process and host tool pools via ToolSpec.uses_execution_capacity; other tools report tool_queued/tool_admitted and a queued ledger row while waiting, and a wait past NEBULA_TOOL_CAPACITY_WAIT_SECONDS (default 600) fails the call with CapacityReached before it runs. The new regression file proves the exempt tool runs with every slot held, the queued event and ledger state for the process and host pools, and the bounded wait. Existing capacity, tool-loop, catalog, agent-message and Work files cover the changed broker call sites and spec definitions.",
+  "exclusions": "No UI change: the live tool card still renders tool_started as running and ignores the new tool_queued/tool_admitted events; the durable queued step uses the existing activity-ledger queued status. No frontend, native or Playwright tests apply. The harness tool gateway does not use these pools. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 179,
+    "python": 116,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_hook_stop_closing_message.py",
-    "tests/v3/test_hook_denial_routing.py",
-    "tests/v3/test_chat_final_synthesis_recovery.py",
-    "tests/v3/test_reasoning_recovery.py",
+    "tests/v3/test_tool_capacity_starvation.py",
+    "tests/v3/test_chat_runtime_capacity.py",
     "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_providers.py",
-    "tests/v3/test_dsml.py",
-    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_output_exhaustion"
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_work.py"
   ],
   "frontend": [],
   "native": [],
