@@ -140,6 +140,7 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.work.set_assistant_defaults",
         "nebula.work.message_chat",
         "nebula.work.update_goal",
+        "nebula.work.add_goal_note",
         "nebula.work.goal_action",
         "nebula.work.decide_approval",
         "nebula.work.retry_chat_turn",
@@ -1247,6 +1248,7 @@ class ButlerCapabilities:
             if change and name in {
                 "nebula.work.goal_action",
                 "nebula.work.update_goal",
+                "nebula.work.add_goal_note",
             }:
                 goal = await self._store.find_entity(
                     ChatGoal, "session_id", str(payload.get("session_id") or "")

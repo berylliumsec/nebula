@@ -3368,3 +3368,71 @@ async def test_butler_settings_api_saves_advertised_max_effort(tmp_path):
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_butler_adds_a_bounded_supervisor_note_to_a_listed_goal(tmp_path):
+    store, app, _ = _app(tmp_path)
+    selected = await store.create(Engagement(name="Selected"))
+    provider = await store.create(
+        ProviderProfile(
+            name="Local",
+            provider_type="ollama",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+    chat = await store.create(
+        ChatSession(
+            engagement_id=selected.id,
+            title="Goal chat",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    work = app.state.control_assistant_work
+
+    async def scenario():
+        descriptor = await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.catalog",
+            {"operation": "nebula.work.add_goal_note"},
+        )
+        assert descriptor["read_only"] is False
+        assert "next_step" in descriptor["description"]
+        await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.create_goal",
+            {
+                "session_id": chat.id,
+                "objective": "Inspect code",
+                "completion_criteria": ["Evidence retained"],
+            },
+        )
+        noted = await dispatch_work_tool(
+            work,
+            selected.id,
+            "nebula.work.add_goal_note",
+            {"session_id": chat.id, "text": "Focus on the parser. " + "x" * 900},
+        )
+        # Nothing runs a draft, so the note applies from its first turn.
+        assert noted["delivery"] == "next_turn"
+        assert noted["goal"]["supervisor_note_count"] == 1
+        note = noted["goal"]["supervisor_notes"][0]
+        assert note["id"] == noted["note_id"]
+        assert note["author"] == "butler"
+        assert len(note["text"]) == 600
+        assert "guidance_changes" not in noted["goal"]
+        saved = await store.find_entity(ChatGoal, "session_id", chat.id)
+        assert saved is not None
+        assert saved.supervisor_notes[0].text.startswith("Focus on the parser.")
+        with pytest.raises(ValueError, match="blank"):
+            await dispatch_work_tool(
+                work,
+                selected.id,
+                "nebula.work.add_goal_note",
+                {"session_id": chat.id, "text": "   "},
+            )
+
+    (await scenario())
