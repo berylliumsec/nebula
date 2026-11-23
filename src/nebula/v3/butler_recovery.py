@@ -35,6 +35,7 @@ from .domain import (
     ButlerGlobalState,
     ButlerGoalWatch,
     ButlerDecision,
+    ButlerFocusRuntime,
     ButlerProjectState,
     ButlerRecoveryCase,
     ChatBackend,
@@ -251,6 +252,65 @@ async def _server_overloaded(store: NebulaStore, case: ButlerRecoveryCase) -> bo
     return False
 
 
+# Why a project cannot host Butler's checks, as the operator fixes it.
+HOST_HINTS: dict[str, str] = {
+    "none": (
+        "Set one project's Butler authority to Act and give Butler a model "
+        "there to host the scheduled run."
+    ),
+    "archived": (
+        "This project is archived. Set an active project's Butler authority "
+        "to Act to host the scheduled run."
+    ),
+    "work_disabled": (
+        "Work is off in this project. Turn it on, or set another project's "
+        "Butler authority to Act, to host the scheduled run."
+    ),
+    "not_act": (
+        "Set this project's Butler authority to Act, or another project's, "
+        "to host the scheduled run."
+    ),
+    "no_butler": (
+        "Butler has no model for this project yet. Open Butler in this "
+        "project, or ask Butler about it in Butler mode, so scheduled and "
+        "recovery checks can run here."
+    ),
+}
+_CYBER_PROGRAMS = frozenset({"automatic", "standard", "daybreakBlue", "daybreakRed"})
+
+
+def _root_butler_sessions(store: NebulaStore, project_id: str):
+    """The project's own Butler chats that can parent a background check."""
+
+    return (
+        session
+        async for session in store.iter_readable_entities(
+            ChatSession, engagement_id=project_id
+        )
+        if session.metadata.get("control_assistant") is True
+        and not session.metadata.get("archived_at")
+        and not session.parent_session_id
+    )
+
+
+async def _focus_runtime(
+    store: NebulaStore, project_id: str
+) -> ButlerFocusRuntime | None:
+    from .butler_sessions import focus_runtime_id
+
+    return await store.find_entity(
+        ButlerFocusRuntime, "id", focus_runtime_id(project_id)
+    )
+
+
+async def _has_butler(store: NebulaStore, project_id: str) -> bool:
+    """Whether Butler has a model for this project's background checks."""
+
+    return (
+        await async_any(True async for _ in _root_butler_sessions(store, project_id))
+    ) or (await _focus_runtime(store, project_id)) is not None
+
+
 def recovery_case_id(project_id: str, source_event_id: str) -> str:
     return (
         "butler-recovery:"
@@ -391,23 +451,47 @@ class ButlerRecoveryAgent:
         )
 
     async def _butler_session(self, project_id: str) -> ChatSession:
-        sessions = (
-            session
-            async for session in self.store.iter_readable_entities(
-                ChatSession, engagement_id=project_id
-            )
-            if session.metadata.get("control_assistant") is True
-            and not session.metadata.get("archived_at")
-            and not session.parent_session_id
-        )
+        """The project's Butler chat, or one made from Butler's home runtime.
+
+        Butler's home sessions live in a project this worker cannot read.
+        When the operator gave Butler a model for this project only there, the
+        project gets its own Butler chat on that model, as opening the Butler
+        panel here would, so background checks have a parent chat.
+        """
+
+        from .butler_sessions import ButlerSessionReservation, reserve_butler_session
+        from .chat import ChatConfigurationError
+
         session = max(
-            [item async for item in sessions],
+            [item async for item in _root_butler_sessions(self.store, project_id)],
             key=lambda item: item.created_at,
             default=None,
         )
-        if session is None:
-            raise ValueError("Butler has no configured chat in this project")
-        return session
+        if session is not None:
+            return session
+        runtime = await _focus_runtime(self.store, project_id)
+        if runtime is None:
+            raise ChatConfigurationError(HOST_HINTS["no_butler"])
+        harness = runtime.backend == ChatBackend.HARNESS
+        cyber = runtime.harness_cyber_access_program
+        return await reserve_butler_session(
+            self.store,
+            self.harness_runtime,
+            ButlerSessionReservation(
+                engagement_id=project_id,
+                backend=runtime.backend,
+                provider_id=None if harness else runtime.profile_id,
+                harness_profile_id=runtime.profile_id if harness else None,
+                model=runtime.model,
+                harness_reasoning_effort=(
+                    runtime.harness_reasoning_effort if harness else None
+                ),
+                harness_service_tier=runtime.harness_service_tier if harness else None,
+                harness_cyber_access_program=(
+                    cyber if harness and cyber in _CYBER_PROGRAMS else None  # type: ignore[arg-type]
+                ),
+            ),
+        )
 
     async def _scheduled_harness_profile(
         self,
@@ -1061,7 +1145,13 @@ class ButlerRecoveryService:
                 blocked += 1
         return blocked
 
-    async def global_status(self) -> dict[str, Any]:
+    async def global_status(self, project_id: str | None = None) -> dict[str, Any]:
+        """Nebula-wide check status as read from ``project_id``'s worker.
+
+        A worker reads only its own project, so another project that hosts
+        the checks shows here only through the shared clock it last advanced.
+        """
+
         root = self.instructions_root
         if root is None:
             return {"status": "unavailable", "path": None}
@@ -1086,11 +1176,51 @@ class ButlerRecoveryService:
         if loaded is None:
             return {**result, "status": "missing"}
         anchor = await self._global_anchor()
+        if anchor:
+            return {**result, "status": "ready", "host_project_id": anchor}
+        if (
+            state is not None
+            and state.last_project_id
+            and state.last_project_id != project_id
+            and state.last_periodic_at
+            and utc_now() - state.last_periodic_at <= 3 * interval
+        ):
+            # Another project's worker hosts the checks and ran one recently;
+            # this worker cannot read that project to confirm it still can.
+            return {
+                **result,
+                "status": "ready",
+                "host_project_id": state.last_project_id,
+            }
+        blocker = await self.host_blocker(project_id) if project_id else None
         return {
             **result,
-            "status": "ready" if anchor else "needs_act_host",
-            "host_project_id": anchor,
+            "status": "needs_act_host",
+            "host_project_id": None,
+            "host_blocker": blocker,
+            "host_hint": HOST_HINTS[blocker or "none"],
         }
+
+    async def host_blocker(self, project_id: str) -> str | None:
+        """Why this project cannot host Butler's scheduled and recovery checks."""
+
+        try:
+            project = await self.store.get(Engagement, project_id)
+        except NotFoundError:
+            # diagnostic-expected: an unknown project hosts nothing; the status says so.
+            return None
+        if project.status == EngagementStatus.ARCHIVED:
+            return "archived"
+        if not project.work_enabled:
+            return "work_disabled"
+        policy = await self.store.find_entity(
+            ButlerAuthorityPolicy, "engagement_id", project_id
+        )
+        if policy is None or policy.authority != "act":
+            return "not_act"
+        if not await _has_butler(self.store, project_id):
+            return "no_butler"
+        return None
 
     async def _current_act(
         self, project_id: str, worker_id: str
@@ -1114,7 +1244,11 @@ class ButlerRecoveryService:
         return policy if policy and policy.authority == "act" else None
 
     async def _global_anchor(self) -> str | None:
-        """Use one stable Act project with a configured Butler runtime as host."""
+        """Use one stable Act project with a configured Butler runtime as host.
+
+        The runtime is the project's own Butler chat, or the model Butler's
+        home session for the project shares through ``ButlerFocusRuntime``.
+        """
 
         candidates: list[Engagement] = []
         async for project in self.store.iter_readable_entities(Engagement):
@@ -1125,16 +1259,7 @@ class ButlerRecoveryService:
             )
             if policy is None or policy.authority != "act":
                 continue
-            if not (
-                await async_any(
-                    session.metadata.get("control_assistant") is True
-                    and not session.metadata.get("archived_at")
-                    and not session.parent_session_id
-                    async for session in self.store.iter_readable_entities(
-                        ChatSession, engagement_id=project.id
-                    )
-                )
-            ):
+            if not await _has_butler(self.store, project.id):
                 continue
             candidates.append(project)
         return (
