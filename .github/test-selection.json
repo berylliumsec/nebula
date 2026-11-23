@@ -1,42 +1,31 @@
 {
-  "change_digest": "3fdc463f6b98ab64f702530463d211976fcdeb0dccfcdd9e3ee4e524250f355c",
-  "reviewed_by": "Claude: goal supervisor notes and mid-turn addenda, focused backend, component and mocked browser selection",
-  "reason": "Running goals gain bounded supervisor notes (ChatGoal.supervisor_notes, 4,000 characters each, at most 50, a 51st refused) with POST/DELETE /chat/sessions/{id}/goal/notes on control capacity, a guidance_revision that only objective, criteria, plan and note changes bump, and a bounded change log. A running provider goal turn records the guidance revision it was prepared with and, before each routing call, receives what changed once as a Core-added goal.read result (new read-only goal.read tool on provider goal turns); a running harness turn is steered; Grok and idle goals read the change at the next turn. Notes ride on the per-turn goal progress block, never the cached instructions. Butler gets nebula.work.add_goal_note and a bounded goal view. The goal panel adds an Add note form, a Supervisor notes list with remove, and a delivery status line. Selected: the new regression file (note append/cap/render/paging, guidance-change recording, native once-only mid-turn delivery, harness steer and Grok fallback, control lane), goal lifecycle, Butler work tools, goal tool budgets, Core delivery steps, harness goals, recovery-control routes, runtime delivery, turn bookkeeping, the runtime manifest (entity field digest) and the Playwright manifest; the goal panel and destination component tests; the new mocked goal-notes browser journey and the goal panel revision race in desktop and mobile Chromium/WebKit.",
-  "exclusions": "tests/v3/test_butler_capabilities.py and tests/v3/test_butler_workflow_registry.py are excluded because each already fails one test on origin/main (UPDATE_GOAL_SCHEMA lacks active_plan_index; useProjectViewLease calls are unreviewed); their other tests passed locally with this change. Real-Core Playwright (real-core.spec.ts) is not selected: the real-Core journey was exercised on a disposable LAN Core instead. No native change. No full-suite approval.",
+  "change_digest": "40eae1472c9584dc17e47ce3db96193f0c9a14edd13ca121a250913008be4a5a",
+  "reviewed_by": "Claude: goal check-in reminder addendum source, focused backend selection",
+  "reason": "Stacked on #1303 (baseline is its branch tip). A running goal that has posted no Work check-in for N minutes (default 30) or made M tool calls in its turn since its last check-in or reminder (default 40) is reminded once per window inside the running turn. CheckinReminder is a new GoalAddenda source: provider turns receive it as a Core-added goal.read result before the next routing call; harness turns are steered from the gateway tool-call bookkeeping hook (_attach_gateway_tool_call) and a successful work.check_in resets the count; Grok is not reminded. The last reminder is kept in goal metadata so the goal's next turn does not repeat it. Only turns offered the Work check-in tool are reminded; tools are never refused and Butler is not involved. Selected: the new regression file (due by time once per window and across turns, due by tool count, check-ins from the session, assigned items and Butler reports reset it, in-turn check-in resets the count, no Work tools means no reminder, bounded env thresholds, harness steer/reset/Grok, and one real routing-loop turn), #1303's addenda file, goal lifecycle, harness goals, Core delivery steps, turn tool bookkeeping and the harness Work gateway (both touched by the harness hook), and goal tool budgets.",
+  "exclusions": "No frontend, native or Playwright change: the reminder has no UI control and appears as an existing goal.read transcript step, so those layers are empty. The settings-assistant document gains a behaviour row (the product knowledge index was rebuilt and verified locally); no destination or settingsCatalog entry is added because nothing is configurable in the UI. Real-Core Playwright is not selected: the provider journey was exercised on a disposable LAN Core. The harness steer is covered by pytest only. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 245,
-    "frontend": 28,
+    "python": 120,
+    "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
+    "tests/v3/test_goal_checkin_reminder.py",
     "tests/v3/test_goal_supervisor_addenda.py",
     "tests/v3/test_chat_goals.py",
-    "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_tool_capacity_starvation.py",
-    "tests/v3/test_subagent_delivery.py",
     "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_recovery_controls.py",
-    "tests/v3/test_runtime_delivery.py",
     "tests/v3/test_turn_tool_bookkeeping.py",
-    "tests/v3/test_runtime_bundle.py",
-    "tests/test_playwright_impact.py"
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_work_gateway.py",
+    "tests/v3/test_tool_capacity_starvation.py"
   ],
-  "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/assistantDestinations.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:goal-supervisor-notes",
-    "area:release-goal-panel-race"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": [],
+  "checks": []
 }
