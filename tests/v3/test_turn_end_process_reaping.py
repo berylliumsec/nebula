@@ -54,6 +54,16 @@ pytestmark = [
 ]
 
 
+# Starts a detached sleep and returns only once it has left the command's
+# process group: Core kills that group as soon as the shell exits, so a child
+# that has not yet called setsid() would die with it (a race CI exposed).
+_DETACH = (
+    "setsid nohup sleep 600 >/dev/null 2>&1 & pid=$!; "
+    'until [ "$(cut -d" " -f6 /proc/$pid/stat 2>/dev/null)" = "$pid" ]; do '
+    "[ -e /proc/$pid ] || break; done; echo $pid"
+)
+
+
 def _alive(pid: int) -> bool:
     try:
         state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
@@ -147,9 +157,7 @@ async def _run(manager, engagement, command: str, **request):
 
 async def test_detached_child_is_reaped_when_its_turn_ends(host, diagnostics):
     manager, store, engagement, started = host
-    result = await _run(
-        manager, engagement, "setsid nohup sleep 600 >/dev/null 2>&1 & echo $!"
-    )
+    result = await _run(manager, engagement, _DETACH)
     # The foreground command itself is unaffected: it returns its output.
     assert result.exit_code == 0
     pid = int(result.stdout.strip())
@@ -201,9 +209,7 @@ async def test_session_close_kills_escaped_descendants_without_a_turn(host):
         engagement_id=engagement.id,
         owner_kind="chat",
         owner_id="no-turn",
-        request=RunCommandRequest(
-            command="setsid nohup sleep 600 >/dev/null 2>&1 & echo $!"
-        ),
+        request=RunCommandRequest(command=_DETACH),
     )
     pid = int(result.stdout.strip())
     started.append(pid)

@@ -945,7 +945,15 @@ async def test_real_leftover_detached_process_is_killed_when_its_turn_ends(
 
     owner = LeftoverOwner(turn_id="turn", ended=is_ended, reaped=record)
     await session.admit("d", execution_id="d", labels={})
-    code, _output = await _run(session, "(setsid sleep 300 &); echo started", "d")
+    # Wait until the sleep has its own session: the command's group is killed
+    # as soon as the shell exits, which could otherwise beat setsid().
+    code, _output = await _run(
+        session,
+        "setsid sleep 300 & pid=$!; "
+        'until [ "$(cut -d" " -f6 /proc/$pid/stat 2>/dev/null)" = "$pid" ]; do '
+        "[ -e /proc/$pid ] || break; done; echo started",
+        "d",
+    )
     session.settle_after_exit("d", owner)
     assert code == 0
     await asyncio.sleep(1)
