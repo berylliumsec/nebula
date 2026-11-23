@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from .recovery_markers import GOAL_PROVIDER_RETRY, OPERATOR_RECOVERY_PAUSE
+from .recovery_markers import (
+    GOAL_CALLBACK_STALL,
+    GOAL_PROVIDER_RETRY,
+    OPERATOR_RECOVERY_PAUSE,
+)
 from .async_utils import MaybeAsync, call_async
 
 from datetime import datetime
@@ -1060,6 +1064,11 @@ class ChatGoalService:
             # A resume starts a new failure streak: its next transient
             # provider failure is retried automatically again.
             cleared = {OPERATOR_RECOVERY_PAUSE, HOLD_MARKER, GOAL_PROVIDER_RETRY}
+            if not allow_pending_recovery:
+                # Only the operator's resume starts a new callback-stall
+                # streak; Core's own resume after a stall keeps the mark so
+                # a second stall pauses the goal.
+                cleared.add(GOAL_CALLBACK_STALL)
             if cleared & goal.metadata.keys():
                 changes["metadata"] = {
                     key: value
