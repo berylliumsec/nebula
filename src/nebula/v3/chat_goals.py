@@ -22,9 +22,20 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from .chat_subagents import SUBAGENT_LIMIT_CEILING
 from .chat_agent_messages import resolve_agent_messaging_choice
 from .diagnostics import record_caught_exception
+from .chat_goal_addenda import (
+    NOTE_ADDED,
+    addendum_text,
+    describe_guidance_change,
+    describe_note,
+    guidance_change_fields,
+    GoalAddendum,
+)
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     GOAL_COMPLETION_PROPOSAL_KEY,
+    GOAL_SUPERVISOR_NOTE_CHARACTERS,
+    GOAL_SUPERVISOR_NOTE_LIMIT,
+    GoalSupervisorNote,
     DEFAULT_GOAL_RESUME_INSTRUCTION,
     GOAL_START_INSTRUCTION,
     ChatBackend,
@@ -128,6 +139,33 @@ class GoalUpdate(GoalCreate):
         ):
             raise ValueError("active_plan_index must name an entry of the plan")
         return self
+
+
+class GoalNoteCreate(BaseModel):
+    """A supervisor note added to a goal without rewriting it."""
+
+    text: str = Field(min_length=1, max_length=GOAL_SUPERVISOR_NOTE_CHARACTERS)
+    author: Literal["operator", "butler"] = "operator"
+
+    @field_validator("text")
+    @classmethod
+    def note_has_text(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("a supervisor note cannot be blank")
+        return stripped
+
+
+GoalGuidanceDelivery = Literal["next_step", "running_turn", "next_turn"]
+"""When the working agent hears a guidance change: before its next tool
+step (a running provider turn), now (a steered harness turn), or at the
+goal's next turn (nothing running, or a harness that cannot be steered)."""
+
+
+class GoalNoteResult(BaseModel):
+    goal: ChatGoal
+    note_id: str
+    delivery: GoalGuidanceDelivery
 
 
 class GoalSkillWrite(BaseModel):
@@ -1282,11 +1320,26 @@ class ChatGoalService:
             and body.token_budget < goal.usage.total_tokens
         ):
             raise ConflictError("token budget cannot be lower than tokens already used")
+        change = (
+            describe_guidance_change(
+                goal,
+                objective=body.objective,
+                completion_criteria=body.completion_criteria,
+                plan=body.plan,
+            )
+            if goal.status != ChatGoalStatus.DRAFT
+            else ""
+        )
         async with self.store.transaction() as transaction:
             updated = await transaction.update(
                 ChatGoal,
                 goal.id,
                 {
+                    **(
+                        guidance_change_fields(goal, change, author="operator")
+                        if change
+                        else {}
+                    ),
                     "objective": body.objective,
                     "completion_criteria": body.completion_criteria,
                     "plan": body.plan,
@@ -1319,7 +1372,121 @@ class ChatGoalService:
                 from .butler_oversight import record_goal_plan_change
 
                 (await record_goal_plan_change(transaction, goal, updated))
+        if change:
+            (await self.deliver_guidance(updated, change))
         return updated
+
+    async def deliver_guidance(
+        self, goal: ChatGoal, summary: str
+    ) -> GoalGuidanceDelivery:
+        """Bring a guidance change to the goal's running turn, if any.
+
+        A provider turn hears it before its next routing call
+        (``GoalAddenda``), from the goal's guidance revision. A running
+        harness turn is steered now. Anything else, including a harness that
+        cannot take input mid-turn, reads the changed goal at its next turn.
+        """
+
+        if goal.status != ChatGoalStatus.RUNNING:
+            return "next_turn"
+        try:
+            session = await self.store.get(ChatSession, goal.session_id)
+        except NotFoundError:  # diagnostic-expected: conversation deleted
+            return "next_turn"
+        if session.backend == ChatBackend.HARNESS:
+            if self.harness_runtime is None:
+                return "next_turn"
+            steered = await self.harness_runtime.steer_goal_addendum(
+                session.id,
+                addendum_text([GoalAddendum("guidance", summary, {})]),
+            )
+            return "running_turn" if steered else "next_turn"
+        return "next_step" if goal.execution_claim_id is not None else "next_turn"
+
+    async def _revise_notes(
+        self,
+        session_id: str,
+        change: Callable[[ChatGoal], tuple[list[GoalSupervisorNote], str, str]],
+        *,
+        author: str,
+    ) -> GoalNoteResult:
+        """Apply a note change on the goal's newest revision.
+
+        Usage charges bump a running goal's revision continually, and a note
+        does not depend on what else changed, so a moved revision is read
+        again and the change applied again rather than refused.
+        """
+
+        for attempt in range(1, REVISE_ATTEMPTS + 1):
+            goal = await self.get(session_id)
+            if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
+                raise ConflictError(
+                    "completed or cancelled goals cannot take supervisor notes"
+                )
+            notes, summary, note_id = change(goal)
+            added = len(notes) > len(goal.supervisor_notes)
+            try:
+                updated = await self.store.update(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "supervisor_notes": notes,
+                        **guidance_change_fields(
+                            goal,
+                            summary,
+                            author=author,
+                            note_id=note_id if added else None,
+                        ),
+                    },
+                    expected_revision=goal.revision,
+                )
+            except RevisionConflict:
+                # diagnostic-expected: a usage charge moved the revision;
+                # apply the note to the newest goal.
+                if attempt == REVISE_ATTEMPTS:
+                    raise
+                continue
+            delivery = await self.deliver_guidance(
+                updated, f"{NOTE_ADDED}\n{notes[-1].text}" if added else summary
+            )
+            return GoalNoteResult(goal=updated, note_id=note_id, delivery=delivery)
+        raise ConflictError("goal kept changing; retry the request")
+
+    async def add_note(self, session_id: str, body: GoalNoteCreate) -> GoalNoteResult:
+        """Append one supervisor note. A full list refuses the note rather
+        than dropping older guidance the operator may still rely on."""
+
+        note_id = str(uuid4())
+
+        def append(
+            goal: ChatGoal,
+        ) -> tuple[list[GoalSupervisorNote], str, str]:
+            if len(goal.supervisor_notes) >= GOAL_SUPERVISOR_NOTE_LIMIT:
+                raise ConflictError(
+                    f"this goal already has {GOAL_SUPERVISOR_NOTE_LIMIT} "
+                    "supervisor notes; remove one or fold them into the "
+                    "objective before adding another"
+                )
+            note = GoalSupervisorNote(
+                id=note_id, text=body.text, author=body.author, created_at=utc_now()
+            )
+            return [*goal.supervisor_notes, note], describe_note(body.text), note_id
+
+        return await self._revise_notes(session_id, append, author=body.author)
+
+    async def remove_note(
+        self, session_id: str, note_id: str, *, author: str = "operator"
+    ) -> GoalNoteResult:
+        def remove(
+            goal: ChatGoal,
+        ) -> tuple[list[GoalSupervisorNote], str, str]:
+            kept = [note for note in goal.supervisor_notes if note.id != note_id]
+            if len(kept) == len(goal.supervisor_notes):
+                raise NotFoundError(f"supervisor note not found: {note_id}")
+            removed = next(note for note in goal.supervisor_notes if note.id == note_id)
+            return kept, describe_note(removed.text, removed=True), note_id
+
+        return await self._revise_notes(session_id, remove, author=author)
 
     async def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
         """Reserve one cumulative child slot before delegation begins."""
@@ -1634,6 +1801,21 @@ def goals_router(
     @router.patch("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
     async def update_goal(session_id: str, body: GoalUpdate) -> ChatGoal:
         return await service.update(session_id, body)
+
+    @router.post(
+        "/chat/sessions/{session_id}/goal/notes",
+        response_model=GoalNoteResult,
+        status_code=201,
+    )
+    async def add_goal_note(session_id: str, body: GoalNoteCreate) -> GoalNoteResult:
+        return await service.add_note(session_id, body)
+
+    @router.delete(
+        "/chat/sessions/{session_id}/goal/notes/{note_id}",
+        response_model=GoalNoteResult,
+    )
+    async def remove_goal_note(session_id: str, note_id: str) -> GoalNoteResult:
+        return await service.remove_note(session_id, note_id)
 
     @router.post("/chat/sessions/{session_id}/goal/actions", response_model=ChatGoal)
     async def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:

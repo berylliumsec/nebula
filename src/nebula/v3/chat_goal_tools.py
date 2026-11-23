@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from .chat_goal_addenda import GOAL_READ_TOOL_NAME, read_goal_page
 from .chat_goals import ChatGoalService
 from .domain import (
     GOAL_COMPLETION_PROPOSAL_KEY,
@@ -35,7 +36,7 @@ from .tools import (
 
 
 GOAL_COMPLETE_TOOL_NAME = "goal.complete"
-GOAL_TOOL_NAMES = frozenset({GOAL_COMPLETE_TOOL_NAME})
+GOAL_TOOL_NAMES = frozenset({GOAL_COMPLETE_TOOL_NAME, GOAL_READ_TOOL_NAME})
 
 
 class GoalCompletionProposal(BaseModel):
@@ -159,6 +160,8 @@ class GoalCompletionBroker:
         approval: Any | None = None,
     ) -> ToolExecutionResult:
         del scope, approval
+        if invocation.tool_name == GOAL_READ_TOOL_NAME:
+            return await self._read(invocation)
         if (
             invocation.tool_name != GOAL_COMPLETE_TOOL_NAME
             or invocation.origin != ToolCallOrigin.CHAT
@@ -217,6 +220,49 @@ class GoalCompletionBroker:
             )
         return ToolExecutionResult(output=output)
 
+    async def _read(self, invocation: ToolInvocation) -> ToolExecutionResult:
+        if (
+            invocation.origin != ToolCallOrigin.CHAT
+            or invocation.requested_by not in {"chat-assistant", "harness-gateway"}
+            or not invocation.chat_session_id
+        ):
+            raise ToolNotPermitted(
+                "goal.read requires a goal conversation's assistant turn",
+                rule="chat.goal_read_turn",
+            )
+        goal = await ChatGoalService(self.store).get(invocation.chat_session_id)
+        if goal.engagement_id != invocation.engagement_id:
+            raise ToolNotPermitted(
+                "this goal belongs to another project", rule="chat.goal_read_project"
+            )
+        offset = invocation.arguments.get("offset", 0)
+        if type(offset) is not int or offset < 0:
+            offset = 0
+        return ToolExecutionResult(output=read_goal_page(goal, offset))
+
+
+def goal_read_spec() -> ToolSpec:
+    return ToolSpec(
+        name=GOAL_READ_TOOL_NAME,
+        display_name="Read goal",
+        description=(
+            "Read this conversation's current Core-owned goal: objective, "
+            "completion criteria, plan and supervisor notes, in pages. Use it "
+            "when Core says the supervisor changed the goal or a note was "
+            "omitted; pass next_offset to read on."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {"offset": {"type": "integer", "minimum": 0}},
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+        budget_class="artifact_query",
+        timeout_seconds=30,
+        uses_execution_capacity=False,
+    )
+
 
 def goal_completion_spec() -> ToolSpec:
     return ToolSpec(
@@ -263,7 +309,14 @@ def goal_completion_components(
     engagement_id: str,
     workspace: Path,
     scope: ScopePolicy | None = None,
+    include_read: bool = False,
 ) -> RuntimeToolComponents:
+    """The goal's own tools. Provider turns also get ``goal.read``, which
+    carries supervisor addenda; harness turns are steered instead."""
+
+    specs = {GOAL_COMPLETE_TOOL_NAME: goal_completion_spec()}
+    if include_read:
+        specs[GOAL_READ_TOOL_NAME] = goal_read_spec()
     return RuntimeToolComponents(
         broker=GoalCompletionBroker(store),
         scope=scope
@@ -272,6 +325,6 @@ def goal_completion_components(
             engagement_id=engagement_id,
         ),
         workspace=workspace,
-        specs={GOAL_COMPLETE_TOOL_NAME: goal_completion_spec()},
+        specs=specs,
         runtime_digest="",
     )
