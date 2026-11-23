@@ -9571,7 +9571,14 @@ class HarnessRuntimeService:
             return True
         return False
 
-    async def steer_goal_addendum(self, chat_session_id: str, text: str) -> bool:
+    async def steer_goal_addendum(
+        self,
+        chat_session_id: str,
+        text: str,
+        *,
+        title: str = "Supervisor addendum",
+        summary: str = "Nebula added the supervisor's goal change to the turn.",
+    ) -> bool:
         """Add a supervisor's goal change to the chat's running harness turn.
 
         Returns False when no turn of that chat is running here or the
@@ -9591,8 +9598,8 @@ class HarnessRuntimeService:
                     turn.id,
                     text,
                     actor_id="nebula-goal-supervisor",
-                    title="Supervisor addendum",
-                    summary="Nebula added the supervisor's goal change to the turn.",
+                    title=title,
+                    summary=summary,
                 )
             except HarnessStateError:  # diagnostic-expected: the harness cannot be steered now; the change reaches its next turn
                 return False
@@ -18635,6 +18642,7 @@ class HarnessRuntimeService:
                     allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
+                (await self._note_goal_check_in(turn))
         except Exception as exc:
             (await self._finish_gateway_call(call.id, error=exc))
             raise
@@ -19179,7 +19187,115 @@ class HarnessRuntimeService:
                 ),
             )
         (await self._record_turn_tool_calls(turn, [call]))
+        if call.tool_name != "work.check_in":
+            (await self._remind_goal_check_in(turn))
         return call
+
+    def _goal_check_in_state(self) -> dict[str, dict[str, Any]]:
+        """Per chat turn: the tool count at its last check-in ("marks"), what
+        it was reminded of ("seen"), and turns never to remind ("skip")."""
+
+        return self.__dict__.setdefault(
+            "_goal_check_ins", {"marks": {}, "seen": {}, "skip": {}, "inflight": {}}
+        )
+
+    def _goal_check_in_note(self, table: str, chat_turn_id: str, value: Any) -> None:
+        entries = self._goal_check_in_state()[table]
+        entries.pop(chat_turn_id, None)
+        entries[chat_turn_id] = value
+        while len(entries) > 512:
+            entries.pop(next(iter(entries)))
+
+    async def _note_goal_check_in(self, turn: HarnessTurn) -> None:
+        """Record the chat turn's tool count when its agent checks in."""
+
+        if not turn.chat_turn_id:
+            return
+        chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
+        self._goal_check_in_note("marks", chat_turn.id, chat_turn.execution_tool_calls)
+
+    async def _remind_goal_check_in(self, turn: HarnessTurn) -> None:
+        """Steer a running goal turn that has gone quiet to post a check-in.
+
+        The harness form of the provider turn's ``CheckinReminder`` addendum,
+        evaluated as the turn records each tool call. A harness that cannot
+        be steered (Grok) is not reminded. A failure here never fails the
+        tool call it follows.
+        """
+
+        from .chat_goal_addenda import CheckinReminder, addendum_text
+
+        chat_turn_id = turn.chat_turn_id
+        if (
+            not chat_turn_id
+            or not turn.chat_session_id
+            or turn.metadata.get("analysis_only")
+            or getattr(self, "work", None) is None
+        ):
+            return
+        state = self._goal_check_in_state()
+        if chat_turn_id in state["skip"]:
+            return
+        try:
+            chat_turn = await self.store.get(ChatTurn, chat_turn_id)
+            if not chat_turn.goal_id:
+                self._goal_check_in_note("skip", chat_turn_id, True)
+                return
+            goal = await self.store.get(ChatGoal, chat_turn.goal_id)
+            if goal.status != ChatGoalStatus.RUNNING or goal.id in state["inflight"]:
+                return
+            reminder: Any = self.__dict__.get("_goal_check_in_reminder")
+            if not isinstance(reminder, CheckinReminder):
+                work = self.work
+
+                async def offered(current: ChatTurn) -> bool:
+                    return bool(await work.enabled(current.engagement_id))
+
+                async def calls_after_check_in(current: ChatTurn) -> int | None:
+                    mark = self._goal_check_in_state()["marks"].get(current.id)
+                    if not isinstance(mark, int):
+                        return None
+                    return max(0, current.execution_tool_calls - mark)
+
+                reminder = CheckinReminder(
+                    self.store,
+                    calls_after_check_in=calls_after_check_in,
+                    check_in_tool="work.check_in",
+                    create_tool="work.create",
+                    offered=offered,
+                )
+                self.__dict__["_goal_check_in_reminder"] = reminder
+            seen = state["seen"].get(chat_turn_id) or {}
+            addendum = await reminder(goal, chat_turn, seen)
+            if addendum is None:
+                return
+            state["inflight"][goal.id] = True
+            try:
+                steered = await self.steer_goal_addendum(
+                    turn.chat_session_id,
+                    addendum_text([addendum]),
+                    title="Check-in reminder",
+                    summary="Nebula reminded the goal to post a Work check-in.",
+                )
+                if not steered:
+                    self._goal_check_in_note("skip", chat_turn_id, True)
+                    return
+                self._goal_check_in_note(
+                    "seen", chat_turn_id, {**seen, **addendum.marker}
+                )
+                (await reminder.remember(goal.id, chat_turn, addendum.marker))
+            finally:
+                state["inflight"].pop(goal.id, None)
+        except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.goal_check_in_reminder_failed",
+                "Core could not check whether a quiet goal needs a Work "
+                "check-in reminder; the tool call is unaffected.",
+                exc,
+                stage="goal-check-in-reminder",
+                metadata={"harness_turn_id": turn.id, "chat_turn_id": chat_turn_id},
+            )
 
     async def _record_turn_tool_calls(
         self, turn: HarnessTurn, calls: Sequence[ToolCall]
