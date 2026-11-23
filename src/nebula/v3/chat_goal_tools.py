@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 from uuid import NAMESPACE_URL, uuid5
@@ -12,6 +13,9 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from .chat_goals import ChatGoalService
 from .domain import (
+    GOAL_COMPLETION_PROPOSAL_KEY,
+    GOAL_COMPLETION_REVIEW_REASON,
+    ChatGoal,
     ChatGoalStatus,
     ChatTurn,
     ChatTurnStatus,
@@ -95,6 +99,54 @@ def accepted_goal_completion(
     return None
 
 
+def agent_completion_changes(
+    goal: ChatGoal,
+    proposal: GoalCompletionProposal,
+    *,
+    turn_id: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """The goal changes an agent's accepted completion applies.
+
+    Without closure review the goal completes on the agent's own report. A
+    goal that requires review stops blocked instead, holding the proposal for
+    the operator or Butler to approve or send back; nothing continues it.
+    Ownership fields are left to the caller, which knows the claim it holds.
+    """
+
+    evidence = [
+        {"kind": "agent_reported", "detail": detail, "turn_id": turn_id}
+        for detail in proposal.completion_evidence
+    ]
+    stopped = {
+        "active_since": None,
+        "elapsed_seconds": goal.active_elapsed_seconds(now),
+    }
+    if not goal.completion_requires_review:
+        return {
+            **stopped,
+            "status": ChatGoalStatus.COMPLETED,
+            "completed_at": now,
+            "completion_summary": proposal.completion_summary,
+            "completion_evidence": evidence,
+            "blocked_reason": None,
+        }
+    return {
+        **stopped,
+        "status": ChatGoalStatus.BLOCKED,
+        "blocked_reason": GOAL_COMPLETION_REVIEW_REASON,
+        "metadata": {
+            **goal.metadata,
+            GOAL_COMPLETION_PROPOSAL_KEY: {
+                "completion_summary": proposal.completion_summary,
+                "completion_evidence": evidence,
+                "turn_id": turn_id,
+                "proposed_at": now.isoformat(),
+            },
+        },
+    }
+
+
 class GoalCompletionBroker:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
@@ -142,16 +194,28 @@ class GoalCompletionBroker:
                 rule="chat.goal_complete_children",
             )
         GoalCompletionProposal.model_validate(invocation.arguments)
-        return ToolExecutionResult(
-            output={
-                "accepted": True,
-                "goal_id": goal.id,
-                "turn_id": turn.id,
-                "request_digest": _proposal_digest(invocation.arguments),
-                "state": "pending_final_answer",
-                "next_action": "Give the operator a concise final answer. Core will save the goal and answer together.",
-            }
-        )
+        output: dict[str, Any] = {
+            "accepted": True,
+            "goal_id": goal.id,
+            "turn_id": turn.id,
+            "request_digest": _proposal_digest(invocation.arguments),
+            "state": "pending_final_answer",
+            "next_action": "Give the operator a concise final answer. Core will save the goal and answer together.",
+        }
+        if goal.completion_requires_review:
+            output.update(
+                {
+                    "state": "pending_closure_review",
+                    "next_action": (
+                        "Give the operator a concise final answer. This goal "
+                        "requires closure review: Core will hold it with your "
+                        "summary and evidence until the operator or Butler "
+                        "approves the completion or sends it back. Do not "
+                        "describe the goal as complete."
+                    ),
+                }
+            )
+        return ToolExecutionResult(output=output)
 
 
 def goal_completion_spec() -> ToolSpec:
@@ -162,7 +226,9 @@ def goal_completion_spec() -> ToolSpec:
             "Complete this turn's Core-owned goal only after every completion criterion "
             "is met. Supply a concise summary and concrete evidence. Core validates "
             "turn ownership, saves the goal with the final answer, and stops automatic "
-            "continuations. Evidence is recorded as agent-reported, not independently verified."
+            "continuations. Evidence is recorded as agent-reported, not independently verified. "
+            "A goal that requires closure review is held for the operator or Butler to "
+            "approve instead of completing."
         ),
         input_schema={
             "type": "object",

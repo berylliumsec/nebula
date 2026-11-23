@@ -38,6 +38,7 @@ from .chat_turn_headers import (
 from .conditional_reads import conditional, content_etag, json_native, native_etag
 from .database import EntityRow
 from .domain import (
+    GOAL_COMPLETION_REVIEW_REASON,
     Approval,
     ApprovalStatus,
     ChatGoal,
@@ -170,6 +171,8 @@ def _goal_status_line(goal: BoardGoal) -> str | None:
     if goal.status == ChatGoalStatus.PAUSED:
         return "Paused"
     if goal.status == ChatGoalStatus.BLOCKED:
+        if goal.blocked_reason == GOAL_COMPLETION_REVIEW_REASON:
+            return "Awaiting closure review"
         reason = " ".join((goal.blocked_reason or "").split())
         if reason and len(reason) <= _SHORT_REASON_CHARACTERS:
             return f"Blocked: {reason}"

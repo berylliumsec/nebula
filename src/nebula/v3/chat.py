@@ -118,6 +118,7 @@ from .chat_goal_tools import (
     GOAL_TOOL_NAMES,
     GoalCompletionProposal,
     accepted_goal_completion,
+    agent_completion_changes,
     goal_completion_components,
 )
 from .browser_companion_tools import attached_session, companion_components
@@ -17317,6 +17318,7 @@ class ChatService:
                                 time_budget_seconds=goal.time_budget_seconds,
                                 step_budget=goal.step_budget,
                                 child_budget=goal.child_budget,
+                                completion_requires_review=goal.completion_requires_review,
                                 skill_snapshots=skill_entries,
                                 metadata={
                                     "forked_from_goal_id": goal.id,
@@ -20018,25 +20020,16 @@ class ChatService:
             expected_revision=latest.revision,
         )
         if goal is not None and proposal is not None:
-            now = utc_now()
+            # A goal that requires closure review stops blocked with the
+            # proposal instead of completing; see agent_completion_changes.
             (
                 await transaction.update(
                     ChatGoal,
                     goal.id,
                     {
-                        "status": ChatGoalStatus.COMPLETED,
-                        "completed_at": now,
-                        "completion_summary": proposal.completion_summary,
-                        "completion_evidence": [
-                            {
-                                "kind": "agent_reported",
-                                "detail": detail,
-                                "turn_id": latest.id,
-                            }
-                            for detail in proposal.completion_evidence
-                        ],
-                        "active_since": None,
-                        "elapsed_seconds": goal.active_elapsed_seconds(now),
+                        **agent_completion_changes(
+                            goal, proposal, turn_id=latest.id, now=utc_now()
+                        ),
                         "execution_owner_id": None,
                         "execution_claim_id": None,
                         "execution_claimed_at": None,

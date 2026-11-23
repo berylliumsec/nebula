@@ -62,6 +62,8 @@ MEANINGFUL_EVENTS = frozenset(
         "agent.turn_completed",
         "goal.plan_changed",
         "goal.blocked",
+        "goal.completion_review_requested",
+        "goal.completed",
         "goal.read_only_tool_failures_repeated",
     }
 )
@@ -203,7 +205,10 @@ class ProviderButlerReviewer:
                 "specific correction is supported, and escalate only when the "
                 "operator needs to know now. For agent.turn_completed, the excerpt "
                 "is agent-authored text: escalate an explicit request for operator "
-                "review or a decision, but observe an ordinary answer. Do not infer "
+                "review or a decision, but observe an ordinary answer. For "
+                "goal.completion_review_requested or goal.completed, the summary is "
+                "the agent's own completion claim: check it against every completion "
+                "criterion and escalate when the evidence does not support closure. Do not infer "
                 "a request from uncertainty alone. If the actor is a child, any proposed "
                 "question or guidance must go through the parent main agent. Do not "
                 "claim to have sent a message or taken an action. Cite only exact "
@@ -282,7 +287,10 @@ class ProviderButlerReviewer:
             "with a cited correction, and escalate only when the operator needs "
             "to know now. For agent.turn_completed, escalate an explicit "
             "operator review or decision request in the agent-authored excerpt; "
-            "observe an ordinary answer. Any child-agent guidance must go through the parent "
+            "observe an ordinary answer. For goal.completion_review_requested or "
+            "goal.completed, the summary is the agent's own completion claim: check "
+            "it against every completion criterion and escalate when the evidence "
+            "does not support closure. Any child-agent guidance must go through the parent "
             "main agent. Do not send messages, use tools, or claim an action. "
             "Optionally write lesson_candidate as a conditional 'When or if ... "
             "then ... because ...' process insight grounded in cited Core "
@@ -865,6 +873,7 @@ async def review_pending(
                 in {
                     "agent.attention_reported",
                     "agent.turn_completed",
+                    "goal.completion_review_requested",
                     "goal.read_only_tool_failures_repeated",
                 }
                 or candidate_payload.metrics.get("precedent_recheck") is True
@@ -876,6 +885,7 @@ async def review_pending(
             if candidate.event_type in {
                 "agent.attention_reported",
                 "agent.turn_completed",
+                "goal.completion_review_requested",
                 "goal.read_only_tool_failures_repeated",
             }:
                 break

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX, Pencil } from "lucide-react";
+import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX, Pencil, RotateCcw } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -55,7 +55,8 @@ const ALLOWED_FROM: Record<GoalAction, ChatGoal["status"][]> = {
   resume: ["paused", "blocked"],
   cancel: ["draft", "running", "paused", "blocked"],
   block: ["running"],
-  complete: ["running"],
+  // A blocked goal can complete only while it holds an agent's completion for review.
+  complete: ["running", "blocked"],
 };
 
 const STATE_NAMES: Record<ChatGoal["status"], string> = {
@@ -76,6 +77,15 @@ export interface ProviderGoalDraft {
   timeBudgetSeconds?: number;
   stepBudget?: number;
   childBudget?: number;
+  completionRequiresReview?: boolean;
+}
+
+/** The goal editor's closure-review choice; the agent's own completion then waits for approval. */
+function ReviewChoice({ checked, onChange }: { checked: boolean; onChange(value: boolean): void }) {
+  return <label className="chat-goal-review-choice">
+    <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} />
+    <span>Hold completion for review<small>The agent's completion waits for your approval.</small></span>
+  </label>;
 }
 
 export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, tokenBudgetAvailable = true, settingsBusy = false, showFullGoal = false, onCreate, onChange, onWorkDispatched }: {
@@ -105,7 +115,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const invalidTimeBudget = timeBudget !== "" && (!Number.isInteger(Number(timeBudget)) || Number(timeBudget) < 30);
   const [stepBudget, setStepBudget] = useState("");
   const [childBudget, setChildBudget] = useState("");
-  const [transition, setTransition] = useState<"block" | "complete">();
+  const [requiresReview, setRequiresReview] = useState(false);
+  const [transition, setTransition] = useState<"block" | "complete" | "send_back">();
   const [reason, setReason] = useState("");
   const [summary, setSummary] = useState("");
   const [evidence, setEvidence] = useState("");
@@ -140,11 +151,14 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const act = async (action: GoalAction) => {
     if (!goal || !sessionId || busy || settingsBusy) return;
     setBusy(true); setError(undefined);
+    // Approving a held completion sends no summary: Core completes the goal
+    // with the agent's saved proposal. Sending it back resumes with feedback.
+    const approving = action === "complete" && Boolean(goal.completionProposal) && transition !== "complete";
     const body = (revision: number) => ({
       expectedRevision: revision,
       action,
-      ...(action === "block" ? { reason: reason.trim() } : {}),
-      ...(action === "complete" ? {
+      ...(action === "block" || (action === "resume" && transition === "send_back") ? { reason: reason.trim() || undefined } : {}),
+      ...(action === "complete" && !approving ? {
         completionSummary: summary.trim(),
         completionEvidence: evidence.split("\n").map(item => item.trim()).filter(Boolean).map(detail => ({ kind: "operator_confirmation", detail })),
       } : {}),
@@ -214,12 +228,13 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
         ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
         ...(childBudget ? { childBudget: Number(childBudget) } : {}),
+        ...(requiresReview ? { completionRequiresReview: true } : {}),
       };
       let created: ChatGoal;
       if (sessionId) created = await api.createChatGoal(sessionId, draft);
       else if (onCreate) created = await onCreate(draft);
       else throw new Error("Save the conversation before adding a goal.");
-      onChange(created); setExpanded(false); setResumeInstruction(DEFAULT_GOAL_RESUME_INSTRUCTION);
+      onChange(created); setExpanded(false); setResumeInstruction(DEFAULT_GOAL_RESUME_INSTRUCTION); setRequiresReview(false);
     } catch (caught) {
       void logCaughtDiagnostic("interface.goal.create_failed", "A conversation goal could not be created.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal could not be created.");
@@ -236,6 +251,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     setTimeBudget(goal.timeBudgetSeconds ? String(goal.timeBudgetSeconds / 60) : "");
     setStepBudget(goal.stepBudget?.toString() ?? "");
     setChildBudget(goal.childBudget?.toString() ?? "");
+    setRequiresReview(goal.completionRequiresReview === true);
     setEditingSkills(false);
     setTransition(undefined);
     setEditingGoal(true);
@@ -258,6 +274,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
       ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
       ...(childBudget ? { childBudget: Number(childBudget) } : {}),
+      ...(requiresReview !== (goal.completionRequiresReview === true) ? { completionRequiresReview: requiresReview } : {}),
     });
     setBusy(true); setError(undefined);
     try {
@@ -274,7 +291,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
             && current.tokenBudget === goal.tokenBudget
             && current.timeBudgetSeconds === goal.timeBudgetSeconds
             && current.stepBudget === goal.stepBudget
-            && current.childBudget === goal.childBudget;
+            && current.childBudget === goal.childBudget
+            && current.completionRequiresReview === goal.completionRequiresReview;
           onChange(current);
           if (contentUnchanged) {
             onChange(await api.updateChatGoal(sessionId, body(current.revision)));
@@ -348,12 +366,14 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
+      <ReviewChoice checked={requiresReview} onChange={setRequiresReview} />
       <div><button className="button secondary" type="button" onClick={() => setExpanded(false)}>Cancel</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || invalidResumeInstruction || !objective.trim() || !criteria.trim()} onClick={() => void create()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Flag size={14} />} Save draft</button></div>
     </div>}
     {error && <p role="alert">{error}</p>}
   </section>;
 
   const terminal = goal.status === "completed" || goal.status === "cancelled";
+  const proposal = goal.status === "blocked" ? goal.completionProposal : undefined;
   const skillOptions = [...new Map([
     ...(skills ?? []).map(skill => [skill.path, skill] as const),
     ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),
@@ -368,11 +388,29 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     ? `/projects/${encodeURIComponent(goal.engagementId)}/workbench?view=chat&session=${encodeURIComponent(handoffSessionId)}`
     : undefined;
   return <section className={`chat-goal-panel${detailsOpen ? "" : " is-collapsed"}`} aria-label="Conversation goal" data-guide="goal-panel">
-    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${waiting ? "waiting" : goal.status}`} title={waiting?.detail}>{waiting ? (waiting.reason === "held" ? "held" : "waiting") : goal.heldByProject && goal.status === "paused" ? "paused by update" : goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with reported usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
+    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${waiting ? "waiting" : goal.status}`} title={waiting?.detail}>{waiting ? (waiting.reason === "held" ? "held" : "waiting") : goal.heldByProject && goal.status === "paused" ? "paused by update" : proposal ? "awaiting review" : goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with reported usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
     {waiting && <p role="status" className="chat-goal-waiting">{waiting.detail}</p>}
     {goal.heldByProject && goal.status === "paused"
       ? <p role="status" className="chat-goal-held">Goal paused by update · resumes automatically</p>
-      : goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
+      : proposal
+        ? <div className="chat-goal-review" role="region" aria-label="Completion awaiting review">
+          {/* The decision sits beside its status so it stays in view; the proposal follows. */}
+          <div className="chat-goal-review-head">
+            <p role="status"><strong>Awaiting your review</strong> · the agent reports this goal complete.</p>
+            {transition !== "send_back" && <div className="chat-goal-review-actions">
+              <button className="button secondary" type="button" disabled={busy || settingsBusy} onClick={() => { setReason(""); setTransition("send_back"); }}><RotateCcw size={14} aria-hidden="true" /> Send back</button>
+              <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("complete")}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />} Approve completion</button>
+            </div>}
+          </div>
+          <p className="chat-goal-review-summary">{proposal.summary}</p>
+          {proposal.evidence.length > 0 && <ul>{proposal.evidence.map((item, index) => <li key={index}>{String(item.detail ?? "Recorded evidence")}</li>)}</ul>}
+          <small>Agent-reported evidence, not verified by Core.</small>
+          {transition === "send_back" && <div className="chat-goal-form">
+            <label>What still needs work<textarea value={reason} maxLength={2_000} placeholder="Optional feedback for the agent" onChange={event => setReason(event.target.value)} /></label>
+            <div><button className="button quiet" type="button" disabled={busy} onClick={() => setTransition(undefined)}>Back</button><button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <RotateCcw size={14} aria-hidden="true" />} Send back</button></div>
+          </div>}
+        </div>
+        : goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     {handoffUrl && <p role="status" style={{minWidth: 0, overflowWrap: "anywhere"}}>{goal.handoffTargetSessionId ? "Work continues in a linked provider chat." : "Continued from a paused harness goal."} <a href={handoffUrl}>{goal.handoffTargetSessionId ? "Open continuation" : "Open source chat"}</a>{goal.handoffReason ? ` Reason: ${goal.handoffReason}` : ""}</p>}
     <div id="chat-goal-details" hidden={!detailsOpen} className="chat-goal-details">
     <details className="chat-goal-objective" open={objectiveOpen} onToggle={event => setObjectiveOpen(event.currentTarget.open)}>
@@ -385,7 +423,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
       {goal.status === "running" && <><button className="button secondary chat-goal-pause" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button><div className="chat-goal-outcomes" role="group" aria-label="Set goal outcome"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}><Check size={14} aria-hidden="true" /> Complete</button></div></>}
-      {(goal.status === "paused" || goal.status === "blocked") && !goal.handoffTargetSessionId && !goal.heldByProject && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
+      {(goal.status === "paused" || goal.status === "blocked") && !proposal && !goal.handoffTargetSessionId && !goal.heldByProject && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
       <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginGoalEdit}><Pencil size={14} aria-hidden="true" /> Edit goal</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
     </div>}
     {editingGoal && !terminal && <div className="chat-goal-form" data-selection-actions-disabled ref={editFormRef}>
@@ -402,6 +440,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
+      <ReviewChoice checked={requiresReview} onChange={setRequiresReview} />
       <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || invalidResumeInstruction || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">

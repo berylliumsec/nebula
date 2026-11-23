@@ -708,6 +708,10 @@ GOAL_CREATE_FIELDS: dict[str, Any] = {
     "time_budget_seconds": {"type": ["integer", "null"], "minimum": 1800},
     "step_budget": {"type": ["integer", "null"], "minimum": 1},
     "child_budget": {"type": ["integer", "null"], "minimum": 0, "maximum": 32},
+    "completion_requires_review": {
+        "type": "boolean",
+        "description": "Hold the agent's own goal.complete for closure review: Core stops the goal blocked with its proposed summary and evidence until the operator or Butler approves it (goal_action complete) or sends it back (goal_action resume with reason). Default false.",
+    },
 }
 CREATE_GOAL_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -1922,6 +1926,8 @@ class ControlAssistantWork:
             "current_step": goal.current_step,
             "plan_steps": len(goal.plan),
             "blocked_reason": goal.blocked_reason,
+            "completion_requires_review": goal.completion_requires_review,
+            "awaiting_completion_review": goal.awaiting_completion_review,
             "revision": goal.revision,
         }
 
@@ -4332,13 +4338,13 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.update_goal",
-        "Edit objective, criteria, plan, resume instruction, or limits on a listed nonterminal goal after explicit operator instruction. Read goal first and pass its revision; omitted fields stay unchanged.",
+        "Edit objective, criteria, plan, resume instruction, closure review, or limits on a listed nonterminal goal after explicit operator instruction. Read goal first and pass its revision; omitted fields stay unchanged.",
         UPDATE_GOAL_SCHEMA,
         False,
     ),
     (
         "nebula.work.goal_action",
-        "Start, pause, resume, cancel, block, or complete one exact goal after explicit operator instruction. Read goal first and pass its revision. Completion requires actual summary and evidence; a started goal is not finished.",
+        "Start, pause, resume, cancel, block, or complete one exact goal after explicit operator instruction. Read goal first and pass its revision. Completion requires actual summary and evidence; a started goal is not finished. A goal awaiting closure review (blocked, metadata.completion_proposal) is approved with complete, which accepts the stored proposal when summary and evidence are omitted, or sent back with resume and a reason the agent receives.",
         GOAL_ACTION_SCHEMA,
         False,
     ),

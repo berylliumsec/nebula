@@ -184,6 +184,8 @@ def test_meaningful_event_filter_is_narrow():
         "agent.turn_completed",
         "goal.plan_changed",
         "goal.blocked",
+        "goal.completion_review_requested",
+        "goal.completed",
         "goal.read_only_tool_failures_repeated",
     }
     assert is_meaningful_event(type("Event", (), {"event_type": "goal.blocked"})())

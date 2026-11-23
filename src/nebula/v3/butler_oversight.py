@@ -25,6 +25,7 @@ from .database import EntityRow
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     Artifact,
+    GOAL_COMPLETION_PROPOSAL_KEY,
     ButlerAccountCredit,
     ButlerAction,
     ButlerAgentReport,
@@ -363,6 +364,22 @@ async def _resolve_progress_incident(
     )
 
 
+def _goal_transition_summary(action: str, goal: ChatGoal) -> str:
+    """The event summary, carrying the completion a reviewer must judge."""
+
+    if action == "completion_review_requested":
+        proposal = goal.metadata.get(GOAL_COMPLETION_PROPOSAL_KEY) or {}
+        claimed = " ".join(str(proposal.get("completion_summary") or "").split())
+        return (
+            "Agent proposed completion; Core holds it for closure review. "
+            "Agent-reported, not verified: " + claimed
+        )[:500]
+    if action == "completed" and goal.completion_summary:
+        claimed = " ".join(goal.completion_summary.split())
+        return ("Goal completed. Summary: " + claimed)[:500]
+    return f"Goal {action}."
+
+
 async def record_goal_transition(
     transaction: StoreTransaction, before: ChatGoal, after: ChatGoal
 ) -> None:
@@ -404,6 +421,10 @@ async def record_goal_transition(
         and before.status == ChatGoalStatus.DRAFT
         else "resumed"
         if after.status == ChatGoalStatus.RUNNING
+        # The agent proposed completion and Core held it for closure review;
+        # this is a decision for the reviewer, not an operational blocker.
+        else "completion_review_requested"
+        if after.awaiting_completion_review
         else after.status.value
     )
     if after.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
@@ -422,7 +443,7 @@ async def record_goal_transition(
         source="core",
         actor_role="subagent" if after.parent_goal_id else "main_agent",
         parent_goal_id=after.parent_goal_id,
-        summary=f"Goal {action}.",
+        summary=_goal_transition_summary(action, after),
         metrics={
             "goal_revision": after.revision,
             "watch_generation": watch.deadline_generation,

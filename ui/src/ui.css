@@ -337,6 +337,17 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-status { text-transform: capitalize; font-weight: 650; }
 .chat-goal-status.running { color: var(--text-strong); }
 .chat-goal-status.waiting { color: var(--text-muted); }
+.chat-goal-review { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 10px; font-size: var(--type-secondary); line-height: var(--leading-ui); overflow-wrap: anywhere; min-width: 0; }
+.chat-goal-review :is(p, ul) { margin: 0; }
+.chat-goal-review ul { padding-left: 20px; }
+.chat-goal-review > small { color: var(--text-muted); }
+.chat-goal-review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.chat-goal-review-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.chat-goal-review-actions .button { min-height: 36px; padding: 6px 10px; }
+.chat-goal-form .chat-goal-review-choice { grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px; cursor: pointer; }
+.chat-goal-review-choice input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; }
+.chat-goal-review-choice small { display: block; color: var(--text-muted); }
+@media (max-width: 760px), (pointer: coarse) { .chat-goal-review-actions .button { min-height: 44px; } .chat-goal-review-choice { min-height: 44px; } }
 .chat-goal-details { display: grid; gap: 8px; }
 .chat-goal-details[hidden] { display: none; }
 .chat-goal-objective { min-width: 0; border-top: 1px solid var(--border-soft); }
