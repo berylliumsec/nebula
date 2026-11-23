@@ -58,6 +58,7 @@ from .domain import (
     HarnessTurnStatus,
     OperationEvent,
     ProviderProfile,
+    ScopePolicy,
     ToolCall,
     utc_now,
 )
@@ -451,15 +452,20 @@ class ButlerRecoveryAgent:
         )
 
     async def _butler_session(self, project_id: str) -> ChatSession:
-        """The project's Butler chat, or one made from Butler's home runtime.
+        """The project's Butler chat, or one made on a shared Butler runtime.
 
-        Butler's home sessions live in a project this worker cannot read.
-        When the operator gave Butler a model for this project only there, the
-        project gets its own Butler chat on that model, as opening the Butler
-        panel here would, so background checks have a parent chat.
+        A worker reads only its own project's chats. When Butler's model was
+        chosen elsewhere (a home session focused on this project, or else the
+        Nebula-wide default another project's Butler chat shares), the project
+        gets its own Butler chat on that model, as opening the Butler panel
+        here would, so background checks have a parent chat.
         """
 
-        from .butler_sessions import ButlerSessionReservation, reserve_butler_session
+        from .butler_sessions import (
+            DEFAULT_RUNTIME_FOCUS,
+            ButlerSessionReservation,
+            reserve_butler_session,
+        )
         from .chat import ChatConfigurationError
 
         session = max(
@@ -469,10 +475,27 @@ class ButlerRecoveryAgent:
         )
         if session is not None:
             return session
-        runtime = await _focus_runtime(self.store, project_id)
+        runtime = await _focus_runtime(self.store, project_id) or (
+            await _focus_runtime(self.store, DEFAULT_RUNTIME_FOCUS)
+        )
         if runtime is None:
             raise ChatConfigurationError(HOST_HINTS["no_butler"])
         harness = runtime.backend == ChatBackend.HARNESS
+        if not harness:
+            # A shared provider never carries this project past its
+            # local-only boundary; the harness path checks it on reservation.
+            project = await self.store.get(Engagement, project_id)
+            scope = (
+                await self.store.get(ScopePolicy, project.scope_policy_id)
+                if project.scope_policy_id
+                else None
+            )
+            provider = await self.store.get(ProviderProfile, runtime.profile_id)
+            if scope is not None and scope.local_only and not provider.is_local:
+                raise ChatConfigurationError(
+                    f"{project.name} keeps its data on local models; open Butler "
+                    "in this project and choose a local model for its checks."
+                )
         cyber = runtime.harness_cyber_access_program
         return await reserve_butler_session(
             self.store,
@@ -1348,7 +1371,44 @@ class ButlerRecoveryService:
                         expected_revision=current.revision,
                     )
                 )
+        (await self._share_host_runtime(project_id))
         return True
+
+    async def _share_host_runtime(self, project_id: str) -> None:
+        """Publish the host's Butler chat as the Nebula-wide default runtime.
+
+        Act projects without a Butler chat run their recovery checks on it;
+        a Butler chat reserved before the default existed is backfilled here.
+        """
+
+        from .butler_sessions import DEFAULT_RUNTIME_FOCUS, record_focus_runtime
+
+        session = max(
+            [
+                item
+                async for item in _root_butler_sessions(self.store, project_id)
+                if not item.metadata.get("butler_recovery_case_id")
+            ],
+            key=lambda item: item.created_at,
+            default=None,
+        )
+        if session is None:
+            return
+        try:
+            (await record_focus_runtime(self.store, session, DEFAULT_RUNTIME_FOCUS))
+        except Exception as exc:
+            # The scheduled check already ran; other projects keep the last
+            # shared runtime until the next check publishes it.
+            record_diagnostic(
+                "warning",
+                "butler",
+                "butler.recovery.default_runtime_unshared",
+                "Butler could not share its runtime with other projects "
+                f"({type(exc).__name__}: {str(exc)[:200]}).",
+                outcome="degraded",
+                stage="recovery",
+                metadata={"entity_id": project_id, "kind": "project"},
+            )
 
     async def fire_periodic_check(self, project_id: str, worker_id: str) -> bool:
         if self.instructions_root is not None:
@@ -2218,8 +2278,27 @@ class ButlerRecoveryService:
             ):
                 outcome = str(exc)[:300]
             else:
+                # Keep the cause: a bare type name left failed turns, unread
+                # delegated results and missing chats indistinguishable.
+                detail = " ".join(str(exc).split())[:220]
                 outcome = (
-                    f"Butler could not finish the investigation ({type(exc).__name__})."
+                    "Butler could not finish the investigation "
+                    f"({type(exc).__name__}{': ' + detail if detail else ''})."
+                )
+                record_diagnostic(
+                    "warning",
+                    "butler",
+                    "butler.recovery.investigation_failed",
+                    outcome,
+                    outcome="failed",
+                    stage="recovery",
+                    metadata={
+                        "entity_id": project_id,
+                        "kind": "project",
+                        "case_id": case.id,
+                        "signal": case.signal,
+                        "error_type": type(exc).__name__,
+                    },
                 )
             (
                 await self._update_case(
