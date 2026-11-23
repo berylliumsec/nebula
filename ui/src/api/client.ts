@@ -3636,6 +3636,18 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     usageUnknown: value.metadata?.usage_unknown === true,
     linkedTurnIds: Array.isArray(value.linked_turn_ids) ? value.linked_turn_ids.map(String) : [],
     blockedReason: typeof value.blocked_reason === "string" ? value.blocked_reason : undefined,
+    completionRequiresReview: value.completion_requires_review === true,
+    // Core keeps the proposal only while the goal is blocked awaiting review.
+    completionProposal: value.status === "blocked" && value.metadata?.completion_proposal
+      && typeof value.metadata.completion_proposal.completion_summary === "string"
+      ? {
+        summary: value.metadata.completion_proposal.completion_summary,
+        evidence: Array.isArray(value.metadata.completion_proposal.completion_evidence)
+          ? value.metadata.completion_proposal.completion_evidence : [],
+        proposedAt: typeof value.metadata.completion_proposal.proposed_at === "string"
+          ? value.metadata.completion_proposal.proposed_at : undefined,
+      }
+      : undefined,
     completionSummary: typeof value.completion_summary === "string" ? value.completion_summary : undefined,
     completionEvidence: Array.isArray(value.completion_evidence) ? value.completion_evidence : [],
     parentGoalId: typeof value.parent_goal_id === "string" ? value.parent_goal_id : undefined,
@@ -10180,6 +10192,7 @@ export class ApiClient {
     timeBudgetSeconds?: number;
     stepBudget?: number;
     childBudget?: number;
+    completionRequiresReview?: boolean;
   }): Promise<ChatGoal> {
     return this.request<Record<string, any>>(
       `chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
@@ -10193,6 +10206,7 @@ export class ApiClient {
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,
           child_budget: body.childBudget,
+          completion_requires_review: body.completionRequiresReview ?? false,
         }),
       },
     ).then(mapChatGoal);
@@ -10208,6 +10222,8 @@ export class ApiClient {
     timeBudgetSeconds?: number;
     stepBudget?: number;
     childBudget?: number;
+    /** Left out, Core keeps the goal's current choice. */
+    completionRequiresReview?: boolean;
   }): Promise<ChatGoal> {
     return this.request<Record<string, any>>(
       `chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
@@ -10222,6 +10238,8 @@ export class ApiClient {
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,
           child_budget: body.childBudget,
+          ...(body.completionRequiresReview !== undefined
+            ? { completion_requires_review: body.completionRequiresReview } : {}),
         }),
       },
     ).then(mapChatGoal);
@@ -10258,6 +10276,7 @@ export class ApiClient {
     timeBudgetSeconds?: number;
     stepBudget?: number;
     childBudget?: number;
+    completionRequiresReview?: boolean;
   }): Promise<{ session: ChatSessionSummary; goal: ChatGoal }> {
     return this.request<{session: WireChatSession; goal: Record<string, any>}>(
       "chat/goal-conversations", {
@@ -10293,6 +10312,7 @@ export class ApiClient {
           time_budget_seconds: body.timeBudgetSeconds,
           step_budget: body.stepBudget,
           child_budget: body.childBudget,
+          completion_requires_review: body.completionRequiresReview ?? false,
         }),
       },
     ).then(value => ({ session: mapChatSession(value.session), goal: mapChatGoal(value.goal) }));

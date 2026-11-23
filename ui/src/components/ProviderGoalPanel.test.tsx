@@ -472,3 +472,74 @@ it("shows incomplete harness usage and lets the operator remove an existing toke
   fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
   await waitFor(() => expect(updateChatGoal).toHaveBeenCalledWith("session", expect.not.objectContaining({ tokenBudget: 100 })));
 });
+
+it("saves the closure review choice when creating and editing a goal", async () => {
+  const createChatGoal = vi.fn().mockResolvedValue({ ...draft, completionRequiresReview: true });
+  const created = render(<DialogProvider><ProviderGoalPanel api={{ createChatGoal } as unknown as ApiClient} sessionId="session" onChange={vi.fn()} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Add goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Inspect safely" } });
+  fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "Evidence retained" } });
+  const choice = screen.getByLabelText(/Hold completion for review/);
+  expect(choice).not.toBeChecked();
+  fireEvent.click(choice);
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => expect(createChatGoal).toHaveBeenCalledWith("session", expect.objectContaining({ completionRequiresReview: true })));
+  created.unmount();
+
+  const updateChatGoal = vi.fn().mockResolvedValue({ ...draft, completionRequiresReview: false, revision: 2 });
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal } as unknown as ApiClient} sessionId="session" goal={{ ...draft, completionRequiresReview: true }} onChange={vi.fn()} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  expect(screen.getByLabelText(/Hold completion for review/)).toBeChecked();
+  fireEvent.click(screen.getByLabelText(/Hold completion for review/));
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(updateChatGoal).toHaveBeenCalledWith("session", expect.objectContaining({ completionRequiresReview: false })));
+});
+
+const awaitingReview: ChatGoal = {
+  ...draft,
+  status: "blocked",
+  completionRequiresReview: true,
+  blockedReason: "Awaiting closure review: the agent reports this goal complete.",
+  completionProposal: {
+    summary: "Recon handoff is complete.",
+    evidence: [{ kind: "agent_reported", detail: "The requested artifact is saved.", turn_id: "turn" }],
+  },
+  revision: 4,
+};
+
+it("approves an agent's held completion with its saved proposal", async () => {
+  const completed = { ...awaitingReview, status: "completed" as const, completionProposal: undefined, revision: 5 };
+  const writeChatGoal = vi.fn().mockResolvedValue(completed);
+  const onChange = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel api={{ writeChatGoal } as unknown as ApiClient} sessionId="session" goal={awaitingReview} onChange={onChange} /></DialogProvider>);
+  expect(document.querySelector(".chat-goal-status")).toHaveTextContent("awaiting review");
+  const review = screen.getByRole("region", { name: "Completion awaiting review" });
+  expect(within(review).getByText("Recon handoff is complete.")).toBeVisible();
+  expect(within(review).getByText("The requested artifact is saved.")).toBeVisible();
+  expect(within(review).getByText(/not verified/)).toBeVisible();
+  // The review decision replaces the generic resume of a blocked goal.
+  expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  // A decision the operator owes stays visible when goal controls collapse.
+  fireEvent.click(screen.getByRole("button", { name: "Collapse goal controls" }));
+  expect(within(review).getByRole("button", { name: "Approve completion" })).toBeVisible();
+  fireEvent.click(within(review).getByRole("button", { name: "Approve completion" }));
+  await waitFor(() => expect(writeChatGoal).toHaveBeenCalledWith("session", { expectedRevision: 4, action: "complete" }));
+  expect(onChange).toHaveBeenCalledWith(completed);
+});
+
+it("sends a held completion back with the reviewer's feedback", async () => {
+  const resumed = { ...awaitingReview, status: "running" as const, completionProposal: undefined, blockedReason: undefined, revision: 5 };
+  const writeChatGoal = vi.fn().mockResolvedValue(resumed);
+  const onWorkDispatched = vi.fn().mockResolvedValue(undefined);
+  render(<DialogProvider><ProviderGoalPanel api={{ writeChatGoal } as unknown as ApiClient} sessionId="session" goal={awaitingReview} onChange={vi.fn()} onWorkDispatched={onWorkDispatched} /></DialogProvider>);
+  const review = screen.getByRole("region", { name: "Completion awaiting review" });
+  fireEvent.click(within(review).getByRole("button", { name: "Send back" }));
+  fireEvent.change(within(review).getByLabelText("What still needs work"), { target: { value: "Criterion 2 has no saved artifact." } });
+  fireEvent.click(within(review).getByRole("button", { name: "Send back" }));
+  await waitFor(() => expect(writeChatGoal).toHaveBeenCalledWith("session", {
+    expectedRevision: 4,
+    action: "resume",
+    reason: "Criterion 2 has no saved artifact.",
+  }));
+  await waitFor(() => expect(onWorkDispatched).toHaveBeenCalled());
+});

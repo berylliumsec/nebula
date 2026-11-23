@@ -1890,6 +1890,13 @@ export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "
 
 export const REASONING_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
 
+export interface ChatGoalCompletionProposal {
+  summary: string;
+  /** Agent-reported evidence items, saved as Core will complete the goal with them. */
+  evidence: Array<Record<string, unknown>>;
+  proposedAt?: string;
+}
+
 export interface ChatGoal {
   id: Identifier;
   engagementId: Identifier;
@@ -1913,6 +1920,10 @@ export interface ChatGoal {
   usageUnknown?: boolean;
   linkedTurnIds: Identifier[];
   blockedReason?: string;
+  /** An agent's goal.complete stops the goal for closure review instead of completing it. */
+  completionRequiresReview?: boolean;
+  /** The agent's held completion while the goal awaits closure review. */
+  completionProposal?: ChatGoalCompletionProposal;
   completionSummary?: string;
   completionEvidence: Array<Record<string, unknown>>;
   skillSnapshots: Array<HarnessSkillSummary & { sha256: string }>;
