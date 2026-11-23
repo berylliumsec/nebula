@@ -497,7 +497,7 @@ async def test_malformed_app_server_reply_is_not_retryable(tmp_path):
     error = await _rpc_failure(
         tmp_path,
         "import sys, time\nsys.stdin.readline()\n"
-        "print('{\"id\": 1, \"result\": ', flush=True)\ntime.sleep(30)\n",
+        'print(\'{"id": 1, "result": \', flush=True)\ntime.sleep(30)\n',
     )
     assert not isinstance(error, HarnessTransportClosedError)
     assert not _harness_goal_retryable_failure(error)
