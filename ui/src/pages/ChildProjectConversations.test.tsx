@@ -68,6 +68,24 @@ describe("subproject conversations in the parent sidebar", () => {
     expect(await screen.findByText("Owned conversation opened")).toBeVisible();
   });
 
+  it("shows each subproject chat's Work stage and names it to screen readers", async () => {
+    const stage = { key: "recon", label: "Recon", itemId: "item-1", itemTitle: "Example Recon item", itemStatus: "in_progress" as const };
+    mount(async () => ({ page: { items: [
+      linked("staged", "Map the sample service", "a", "working", { workStage: stage }),
+      linked("plain", "Unassigned chat", "b"),
+    ] } }));
+    const list = await screen.findByRole("region", { name: "Subproject conversations" });
+    const staged = within(list).getByRole("link", { name: "Open Map the sample service in Project a, Work stage Recon, in progress" });
+    expect(staged).toHaveClass("has-stage");
+    const label = staged.querySelector(".conversation-stage-stack .chat-work-stage");
+    expect(label).toHaveAttribute("data-stage-key", "recon");
+    expect(label).toHaveAttribute("title", "Work stage Recon: Example Recon item, in progress");
+    expect(label).toHaveTextContent("Recon");
+    const plain = within(list).getByRole("link", { name: "Open Unassigned chat in Project b" });
+    expect(plain).not.toHaveClass("has-stage");
+    expect(plain.querySelector(".chat-work-stage")).toBeNull();
+  });
+
   it("searches in Core and reports whether anything matched", async () => {
     const matches = vi.fn();
     const read = vi.fn<Read>(async (_project, options) => ({

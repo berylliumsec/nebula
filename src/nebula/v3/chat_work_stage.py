@@ -4,8 +4,10 @@ A project defines its own Work stages (``Engagement.work_stages``); each Work
 item names one by key (``WorkItem.stage``) and can be assigned to a chat
 (``WorkItem.assignee_session_id``). A chat's stage is the stage of its most
 recently updated open (not done) assigned item, labelled as the project
-defines it. A chat with no open assigned item, an item without a stage, or a
-stage key the project no longer lists has no stage. Nothing is stored: each
+defines it: its own stages, else its nearest ancestor's, as the Work page and
+``WorkService.effective_stages`` read them. A chat with no open assigned item,
+an item without a stage, or a stage key the project no longer lists has no
+stage. Nothing is stored: each
 chat, list and board read joins it, one bounded query per page.
 """
 
@@ -58,21 +60,12 @@ async def work_stages_for_chats(
     staged = {sid: item for sid, item in newest.items() if item.stage}
     if not staged:
         return {}
-    labels: dict[tuple[str, str], str] = {}
-    for payload in (
-        await database.scalars(
-            select(EntityRow.payload).where(
-                EntityRow.kind == Engagement.entity_kind,
-                EntityRow.id.in_({item.engagement_id for item in staged.values()}),
-            )
-        )
-    ).all():
-        project = decode_stored(Engagement, payload)
-        for stage in project.work_stages:
-            labels[(project.id, stage.key)] = stage.label
+    labels = await _effective_stage_labels(
+        database, {item.engagement_id for item in staged.values()}
+    )
     found: dict[str, dict[str, Any]] = {}
     for sid, item in staged.items():
-        label = labels.get((item.engagement_id, str(item.stage)))
+        label = labels.get(item.engagement_id, {}).get(str(item.stage))
         if label is None:
             continue
         found[sid] = {
@@ -83,6 +76,53 @@ async def work_stages_for_chats(
             "item_status": item.status,
         }
     return found
+
+
+async def _effective_stage_labels(
+    database: AsyncSession, project_ids: Iterable[str]
+) -> dict[str, dict[str, str]]:
+    """Each project's stage labels by key: its own, else its nearest ancestor's.
+
+    A research subproject usually defines no stages and uses its parent's, so
+    the parents are read one ancestry level per query, only while a project
+    still has no stages of its own. A cycle or a removed parent ends the walk.
+    """
+
+    wanted = set(project_ids)
+    projects: dict[str, Engagement] = {}
+    pending = set(wanted)
+    while pending:
+        found = [
+            decode_stored(Engagement, payload)
+            for payload in (
+                await database.scalars(
+                    select(EntityRow.payload).where(
+                        EntityRow.kind == Engagement.entity_kind,
+                        EntityRow.id.in_(pending),
+                    )
+                )
+            ).all()
+        ]
+        projects.update((project.id, project) for project in found)
+        pending = {
+            project.parent_engagement_id
+            for project in found
+            if not project.work_stages
+            and project.parent_engagement_id
+            and project.parent_engagement_id not in projects
+        }
+    labels: dict[str, dict[str, str]] = {}
+    for project_id in wanted:
+        current, seen = projects.get(project_id), set()
+        while current is not None and current.id not in seen:
+            seen.add(current.id)
+            if current.work_stages:
+                labels[project_id] = {
+                    stage.key: stage.label for stage in current.work_stages
+                }
+                break
+            current = projects.get(current.parent_engagement_id or "")
+    return labels
 
 
 async def with_work_stage(

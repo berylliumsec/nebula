@@ -97,14 +97,28 @@ test("parent project shows child conversations and opens their owned chat", asyn
   await expect(section).toBeVisible();
   // One list: no per-project folders, and no empty ones.
   await expect(section.getByText("No saved chats")).toHaveCount(0);
-  await expect(section.getByRole("link").first()).toHaveAccessibleName("Open Approval needed chat in Approvals child");
+  await expect(section.getByRole("link").first()).toHaveAccessibleName("Open Approval needed chat in Approvals child, Work stage Recon, blocked");
   await expect(section.getByRole("group", {name: "Needs you"})).toContainText("Waiting for you");
+  // The subproject has no stages of its own: its chat shows the parent's stage, inside its row on one line.
+  const staged = section.getByRole("link").first();
+  const stage = staged.locator(".chat-work-stage");
+  await expect(stage).toHaveAttribute("data-stage-key", "recon");
+  await expect(stage).toHaveAttribute("data-state", "blocked");
+  await expect(stage.locator(".chat-work-stage-text")).toHaveText("Recon");
+  const [row, label] = await Promise.all([staged.boundingBox(), stage.boundingBox()]);
+  expect(row && label).toBeTruthy();
+  expect(label!.x).toBeGreaterThanOrEqual(row!.x - 1);
+  expect(label!.x + label!.width).toBeLessThanOrEqual(row!.x + row!.width + 1);
+  expect(label!.height).toBeLessThan(24);
   await expect(section.getByRole("link")).toHaveCount(25);
   // The oldest chat is not on the first page by recency; Show more reveals it.
   const link = section.getByRole("link", {name: "Open Example child chat in Child project"});
   await expect(link).toHaveCount(0);
   await section.getByRole("button", {name: "Show more chats"}).click();
   await expect(link).toBeVisible();
+  // A chat with no assigned Work item shows no stage.
+  await expect(link).not.toHaveClass(/has-stage/);
+  await expect(link.locator(".chat-work-stage")).toHaveCount(0);
   await expect(section.getByRole("button", {name: "Show more chats"})).toHaveCount(0);
   const linkedReads = reads.filter(path => path.includes("/linked-chats"));
   expect(linkedReads.length).toBeGreaterThanOrEqual(2);
@@ -129,7 +143,7 @@ test("parent project shows child conversations and opens their owned chat", asyn
   await page.goBack();
   await showSidebar();
   await expect(section).toBeVisible();
-  await section.getByRole("link", {name: "Open Approval needed chat in Approvals child"}).click();
+  await section.getByRole("link", {name: "Open Approval needed chat in Approvals child, Work stage Recon, blocked"}).click();
   await expect(page).toHaveURL(new RegExp(`/projects/${approvals}/workbench\\?view=chat&session=${waiting}$`));
   await page.goBack();
   await showSidebar();
