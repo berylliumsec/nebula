@@ -47,6 +47,7 @@ from .mcp_gateway import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION
 from .mcp_scope import mcp_metadata_is_visible
 from .redaction import redact_text
 from .storage import NebulaStore
+from .tool_results import MCP_RESULT_NOTE
 
 # A frozen Core relaunch may need one-file extraction and platform verification.
 GATEWAY_STARTUP_TIMEOUT_SECONDS = 30.0
@@ -124,9 +125,16 @@ class McpProbeReport(NebulaModel):
     detail: str | None = Field(default=None, max_length=1_000)
 
 
+# How long a server may take, after Nebula abandons a request, to receive
+# notifications/cancelled and wind down before its connection is closed. It
+# bounds the whole cancel, so a stuck server never holds the turn longer.
+MCP_CANCEL_GRACE_SECONDS = 1.5
+
+
 class _McpClient:
     def __init__(self, *, response_limit: int = MAX_MCP_MESSAGE_BYTES) -> None:
         self.next_id = 1
+        self.last_request_id: int | None = None
         self.response_limit = response_limit
 
     async def request(
@@ -146,6 +154,7 @@ class _McpClient:
 
         request_id = self.next_id
         self.next_id += 1
+        self.last_request_id = request_id
         response = await self.exchange(
             {
                 "jsonrpc": "2.0",
@@ -187,6 +196,43 @@ class _McpClient:
         timeout: float | None = None,
     ) -> Any:
         raise NotImplementedError
+
+    async def cancel(self, request_id: int, reason: str) -> None:
+        """Tell the server Nebula abandoned ``request_id``, then let it wind down.
+
+        A server that releases what a request holds (a lock, a lease, a child
+        process) only on a graceful cancel would otherwise keep holding it
+        after Nebula closes the connection. The whole cancel is bounded by
+        ``MCP_CANCEL_GRACE_SECONDS``; a failure to deliver it is recorded and
+        the caller closes the connection as it would have anyway.
+        """
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + MCP_CANCEL_GRACE_SECONDS
+        try:
+            await asyncio.wait_for(
+                self.notify(
+                    "notifications/cancelled",
+                    {"requestId": request_id, "reason": reason},
+                ),
+                timeout=MCP_CANCEL_GRACE_SECONDS,
+            )
+            remaining = deadline - loop.time()
+            if remaining > 0:
+                await self._wind_down(remaining)
+        except Exception as caught_error:  # diagnostic-expected: cancel is best effort; close still runs
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.cancel_not_delivered",
+                "Nebula could not notify an MCP server that a call was cancelled.",
+                caught_error,
+                stage="mcp",
+            )
+
+    async def _wind_down(self, timeout: float) -> None:
+        """Wait up to ``timeout`` for the server to finish after a cancel."""
+
+        del timeout
 
     async def close(self) -> None:
         return None
@@ -261,6 +307,21 @@ class _StdioMcpClient(_McpClient):
             # Ignore protocol notifications while waiting for the correlated response.
             if isinstance(response, dict) and response.get("id") == message.get("id"):
                 return response
+
+    async def _wind_down(self, timeout: float) -> None:
+        # Closing stdin is the stdio transport's graceful shutdown signal. A
+        # server that exits within the grace has handled the cancel; one that
+        # does not is terminated by close() as before.
+        if self.process.returncode is not None:
+            return
+        if self.process.stdin is not None and not self.process.stdin.is_closing():
+            self.process.stdin.close()
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=timeout)
+        except (
+            TimeoutError
+        ):  # diagnostic-expected: close() terminates a server that outlives the grace
+            return
 
     async def _stderr(self) -> None:
         if self.process.stderr is None:
@@ -769,14 +830,31 @@ class McpProbeService:
             if not isinstance(initialize, dict):
                 raise McpProbeError("MCP initialize result must be an object")
             await client.notify("notifications/initialized")
-            result = await asyncio.wait_for(
-                client.request(
-                    "tools/call",
-                    {"name": tool_name, "arguments": arguments},
+            try:
+                result = await asyncio.wait_for(
+                    client.request(
+                        "tools/call",
+                        {"name": tool_name, "arguments": arguments},
+                        timeout=profile.tool_timeout_seconds,
+                    ),
                     timeout=profile.tool_timeout_seconds,
-                ),
-                timeout=profile.tool_timeout_seconds,
-            )
+                )
+            except (
+                TimeoutError,
+                httpx.TimeoutException,
+                asyncio.CancelledError,
+            ) as stop:
+                # Closing alone kills a stdio server mid-request; tell it the
+                # call was abandoned first so it can release what it holds.
+                if client.last_request_id is not None:
+                    await client.cancel(
+                        client.last_request_id,
+                        "Nebula cancelled the tool call"
+                        if isinstance(stop, asyncio.CancelledError)
+                        else "Nebula timed out the tool call after "
+                        f"{profile.tool_timeout_seconds:g} seconds",
+                    )
+                raise
             if not isinstance(result, dict):
                 raise McpProbeError("MCP tools/call result must be an object")
             return result
@@ -1020,8 +1098,8 @@ async def build_mcp_tool_plugins(
                         and profile.capabilities.instructions
                         else ""
                     )
-                    + "\nResults are captured as artifacts and returned "
-                    "as a nebula.tool-result/v2 receipt."
+                    + "\n"
+                    + MCP_RESULT_NOTE
                 )[:10_000],
                 input_schema=schema,
                 output_schema={"type": "object", "additionalProperties": True},

@@ -58,6 +58,7 @@ from .tool_results import (
     MAX_TOOL_OUTPUT_READ_LINES,
     DEFAULT_TOOL_OUTPUT_READ_LINES,
     ParserState,
+    ToolArtifactRef,
     ToolOutputPreview,
     ToolParserReceipt,
     ToolResultStatus,
@@ -71,6 +72,7 @@ from .tool_results import (
     artifact_ref,
     command_output_preview,
     bytes_are_searchable,
+    small_output_preview,
 )
 
 
@@ -985,6 +987,42 @@ def _mcp_text_json_values(blocks: list[dict[str, Any]]) -> list[Any]:
     return values
 
 
+# Structured MCP content fields that carry command-like text output, in the
+# order they are previewed. ``output`` is used only when neither stream is.
+_MCP_TEXT_FIELDS = ("stdout", "stderr", "output")
+
+
+def _mcp_text_fields(
+    blocks: list[dict[str, Any]], text_values: list[Any]
+) -> list[tuple[str, str]]:
+    """Nonempty stdout/stderr (else output) strings of structured MCP content.
+
+    Structured content, or a text block that serializes the same object, may
+    report a command's streams as JSON strings. Previewing those strings reads
+    as the command's output, where the JSON that holds them would not.
+    """
+
+    values = [
+        block.get("value")
+        for block in blocks
+        if block.get("type") == "structured_content"
+    ] + text_values
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        fields = [
+            (name, value[name])
+            for name in _MCP_TEXT_FIELDS
+            if isinstance(value.get(name), str)
+        ]
+        if not fields:
+            continue
+        streams = [(name, text) for name, text in fields if name != "output"]
+        chosen = streams if any(text for _, text in streams) else fields
+        return [(name, text) for name, text in chosen if text]
+    return []
+
+
 def _compact_tool_summary(
     result: ToolExecutionResult, status: ToolResultStatus
 ) -> str | None:
@@ -1140,6 +1178,7 @@ class StoreToolEvidenceRecorder:
         artifact_entities: list[Artifact] = []
         references = []
         stream_artifacts = []
+        mcp_text_artifacts: list[tuple[Artifact, ToolArtifactRef]] = []
         warnings: list[str] = []
 
         async def store_stream(
@@ -1304,9 +1343,49 @@ class StoreToolEvidenceRecorder:
             )
             stored_items.append(stored)
             artifact_entities.append(stored.artifact)
-            references.append(
-                artifact_ref(stored.artifact, kind="mcp_content", searchable=searchable)
+            reference = artifact_ref(
+                stored.artifact, kind="mcp_content", searchable=searchable
             )
+            references.append(reference)
+            if block_type == "text" and media_type == "text/plain":
+                mcp_text_artifacts.append((stored.artifact, reference))
+
+        # MCP text is previewed inline like process output. When the server
+        # reports a command's streams as structured fields and its text does
+        # not fit whole, the fields are kept as their own text artifacts and
+        # previewed instead, so a partial preview reads as output, not JSON.
+        preview_streams = [*stream_artifacts, *mcp_text_artifacts]
+        mcp_fields = _mcp_text_fields(result.mcp_content_blocks, text_values)
+        if mcp_fields and not await asyncio.to_thread(
+            small_output_preview, self.artifact_store, preview_streams
+        ):
+            field_artifacts: list[tuple[Artifact, ToolArtifactRef]] = []
+            for name, text in mcp_fields:
+                payload = text.encode("utf-8")
+                searchable = bytes_are_searchable(payload, media_type="text/plain")
+                stored = await asyncio.to_thread(
+                    self.artifact_store.put_bytes_with_status,
+                    payload,
+                    engagement_id=invocation.engagement_id,
+                    filename=f"tool-call-{call.id}-mcp-{name}.txt",
+                    media_type="text/plain",
+                    source=f"mcp:{spec.name}:structured_{name}",
+                    metadata={
+                        **common_metadata,
+                        "kind": "mcp_content",
+                        "block_type": f"structured_{name}",
+                        "preview_kind": name,
+                        "searchable": searchable,
+                    },
+                )
+                stored_items.append(stored)
+                artifact_entities.append(stored.artifact)
+                reference = artifact_ref(
+                    stored.artifact, kind="mcp_content", searchable=searchable
+                )
+                references.append(reference)
+                field_artifacts.append((stored.artifact, reference))
+            preview_streams = [*stream_artifacts, *field_artifacts]
 
         generated_count = 0
         generated_bytes = 0
@@ -1516,7 +1595,7 @@ class StoreToolEvidenceRecorder:
             await asyncio.to_thread(
                 command_output_preview,
                 self.artifact_store,
-                stream_artifacts,
+                preview_streams,
                 lambda candidate: build_receipt(candidate).as_model_result(),
             )
         )

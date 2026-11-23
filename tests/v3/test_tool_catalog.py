@@ -15,6 +15,7 @@ import nebula.v3.chat as chat_module
 import nebula.v3.tool_catalog as tool_catalog_module
 from nebula.v3.api import create_app
 from nebula.v3.chat import ChatRequestMessage
+from nebula.v3.tool_results import MCP_RESULT_NOTE
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     ChatSession,
@@ -303,10 +304,7 @@ def test_catalog_instructions_name_each_picks_server_and_describe_it():
 
 
 def test_catalog_directory_uses_source_purpose_and_keeps_missing_purpose_empty():
-    receipt_note = (
-        "\nResults are captured as artifacts and returned as a "
-        "nebula.tool-result/v2 receipt."
-    )
+    receipt_note = "\n" + MCP_RESULT_NOTE
     named = _spec(MCP_TOOL, "Search tracker issues by keyword." + receipt_note)
     named = named.model_copy(update={"display_name": "issue-tracker · search_issues"})
     unnamed = _spec(CREDENTIAL_TOOL, receipt_note, source="mcp:vault")
