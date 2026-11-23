@@ -1,21 +1,35 @@
 {
-  "change_digest": "187d59723c51b76babb6fa3926a4cb2084a60430f7b1dea0e4a2e9b6f3787a68",
-  "reviewed_by": "Claude: bound selected pytest runs in CI and keep a stack for hangs",
-  "reason": "The selected python job runs pytest through scripts/run_pytest_thread_guard.py, which had no overall time bound and only stopped pytest after a reported thread leak; the job had no timeout-minutes and no faulthandler timeout. On 2026-11-23 the Python 3.12 job hung four times in its Test step (20-80 min) on PRs #1303/#1304 while the same selections passed locally on 3.11 and 3.12 in 1-2.5 min; cancelled jobs keep no logs, so the hanging test was never identified. The runner gains --max-seconds (stops pytest's owned process group, exit 1), CI passes --max-seconds 1200 and -o faulthandler_timeout=180 so a hung test dumps every thread's stack before the bound, and the job gets timeout-minutes: 45 as a backstop. Select the thread leak guard tests, including a new one that hangs a synthetic test and asserts the bound and the dumped stack.",
-  "exclusions": "No product code change; frontend, Playwright and native layers are empty. The full-source job's guard invocation is unchanged. No full-suite approval.",
+  "change_digest": "5634a0341dd34f71529bc35d46993a757fb463f8d6c6285541a9d9453a3feb2c",
+  "reviewed_by": "Claude: harness goal one-shot transient retry, focused harness goal/transport selection",
+  "reason": "A running harness goal paused on its first failed turn because _account_terminal_chat_usage_once wrote the goal PAUSED with the turn's error, even when the vendor transport simply dropped. Harness turn failures are now classified (new HarnessTransportClosedError for a vendor process/stream that ended; unresponsive app-server; connection errors; retryable HTTP statuses; Codex connection/stream/rate-limit/server error kinds); a transient failure of a running, unheld goal keeps it running with the #1298 provider_auto_retry mark and the idle-goal reconciler continues it once. Select the new retry suite (classification table, one continuation, second-failure pause, completed-turn and resume clearing, non-transient/stop/shutdown/hold/paused cases, real subprocess reader exit vs malformed reply), the harness goal suite, the harness turn lifecycle, Codex/Claude transport and turn outcome suites, adapter tests, and the test_harnesses.py failure, transport-loss and shutdown cases.",
+  "exclusions": "No UI, setting, or provider change: frontend, Playwright and native layers are empty and the settings assistant is unchanged. Native provider retry (chat.py) is unchanged. Other test_harnesses.py cases do not exercise turn failure settlement; test_knowledge_access_change_refreshes_fixed_gateway_catalog and test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail identically on origin/main (HarnessInstructionContextChanged) and are not selected. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 4,
+    "python": 266,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_thread_leak_guard.py"
+    "tests/v3/test_harness_goal_auto_retry.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_harness_turn_lifecycle.py",
+    "tests/v3/test_codex_transport.py",
+    "tests/v3/test_claude_harness_turns.py",
+    "tests/v3/test_codex_turn_outcomes.py",
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_harnesses.py::test_failed_turn_persists_profile_failure_reason",
+    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
+    "tests/v3/test_harnesses.py::test_transport_loss_discards_the_dead_connection_before_the_next_turn",
+    "tests/v3/test_harnesses.py::test_stop_closes_a_connection_that_never_acknowledges_interrupt",
+    "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn",
+    "tests/v3/test_harnesses.py::test_connection_failure_is_reported_and_releases_the_session",
+    "tests/v3/test_harnesses.py::test_harness_transport_error_keeps_one_reference_from_ledger_to_api",
+    "tests/v3/test_harnesses.py::test_shutdown_keeps_a_turn_its_own_task_settled_mid_interrupt"
   ],
   "frontend": [],
   "native": [],
