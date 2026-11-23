@@ -50,7 +50,9 @@ import { nextSideChatNumber, sideChatForConversation, sideChatsForConversation, 
 import { appendSideToolTab, clearSideToolTabs, removeSideToolTab, sideToolLabel, sideToolTabs, type SideToolKind, type SideToolTab } from "./sidePanelTabs";
 import { SideToolSurface } from "./SideToolSurface";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
-import { groupSidebarConversations } from "./conversationSidebar";
+import { groupSidebarConversations, sidebarActivity } from "./conversationSidebar";
+import { butlerConversationStage, isButlerCaseChat, isProjectButlerChat } from "../butlerStage";
+import { ButlerStageLabel } from "../components/ButlerStageLabel";
 import { ChildProjectConversations } from "./ChildProjectConversations";
 import { applyChatBulkAction, conversationMatchesSearch, type ChatBulkAction } from "./chatBulkActions";
 import { subagentRequestFields } from "./chatSubagentChoice";
@@ -483,7 +485,7 @@ async function listWorkbenchConversationPage(api: ApiClient, projectId: string, 
   // A frequently active Butler child can be on the recent page while its
   // project Butler conversation is older than that page. Fetch that parent
   // without changing Core's pagination offset.
-  if (!page.items.some(item => item.isButlerInitiated) || page.items.some(item => item.isControlAssistant)) return page;
+  if (!page.items.some(item => item.isButlerInitiated || isButlerCaseChat(item)) || page.items.some(isProjectButlerChat)) return page;
   try {
     const butler = await api.getControlAssistantSession(projectId, signal);
     return butler ? { ...page, items: [...page.items, butler] } : page;
@@ -2150,8 +2152,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (parent) owners.push(parent.id);
     const butlerChild = selected.isButlerInitiated ? selected : parent?.isButlerInitiated ? parent : undefined;
     if (butlerChild) {
-      const isButler = (item: ChatSessionSummary) => item.engagementId === butlerChild.engagementId && item.isControlAssistant && !item.isSubagent;
-      const butler = savedConversations.find(item => isButler(item) && !item.archivedAt)
+      const opener = isButlerCaseChat(butlerChild) && butlerChild.parentSessionId ? byId.get(butlerChild.parentSessionId) : undefined;
+      const isButler = (item: ChatSessionSummary) => item.engagementId === butlerChild.engagementId && isProjectButlerChat(item);
+      const butler = (opener && isProjectButlerChat(opener) ? opener : undefined)
+        ?? savedConversations.find(item => isButler(item) && !item.archivedAt)
         ?? savedConversations.find(isButler);
       if (butler) {
         owners.push(butler.id);
@@ -2163,9 +2167,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       return new Set([...current, ...owners]);
     });
   }, [sessionId, savedConversations, setExpandedSubagentParents]);
+  // A Butler case chat whose case needs the operator lists as waiting for them.
+  const listActivity = useMemo(() => sidebarActivity(savedConversations, sessionActivity), [savedConversations, sessionActivity]);
   const sidebarConversations = useMemo(() => groupSidebarConversations(
-    savedConversations, sessionActivity, sessionQuery, expandedSubagentParents, Date.now(), expandedButlerArchives,
-  ), [savedConversations, sessionActivity, sessionQuery, expandedSubagentParents, expandedButlerArchives]);
+    savedConversations, listActivity, sessionQuery, expandedSubagentParents, Date.now(), expandedButlerArchives,
+  ), [savedConversations, listActivity, sessionQuery, expandedSubagentParents, expandedButlerArchives]);
   const bulkMatches = useMemo(() => savedConversations.filter(session => conversationMatchesSearch(session, sessionQuery)), [savedConversations, sessionQuery]);
   const bulkListReady = fullListProjectRef.current === engagement?.id && !loadingAllSessions;
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
@@ -6944,7 +6950,9 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
             <Target size={18} aria-hidden="true" />
           </button>;
-  const conversationTitle = sessions.find(session => session.id === sessionId)?.title
+  const openConversation = sessions.find(session => session.id === sessionId);
+  const openConversationStage = openConversation ? butlerConversationStage(openConversation, sidebarActivity([openConversation], sessionActivity)[openConversation.id]) : undefined;
+  const conversationTitle = openConversation?.title
     ?? (loadingHistory || transcriptRuntimeWait > 0 ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
   const studioRailAvailable = Boolean(sessionId && !shellOnly && !fullScreen && !embeddedSideChat && !sidePanelOpen
     && !chatTerminalOpen && !sessionInspectorOpen && !sideView);
@@ -7456,21 +7464,27 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, childKind, waitingChildren, workingChildren, expanded, searchRevealed, archiveToggle, archivedChildren }) => {
               if (archiveToggle) return <button className="session-butler-archive-toggle" type="button" key={`archive-${session.id}`} aria-label={`${expanded ? "Hide" : "Show"} ${archivedChildren} archived Butler chats`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedButlerArchives(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={14} className={expanded ? undefined : "collapsed"} aria-hidden="true" /> Archived <span>{archivedChildren}</span></button>;
               const actionsOpen = sessionActionsId === session.id;
-              const activityState = (sessionActivity[session.id] === "waiting" && !depth) || (childKind === "chats" && waitingChildren) ? "waiting" : sessionActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
+              // A nested Butler chat that waits, waits on the operator; a subagent waits on its supervisor.
+              const ownWaiting = listActivity[session.id] === "waiting" && (!depth || !session.isSubagent);
+              const activityState = ownWaiting || (childKind === "chats" && waitingChildren) ? "waiting" : listActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
+              // The Butler chat's own stage; its case chats' needs show in the subtitle and their rows.
+              const stage = butlerConversationStage(session, ownWaiting ? "waiting" : listActivity[session.id] === "working" || workingChildren ? "working" : "idle");
               const childLabel = childKind === "chats" ? "chat" : "subagent";
               const subtitle = session.isSideChat
                 ? `From ${sessions.find(item => item.id === session.parentSessionId)?.title ?? "parent conversation"}`
                 : childCount
                 ? `${childCount} ${childLabel}${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} ${childKind === "chats" ? "need you" : "with supervisor"}` : workingChildren ? ` · ${workingChildren} working` : ""}`
                 : archivedChildren ? `${archivedChildren} archived ${archivedChildren === 1 ? "chat" : "chats"}`
-                : depth && sessionActivity[session.id] === "waiting" ? "Waiting on supervisor"
+                : depth && session.isSubagent && listActivity[session.id] === "waiting" ? "Waiting on supervisor"
                   : depth && activityState === "working" ? `Working${session.model ? ` · ${session.model}` : ""}`
                     : session.model || "Saved conversation";
-              const displayTitle = session.isSideChat ? session.title.replace(/^Side chat\s*·\s*/, "") : depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;
+              const displayTitle = session.isSideChat ? session.title.replace(/^Side chat\s*·\s*/, "")
+                : depth && isButlerCaseChat(session) ? session.title.replace(/^Butler check\s*·\s*/, "")
+                : depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;
               const actionsDisabled = bulkSelectionMode || deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || prioritySessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
               const sessionHeld = Boolean(chatHoldOf(session.id));
-              return <div className={`session-list-item${bulkSelectionMode ? " selecting" : ""}${bulkSelectedIds.has(session.id) ? " bulk-selected" : ""}${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount || archivedChildren ? " has-subagents" : ""}${depth === 1 ? " nested-subagent" : depth === 2 ? " nested-subagent nested-subagent-deep" : ""}${activityState === "waiting" ? " waiting" : ""}${sessionHeld ? " held" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <>{bulkSelectionMode && <label className="session-bulk-selector"><input type="checkbox" aria-label={`Select conversation ${session.title}`} checked={bulkSelectedIds.has(session.id)} disabled={!bulkListReady || bulkActionBusy} onChange={() => toggleBulkConversation(session.id)} /></label>}<button className="session-select" data-session-id={session.id} type="button" aria-pressed={bulkSelectionMode ? bulkSelectedIds.has(session.id) : undefined} disabled={bulkSelectionMode && (!bulkListReady || bulkActionBusy)} onClick={() => { if (bulkSelectionMode) toggleBulkConversation(session.id); else selectConversationFromList(session); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}><span className="conversation-title-text">{displayTitle}</span>{session.pinned && !session.archivedAt && <Bookmark className="conversation-pin-marker" size={11} aria-label="Pinned" />}{session.flagColor && <Flag className="conversation-flag-marker" data-color={session.flagColor} size={11} aria-label={`${session.flagColor} flag`} />}{session.priority === "high" && <ChevronUp className="conversation-priority-marker" size={12} aria-label="High priority" />}{sessionHeld && <Pause className="conversation-hold-marker" size={11} aria-label="On hold" />}</strong><small title={subtitle}>{subtitle}</small></span></button>{(childCount > 0 || Boolean(archivedChildren)) && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount + (archivedChildren ?? 0)} ${childLabel}${childCount + (archivedChildren ?? 0) === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? `Matching ${childLabel}s stay visible while searching` : `${expanded ? "Collapse" : "Expand"} ${childLabel}s`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
+              return <div className={`session-list-item${bulkSelectionMode ? " selecting" : ""}${bulkSelectedIds.has(session.id) ? " bulk-selected" : ""}${session.id === sessionId ? " active" : ""}${session.id === sideChatId ? " side-open" : ""}${session.isSideChat ? " side-chat-item" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount || archivedChildren ? " has-subagents" : ""}${depth === 1 ? " nested-subagent" : depth === 2 ? " nested-subagent nested-subagent-deep" : ""}${activityState === "waiting" ? " waiting" : ""}${sessionHeld ? " held" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <>{bulkSelectionMode && <label className="session-bulk-selector"><input type="checkbox" aria-label={`Select conversation ${session.title}`} checked={bulkSelectedIds.has(session.id)} disabled={!bulkListReady || bulkActionBusy} onChange={() => toggleBulkConversation(session.id)} /></label>}<button className={`session-select${stage ? " has-stage" : ""}`} data-session-id={session.id} type="button" aria-pressed={bulkSelectionMode ? bulkSelectedIds.has(session.id) : undefined} disabled={bulkSelectionMode && (!bulkListReady || bulkActionBusy)} onClick={() => { if (bulkSelectionMode) toggleBulkConversation(session.id); else selectConversationFromList(session); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}><span className="conversation-title-text">{displayTitle}</span>{session.pinned && !session.archivedAt && <Bookmark className="conversation-pin-marker" size={11} aria-label="Pinned" />}{session.flagColor && <Flag className="conversation-flag-marker" data-color={session.flagColor} size={11} aria-label={`${session.flagColor} flag`} />}{session.priority === "high" && <ChevronUp className="conversation-priority-marker" size={12} aria-label="High priority" />}{sessionHeld && <Pause className="conversation-hold-marker" size={11} aria-label="On hold" />}</strong><small title={subtitle}>{subtitle}</small></span>{stage && <ButlerStageLabel stage={stage} />}</button>{(childCount > 0 || Boolean(archivedChildren)) && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount + (archivedChildren ?? 0)} ${childLabel}${childCount + (archivedChildren ?? 0) === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? `Matching ${childLabel}s stay visible while searching` : `${expanded ? "Collapse" : "Expand"} ${childLabel}s`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"
@@ -7524,7 +7538,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           {view === "chat" && compact && <header className="conversation-toolbar mobile-conversation-header">
             <button className="icon-button subtle mobile-drawer-toggle" type="button" aria-label="Open conversations" title="Open conversations" aria-expanded={mobileListOpen} aria-controls="workbench-conversations" onClick={() => { setMobileMoreOpen(false); setMobileListOpen(true); }}><PanelLeft size={20} aria-hidden="true" /></button>
             <button className="mobile-conversation-title" type="button" data-assistant-settings-trigger aria-haspopup="dialog" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} onClick={() => setAssistantSettingsOpen((open) => !open)}>
-              <strong>{conversationTitle}</strong>
+              <span className="mobile-conversation-title-row"><strong>{conversationTitle}</strong>{openConversationStage && <ButlerStageLabel stage={openConversationStage} className="conversation-heading-stage" />}</span>
               <small><span>{assistantSource}{runtimeConfiguration && !runtimeLabelRepeatsSource(assistantSource, runtimeConfiguration) ? ` · ${runtimeConfiguration}` : ""}</span><ChevronDown size={13} aria-hidden="true" /></small>
             </button>
             <div className="mobile-conversation-menu" ref={mobileConversationMenuRef}>
@@ -7571,7 +7585,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           >
             <PanelLeft size={18} aria-hidden="true" />
           </button>}
-            <div className="conversation-heading"><strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong><small>{engagement?.name ?? "Assistant"} · {assistantSource}{runtimeConfiguration && !runtimeLabelRepeatsSource(assistantSource, runtimeConfiguration) ? ` · ${runtimeConfiguration}` : ""}</small></div>
+            <div className="conversation-heading"><div className="conversation-heading-title"><strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong>{openConversationStage && <ButlerStageLabel stage={openConversationStage} className="conversation-heading-stage" />}</div><small>{engagement?.name ?? "Assistant"} · {assistantSource}{runtimeConfiguration && !runtimeLabelRepeatsSource(assistantSource, runtimeConfiguration) ? ` · ${runtimeConfiguration}` : ""}</small></div>
             {conversationActions}
             {shellOnly && <NebulaAssistantLauncherButton />}
           </header>}
