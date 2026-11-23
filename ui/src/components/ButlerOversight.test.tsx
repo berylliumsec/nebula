@@ -79,6 +79,17 @@ describe("ButlerOversight", () => {
     expect(screen.getByText(path)).toBeVisible();
   });
 
+  it("names the exact fix when no project can host the scheduled run", async () => {
+    const user = userEvent.setup();
+    const hint = "Butler has no model for this project yet. Open Butler in this project, or ask Butler about it in Butler mode, so scheduled and recovery checks can run here.";
+    const request = vi.fn().mockResolvedValue({ ...overview, global_instructions: { status: "needs_act_host", path: "/data/.butler/BUTLER.md", host_project_id: null, host_hint: hint } });
+    render(<ButlerOversight api={client(request)} projectId="project-a" coreState="online" />);
+    await user.click(await screen.findByText("Nebula-wide Butler"));
+    expect(screen.getByText("Needs Act")).toBeVisible();
+    expect(screen.getByText(hint)).toBeVisible();
+    expect(screen.queryByText(/host the scheduled run/)).toBeNull();
+  });
+
   it("opens the affected mission from a pending review incident", async () => {
     const request = vi.fn().mockResolvedValue({
       ...overview,

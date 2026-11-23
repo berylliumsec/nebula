@@ -40,7 +40,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Automation",
     scope: "Workspace",
     target: "butler-instructions-settings",
-    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "scheduled", "act", "projects", "goals", "blocked goal", "check-in conversation", "safe handoff", "provider continuation", "deepseek"],
+    keywords: ["butler", "butler.md", ".butler", "upload", "edit", "scheduled", "act", "needs act", "host", "projects", "goals", "blocked goal", "check-in conversation", "safe handoff", "provider continuation", "deepseek"],
   },
   {
     id: "settings.butler-check-interval",

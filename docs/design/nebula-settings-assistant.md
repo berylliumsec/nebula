@@ -635,8 +635,14 @@ with that revision in the PUT body. Core readback must confirm the requested
 minutes; a conflict requires a fresh read before retrying.
 Core persists the interval with a revision guard, reads it for each due check,
 and reports the next due time from the last saved check. Reducing the interval
-can make the next check due immediately. It can run with no running goals. A
-configured Butler chat in an Act project hosts the run. Butler reads the live
+can make the next check due immediately. It can run with no running goals. An Act
+project where Butler has a model hosts the run: the project's own Butler chat,
+or a Butler home session focused on the project, which shares its model with
+that project so the project gets its own Butler chat for background checks.
+Without a host no scheduled check runs, and Butler Oversight shows "Needs Act"
+with the exact fix for the selected project: set its Butler authority to Act,
+turn its work on, or open Butler in it once. A project that is not the host
+shows "Ready" once the host has run a recent check. Butler reads the live
 Act-project roster and chooses where to work. Core still enforces each target
 project's Act revision and privacy boundary for reads and writes. The
 scheduled harness run uses the model and reasoning effort saved in that Butler

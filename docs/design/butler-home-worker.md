@@ -147,6 +147,7 @@ A Butler session lives in the home project, and `metadata.butler_focus_project_i
 - **Per-project recovery cases** keep `case.engagement_id = target`. Their child chat runs in the home project with `butler_recovery_case_id` and the focus set to the target.
   - The target worker still detects cases. Instead of starting a turn in itself, it submits a typed `butler.case_opened/v1` command to the home project, using the same RPC pattern in reverse: the caller holds the target lease, and the home handler opens the case chat.
   - This takes recovery chats out of busy projects entirely. Combined with #1239, which removed overdue check-ins, recovery chat volume drops to real incidents.
+- **Until PR 3.** Checks still run on the target's worker, which cannot read Butler's home. A home reservation with a focus therefore writes a shared `ButlerFocusRuntime` row (no project) with the session's backend, profile and model. The target's worker treats it as a Butler runtime: the project can be the anchor, and the first check makes the project's own Butler chat on that model, as opening the panel there would, to parent the case chat. A Nebula-wide thread with no focus shares nothing. Without either, the overview reports `needs_act_host` with a `host_blocker` and `host_hint` for the selected project. A project that is not the anchor reads `ready` when the shared clock shows a check within three intervals.
 
 ### 6. UI
 
