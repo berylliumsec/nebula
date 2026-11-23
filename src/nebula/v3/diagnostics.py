@@ -2053,12 +2053,16 @@ def record_caught_exception(
     stage: str,
     metadata: Mapping[str, Any] | None = None,
     sensitive_detail: str | None = None,
+    operation_failed: bool = False,
 ) -> str | None:
     """Classify a reviewed catch site without recording exception messages.
 
     Validation/fallback conditions are warnings, cancellation is expected
     control flow at Debug, and other caught exceptions are operation failures.
     Callers still decide whether to recover, persist a failed state, or rethrow.
+    A caller that stops operator work because of the exception passes
+    ``operation_failed``: a validation-class cause is then still an operation
+    failure at Error, so the default level keeps it.
     """
 
     name = type(exception).__name__
@@ -2145,6 +2149,12 @@ def record_caught_exception(
         existing = diagnostic_error_id(exception)
         if existing is not None:
             return existing
+    if operation_failed and level == "warning":
+        existing = diagnostic_error_id(exception)
+        if existing is not None:
+            return existing
+        level = "error"
+        outcome = "failure"
     stable_code = getattr(exception, "code", None)
     stable_metadata: dict[str, Any] = dict(metadata or {})
     if isinstance(stable_code, str) and re.fullmatch(
