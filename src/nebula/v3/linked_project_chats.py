@@ -17,6 +17,7 @@ from sqlalchemy.orm import aliased
 from .stored_entities import decode_stored
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_turn_headers import ChatTurnHeader, pending_turn_headers_in_projects
+from .chat_work_stage import with_work_stage
 from .conditional_reads import conditional, content_etag
 from .database import EntityRow
 from .domain import ChatSession, ChatTurn, ChatTurnStatus, Engagement
@@ -175,10 +176,17 @@ def linked_project_chats_router(store: NebulaStore) -> APIRouter:
                     for payload, name in await database.execute(idle_statement)
                 )
         has_more = len(page) > limit
+        # Each chat's project Work stage, joined at read time as on chat reads.
+        staged = {
+            session.id: session
+            for session in await with_work_stage(
+                store, [session for session, _name, _state in page[:limit]]
+            )
+        }
         body = {
             "items": [
                 {
-                    "session": session.model_dump(mode="json"),
+                    "session": staged[session.id].model_dump(mode="json"),
                     "project": {"id": session.engagement_id, "name": name},
                     "state": state,
                     "turn_id": (

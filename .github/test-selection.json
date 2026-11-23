@@ -1,46 +1,34 @@
 {
-  "change_digest": "dd574c6b5d5f8d927cba2fa89c75f1733db637135e53c4a3a94d2ff8c26a50cb",
-  "reviewed_by": "Claude: a conversation's stage is its project Work stage",
-  "reason": "Operator correction to #1312: a conversation's stage is its project's Work stage. Core now joins, at read time, the stage of the chat's most recently updated open Work item assigned to it (WorkItem.assignee_session_id), labelled from Engagement.work_stages: metadata.work_stage on chat-session list/get (api_crud and the API worker's global reads) and work_stage on Butler board items. Nothing is stored. The UI shows it as the primary label in conversation rows, both conversation headers, board cards and briefs, with the Projects page stage-tile dot colours (green, blue in progress/review, red blocked). #1312's Butler status stays as a quieter 'Butler · <status>' line. Python selects the read-route and board tests (new newest-open-item, done, unlisted-stage and no-stage cases), chat-hold/priority board tests and product-help tests. Frontend selects work stage parsing/state, the Butler status mapping, sidebar grouping, board mapping/page, WorkPage (shared workStages module) and API client tests. Playwright selects butler-sidebar (the new Work stage journey plus the Butler status and grouping tests across desktop, compact, Chromium 320/390/430 and WebKit 320/390/430, and its real-Core grouping test) and conversation-order on desktop, Chromium 390 and WebKit 390.",
-  "exclusions": "butler-mode/assistant-real-* entries are not selected: on origin/main their projects' testMatch omits tests/butler-mode.spec.ts, so they collect 0 tests; the board was validated on a disposable LAN Core instead. test_product_search_finds_headless_core_and_paired_butler_cli already fails on origin/main and is excluded. No native code changed. No full-suite approval.",
+  "change_digest": "2efabdc636e568febd1271d1ae23890670c63024fc30cfa2b1f20729cf441900",
+  "reviewed_by": "Claude: chat Work stage inherits parent stages and reaches Subprojects list",
+  "reason": "Running goal chats in research subprojects showed no Work stage. chat_work_stage labelled a stage only from the item's own project, but subprojects inherit their nearest ancestor's stages (WorkService.effective_stages, Work page effectiveStages); the join now walks ancestors one level per query. The parent's Subprojects list (GET /chat/projects/{id}/linked-chats) never joined the stage and ChildProjectConversations never rendered it; Core now adds metadata.work_stage there and the row shows WorkStageLabel with the stage in its accessible name. Python selects the global project read tests (new ancestor/shadowing/linked-chats case), chat-session recent page tests and the product-help stage tests plus index digest. Frontend selects ChildProjectConversations (new stage row test) and workStages. Playwright selects area:child-project-chats (real Core on a LAN origin, desktop, compact, Chromium and WebKit 320/390/430) whose fixture now stages one subproject chat from the parent's stages, and conversation-order/model-desktop because its fixture module changed.",
+  "exclusions": "Butler board and header rendering are unchanged (they already read metadata.work_stage); area:butler-sidebar is not reselected. No native code changed. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 45,
-    "frontend": 183,
+    "python": 23,
+    "frontend": 15,
     "native": 0,
-    "playwright": 31
+    "playwright": 9
   },
   "python": [
     "tests/v3/test_runtime_global_project_reads.py",
     "tests/v3/test_chat_session_recent_page.py",
-    "tests/v3/test_chat_holds.py",
-    "tests/v3/test_work_priority.py",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_check_stage_labels",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_a_chats_project_work_stage",
-    "tests/v3/test_product_knowledge.py::test_product_help_finds_butler_mode_board_and_parallel_threads"
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_check_stage_labels"
   ],
   "frontend": [
-    "ui/src/pages/workStages.test.ts",
-    "ui/src/butlerStage.test.ts",
-    "ui/src/pages/conversationSidebar.test.ts",
-    "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/pages/ButlerModePage.send.test.tsx",
-    "ui/src/pages/WorkPage.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/api/client.chatSessionPage.test.ts"
+    "ui/src/pages/ChildProjectConversations.test.tsx",
+    "ui/src/pages/workStages.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:butler-sidebar",
-    "conversation-order/model-desktop",
-    "conversation-order/model-chromium-390",
-    "conversation-order/model-webkit-390"
+    "area:child-project-chats",
+    "conversation-order/model-desktop"
   ],
   "checks": [
     "frontend-audit"

@@ -1450,9 +1450,10 @@ chats matter.
 
 A conversation's **stage** is its project's Work stage: the stage of the Work
 item assigned to that chat, named exactly as the project defines it on the
-Projects page (for example Recon, Simulation, Validation). It shows in the
-Workbench conversation list, beside the open chat's title, and on goal cards
-and briefs in Butler mode. Its dot uses the Projects page stage-tile colours for that
+Projects page (for example Recon, Simulation, Validation). A subproject without
+its own stages uses its nearest parent's, as its Work board does. It shows in
+the Workbench conversation list, in a parent project's Subprojects list, beside
+the open chat's title, and on goal cards and briefs in Butler mode. Its dot uses the Projects page stage-tile colours for that
 item: green not started, blue in progress or in review, red blocked; the
 tooltip names the item. When several open items are assigned to one chat, the
 most recently updated one counts. A chat with no open assigned item, an item

@@ -6,6 +6,8 @@ import type { EngagementSummary, LinkedProjectChat } from "../api/types";
 import { startVisiblePoll, type PollOutcome, type VisiblePoll } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { resourcePath } from "../resourceRoutes";
+import { WorkStageLabel } from "../components/WorkStageLabel";
+import { chatStageName } from "./workStages";
 
 const PAGE = 25;
 // Core caps one read at 200 chats; a longer list is read in that many pages.
@@ -147,9 +149,9 @@ export function ChildProjectConversations({
       {groups.map(group => <div className="child-project-group" role="group" aria-label={group.label} key={group.state}>
         {groups.length > 1 && <p className="child-project-group-label" aria-hidden="true">{group.label}</p>}
         {group.chats.map(({ session, project: owner, state }) => <div className="session-list-item child-project-chat" key={session.id}>
-          <Link className="session-select" to={resourcePath(owner.id, "conversation", session.id)} onClick={onOpen} aria-label={`Open ${session.title} in ${owner.name}`}>
+          <Link className={`session-select${session.workStage ? " has-stage" : ""}`} to={resourcePath(owner.id, "conversation", session.id)} onClick={onOpen} aria-label={`Open ${session.title} in ${owner.name}${session.workStage ? `, ${chatStageName(session.workStage)}` : ""}`}>
             <span className={`conversation-activity-marker ${state}`} aria-hidden="true" />
-            <span><strong title={session.title}><span className="conversation-title-text">{session.title}</span></strong><small><span className="child-project-owner" title={owner.name}>{owner.name}</span> · {state === "waiting" ? "Waiting for you" : state === "working" ? "Working" : session.archivedAt ? "Archived" : session.model || "Saved conversation"}</small></span>
+            <span><strong title={session.title}><span className="conversation-title-text">{session.title}</span></strong><small><span className="child-project-owner" title={owner.name}>{owner.name}</span> · {state === "waiting" ? "Waiting for you" : state === "working" ? "Working" : session.archivedAt ? "Archived" : session.model || "Saved conversation"}</small></span>{session.workStage && <span className="conversation-stage-stack"><WorkStageLabel stage={session.workStage} /></span>}
           </Link>
         </div>)}
       </div>)}

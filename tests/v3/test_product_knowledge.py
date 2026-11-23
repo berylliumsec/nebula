@@ -76,6 +76,8 @@ def test_product_help_explains_a_chats_project_work_stage(monkeypatch):
     assert "conversation stage labels" in text
     assert "work item assigned to that chat" in text
     assert "most recently updated" in text
+    assert "subproject without its own stages uses its nearest parent's" in text
+    assert "subprojects list" in text
 
 
 def test_product_help_explains_never_permission_bypass(monkeypatch):

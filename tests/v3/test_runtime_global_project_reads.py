@@ -844,3 +844,109 @@ async def test_chat_work_stage_comes_from_its_newest_open_assigned_item(project_
     assert cards[plain.id]["work_stage"] is None
     # Read time only: the chat itself is unchanged.
     assert "work_stage" not in (await store.get(ChatSession, two.id)).metadata
+
+
+async def test_chat_work_stage_uses_the_nearest_ancestors_stages(project_reads):
+    """A research subproject without its own stages labels from its parent's."""
+    from nebula.v3.domain import ChatGoal, ChatGoalStatus, WorkItem, WorkStage
+
+    store = project_reads.store
+    root = await store.create(
+        Engagement(
+            name="Research root",
+            work_stages=[
+                WorkStage(key="recon", label="Recon"),
+                WorkStage(key="lanes", label="Lanes"),
+            ],
+        )
+    )
+    middle = await store.create(
+        Engagement(name="Research group", parent_engagement_id=root.id)
+    )
+    inherits = await store.create(
+        Engagement(name="Research folder", parent_engagement_id=middle.id)
+    )
+    owns = await store.create(
+        Engagement(
+            name="Own stages",
+            parent_engagement_id=root.id,
+            work_stages=[WorkStage(key="triage", label="Triage")],
+        )
+    )
+
+    async def staged_chat(project, stage):
+        session = await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=f"{project.name} goal",
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=session.id,
+                objective=f"Goal in {project.name}",
+                completion_criteria=["Report"],
+                status=ChatGoalStatus.RUNNING,
+            )
+        )
+        item = await store.create(
+            WorkItem(
+                engagement_id=project.id,
+                title=f"{project.name} status",
+                assignee_session_id=session.id,
+                stage=stage,
+                status="in_progress",
+            )
+        )
+        return session, item
+
+    inherited, inherited_item = await staged_chat(inherits, "lanes")
+    own, _own_item = await staged_chat(owns, "triage")
+    # A project's own stages replace its parent's; the parent's keys do not apply.
+    shadowed, _shadowed_item = await staged_chat(owns, "recon")
+
+    listed = await project_reads.client.get(
+        "/api/v1/chat-sessions", params={"engagement_id": inherits.id}, headers=AUTH
+    )
+    single = await project_reads.client.get(
+        f"/api/v1/chat-sessions/{inherited.id}", headers=AUTH
+    )
+    board = await project_reads.client.get("/api/v1/butler/board", headers=AUTH)
+    own_listed = await project_reads.client.get(
+        "/api/v1/chat-sessions", params={"engagement_id": owns.id}, headers=AUTH
+    )
+    assert {
+        listed.status_code,
+        single.status_code,
+        board.status_code,
+        own_listed.status_code,
+    } == {200}
+    expected = {
+        "key": "lanes",
+        "label": "Lanes",
+        "item_id": inherited_item.id,
+        "item_title": inherited_item.title,
+        "item_status": "in_progress",
+    }
+    assert listed.json()[0]["metadata"]["work_stage"] == expected
+    assert single.json()["metadata"]["work_stage"] == expected
+    cards = {row["session_id"]: row for row in board.json()["items"]}
+    assert cards[inherited.id]["work_stage"] == expected
+    metadata = {row["id"]: row["metadata"] for row in own_listed.json()}
+    assert metadata[own.id]["work_stage"]["label"] == "Triage"
+    assert "work_stage" not in metadata[shadowed.id]
+
+    # A parent's Subprojects list carries the same stage for each chat.
+    rows = {}
+    for parent in (middle, root):
+        linked = await project_reads.client.get(
+            f"/api/v1/chat/projects/{parent.id}/linked-chats", headers=AUTH
+        )
+        assert linked.status_code == 200, linked.text
+        rows.update((item["session"]["id"], item) for item in linked.json()["items"])
+    assert rows[inherited.id]["session"]["metadata"]["work_stage"] == expected
+    assert rows[own.id]["session"]["metadata"]["work_stage"]["label"] == "Triage"
+    assert "work_stage" not in rows[shadowed.id]["session"]["metadata"]

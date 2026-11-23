@@ -10,7 +10,14 @@ from fastapi import HTTPException, Request
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
-from nebula.v3.domain import ChatSession, ChatTurn, Engagement, ProviderProfile
+from nebula.v3.domain import (
+    ChatSession,
+    ChatTurn,
+    Engagement,
+    ProviderProfile,
+    WorkItem,
+    WorkStage,
+)
 from nebula.v3.storage import NebulaStore
 from keyring.backends.null import Keyring
 
@@ -88,7 +95,13 @@ async def main():
         @app.post("/fixture/child-project-conversations")
         async def seed_child_project(request: Request):
             authorize(request)
-            parent = await store.create(Engagement(name="Parent project"))
+            # Subprojects define no stages of their own and use the parent's.
+            parent = await store.create(
+                Engagement(
+                    name="Parent project",
+                    work_stages=[WorkStage(key="recon", label="Recon")],
+                )
+            )
             child = await store.create(
                 Engagement(
                     name="Child project",
@@ -136,6 +149,15 @@ async def main():
                     provider_profile_id=provider.id,
                     model="fixture",
                     metadata={"initial_title_state": "operator"},
+                )
+            )
+            await store.create(
+                WorkItem(
+                    engagement_id=approvals.id,
+                    title="Approval needed Recon",
+                    assignee_session_id=waiting.id,
+                    stage="recon",
+                    status="blocked",
                 )
             )
             await store.create(
