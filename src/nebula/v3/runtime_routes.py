@@ -14,6 +14,8 @@ _CONTROL = re.compile(
     r"browser-companion/[^/]+/(?:control|actions/[^/]+)|"
     r"browser-actions/[^/]+/decision|browser-intercepts/[^/]+/decision|"
     r"chat/sessions/[^/]+/subagents(?:/[^/]+)?/stop|"
+    # A supervisor note steers a running goal, like a harness steer.
+    r"chat/sessions/[^/]+/goal/notes(?:/[^/]+)?|"
     r"harness-turns/[^/]+(?:/tasks/[^/]+)?/stop|"
     r"runs/[^/]+(?:/browser-automation)?/stop|executions/[^/]+/cancel)$"
 )

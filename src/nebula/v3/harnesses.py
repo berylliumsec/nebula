@@ -9571,6 +9571,34 @@ class HarnessRuntimeService:
             return True
         return False
 
+    async def steer_goal_addendum(self, chat_session_id: str, text: str) -> bool:
+        """Add a supervisor's goal change to the chat's running harness turn.
+
+        Returns False when no turn of that chat is running here or the
+        harness cannot take input mid-turn (Grok); the turn then reads the
+        changed goal at its next turn.
+        """
+
+        for active in list(self._active.values()):
+            try:
+                turn = await self.store.get(HarnessTurn, active.turn_id)
+            except NotFoundError:  # diagnostic-expected: active turn was deleted
+                continue
+            if turn.chat_session_id != chat_session_id:
+                continue
+            try:
+                await self.steer_turn(
+                    turn.id,
+                    text,
+                    actor_id="nebula-goal-supervisor",
+                    title="Supervisor addendum",
+                    summary="Nebula added the supervisor's goal change to the turn.",
+                )
+            except HarnessStateError:  # diagnostic-expected: the harness cannot be steered now; the change reaches its next turn
+                return False
+            return True
+        return False
+
     async def _steer_subagent_update(self, chat_session_id: str, text: str) -> bool:
         """Add a subagent update to the chat's running harness turn.
 
@@ -12627,7 +12655,7 @@ class HarnessRuntimeService:
                 "completion_criteria": goal.completion_criteria,
                 "plan": goal.plan,
             }
-            goal_progress = {
+            goal_progress: dict[str, Any] = {
                 "current_step": goal.current_step,
                 "remaining_steps": goal.step_budget - goal.current_step
                 if goal.step_budget is not None
@@ -12636,6 +12664,13 @@ class HarnessRuntimeService:
                 if goal.token_budget is not None
                 else None,
             }
+            from .chat_goal_addenda import notes_progress
+
+            # Supervisor notes change while the goal runs, so they ride with
+            # the turn's progress, not the standing context.
+            supervisor_notes = notes_progress(goal)
+            if supervisor_notes is not None:
+                goal_progress["supervisor_notes"] = supervisor_notes
             standing_context += (
                 "\n\nCore-owned Nebula goal (separate from any native harness goal):\n"
                 + json.dumps(goal_context, ensure_ascii=False)

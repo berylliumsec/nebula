@@ -36,6 +36,7 @@ from .chat_goals import (
     GoalConversationCreate,
     GoalCreate,
     GoalHandoffRequest,
+    GoalNoteCreate,
     GoalUpdate,
     GoalWrite,
 )
@@ -777,6 +778,15 @@ UPDATE_GOAL_SCHEMA: dict[str, Any] = {
     },
     "required": ["session_id", "expected_revision"],
 }
+ADD_GOAL_NOTE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        **CHAT_TARGET_SCHEMA["properties"],
+        "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+    },
+    "required": ["session_id", "text"],
+}
 GOAL_ACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -890,6 +900,29 @@ def _text(value: Any, label: str, limit: int) -> str:
     if not isinstance(value, str) or not 1 <= len(value.strip()) <= limit:
         raise ValueError(f"provide {label} of 1 to {limit} characters")
     return value.strip()
+
+
+_BUTLER_NOTE_VIEW = 20
+_BUTLER_NOTE_CHARACTERS = 600
+
+
+def _goal_view(goal: ChatGoal) -> dict[str, Any]:
+    """A goal for Butler, bounded: its newest supervisor notes clipped, and
+    without the delivery log Core keeps for running turns."""
+
+    view = goal.model_dump(mode="json", exclude={"guidance_changes"})
+    notes = view.pop("supervisor_notes", [])
+    view["supervisor_note_count"] = len(notes)
+    view["supervisor_notes"] = [
+        {
+            **note,
+            "text": note["text"]
+            if len(note["text"]) <= _BUTLER_NOTE_CHARACTERS
+            else note["text"][: _BUTLER_NOTE_CHARACTERS - 1] + "…",
+        }
+        for note in notes[-_BUTLER_NOTE_VIEW:]
+    ]
+    return view
 
 
 def _chat_url(project_id: str, session_id: str) -> str:
@@ -2040,7 +2073,7 @@ class ControlAssistantWork:
             ),
             **(await self._message_via(project_id, session)),
             "url": _chat_url(project_id, session.id),
-            "goal": goal.model_dump(mode="json"),
+            "goal": _goal_view(goal),
             "native_harness_goal": (await self._native_goal(session)),
             "children": [
                 {
@@ -2317,6 +2350,27 @@ class ControlAssistantWork:
             body.model_dump(mode="json"),
         )
         return await self.goal_detail(project_id, session.id)
+
+    async def add_goal_note(
+        self, project_id: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Append a supervisor note; the running turn hears it mid-turn."""
+
+        session = await self._chat(project_id, arguments.get("session_id"))
+        await self.goals.get(session.id)
+        body = GoalNoteCreate.model_validate(
+            {"text": arguments.get("text"), "author": "butler"}
+        )
+        result = await self._request(
+            "POST",
+            f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/notes",
+            body.model_dump(mode="json"),
+        )
+        return {
+            **(await self.goal_detail(project_id, session.id)),
+            "note_id": result["note_id"],
+            "delivery": result["delivery"],
+        }
 
     async def goal_action(
         self, project_id: str, arguments: dict[str, Any]
@@ -4343,6 +4397,12 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
         False,
     ),
     (
+        "nebula.work.add_goal_note",
+        "Add a supervisor note to a listed nonterminal Core goal after explicit operator instruction, without rewriting its objective. delivery says when the agent hears it: next_step (a running provider turn, before its next tool call), running_turn (a steered harness turn) or next_turn.",
+        ADD_GOAL_NOTE_SCHEMA,
+        False,
+    ),
+    (
         "nebula.work.goal_action",
         "Start, pause, resume, cancel, block, or complete one exact goal after explicit operator instruction. Read goal first and pass its revision. Completion requires actual summary and evidence; a started goal is not finished. A goal awaiting closure review (blocked, metadata.completion_proposal) is approved with complete, which accepts the stored proposal when summary and evidence are omitted, or sent back with resume and a reason the agent receives.",
         GOAL_ACTION_SCHEMA,
@@ -4755,6 +4815,8 @@ async def dispatch_work_tool(
         )
     if name == "nebula.work.update_goal":
         return await work.update_goal(project_id, arguments)
+    if name == "nebula.work.add_goal_note":
+        return await work.add_goal_note(project_id, arguments)
     if name == "nebula.work.goal_action":
         return await work.goal_action(project_id, arguments)
     if name == "nebula.work.handoff_goal":

@@ -15,6 +15,8 @@ describe("assistant app destinations", () => {
     expect(destinationToOpen("open select conversations")?.id).toBe("chat");
     expect(destinationToOpen("open goal resume instruction")?.id).toBe("chat");
     expect(destinationToOpen("open goal closure review")?.id).toBe("chat");
+    expect(destinationToOpen("open add supervisor note")?.id).toBe("chat");
+    expect(destinationToOpen("open goal supervisor notes")?.id).toBe("chat");
     expect(destinationToOpen("open switch chat provider")?.id).toBe("chat");
     expect(destinationToOpen("open check-in history")?.id).toBe("project-work");
     expect(destinationToOpen("open notebook file index")?.id).toBe("notebook");

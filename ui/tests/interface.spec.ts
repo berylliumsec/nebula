@@ -14497,6 +14497,108 @@ test("stabilization goal mode shows token progress before provider usage settles
   await expect(liveTokens).toHaveCount(0, { timeout: 10_000 });
 });
 
+test("assistant live guidance adds a goal supervisor note and says when the agent hears it", async ({ page }) => {
+  await installReasoningProvider(page);
+  const goal: Record<string, unknown> = {
+    ...entity,
+    id: "goal-notes",
+    engagement_id: "scratch-project",
+    session_id: "goal-notes-chat",
+    objective: "Audit the parser",
+    completion_criteria: ["Report every crash"],
+    plan: ["Fuzz", "Triage"],
+    current_step: 1,
+    status: "running",
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    elapsed_seconds: 0,
+    children_started: 0,
+    linked_turn_ids: [],
+    completion_evidence: [],
+    skill_snapshots: [],
+    supervisor_notes: [],
+    revision: 3,
+  };
+  const goalSession = {
+    ...entity,
+    id: "goal-notes-chat",
+    engagement_id: "scratch-project",
+    title: "Supervised goal",
+    backend: "provider",
+    provider_profile_id: reasoningProvider.id,
+    harness_profile_id: null,
+    harness_session_id: null,
+    model: "model-a",
+    metadata: {},
+  };
+  const posted: string[] = [];
+  let failNext = true;
+  await page.route("**/api/v1/chat/sessions/*/goal", route => route.fulfill({ json: goal }));
+  await page.route("**/api/v1/chat/sessions/*/goal/notes**", async route => {
+    const request = route.request();
+    if (request.method() === "POST") {
+      if (failNext) {
+        failNext = false;
+        await route.fulfill({ status: 503, json: { detail: "Core is busy; try again." } });
+        return;
+      }
+      const text = (request.postDataJSON() as { text: string }).text;
+      posted.push(text);
+      goal.supervisor_notes = [{ id: "note-1", text, author: "operator", created_at: "2026-11-23T10:00:00Z" }];
+      goal.revision = 4;
+      await route.fulfill({ status: 201, json: { goal, note_id: "note-1", delivery: "next_step" } });
+    } else if (request.method() === "DELETE") {
+      goal.supervisor_notes = [];
+      goal.revision = 5;
+      await route.fulfill({ json: { goal, note_id: "note-1", delivery: "next_step" } });
+    } else await route.fallback();
+  });
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [goalSession] });
+    } else if (path.endsWith("/chat-sessions/goal-notes-chat")) {
+      await route.fulfill({ json: goalSession });
+    } else if (path.endsWith("/chat/sessions/goal-notes-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/goal-notes-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=goal-notes-chat");
+
+  const panel = await openConversationGoal(page);
+  const addNote = panel.getByRole("button", { name: "Add note", exact: true });
+  await addNote.click();
+  const field = panel.getByLabel("Supervisor note");
+  await expect(field).toBeFocused();
+  await field.fill("Skip the CLI; focus on the heap.");
+  const submit = panel.locator(".chat-goal-note-form").getByRole("button", { name: "Add note" });
+  await submit.click();
+  // A refused save keeps the draft for a retry.
+  await expect(panel.getByRole("alert")).toContainText("Core is busy");
+  await expect(field).toHaveValue("Skip the CLI; focus on the heap.");
+  await submit.click();
+  await expect(panel.getByRole("status").filter({ hasText: "before its next step" })).toBeVisible();
+  expect(posted).toEqual(["Skip the CLI; focus on the heap."]);
+  await expect(field).toHaveCount(0);
+
+  const notes = panel.locator(".chat-goal-notes");
+  await expect(notes.locator("summary")).toHaveText("Supervisor notes · 1");
+  await notes.locator("summary").click();
+  await expect(notes).toContainText("Skip the CLI; focus on the heap.");
+  const remove = notes.getByRole("button", { name: "Remove note" });
+  await expect(remove).toBeVisible();
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width <= 430) {
+    const box = await remove.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await remove.click();
+  await expect(notes).toHaveCount(0);
+});
+
 
 const reasoningProvider = {
   ...entity,

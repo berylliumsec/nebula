@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX, Pencil, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, MessageSquarePlus, OctagonX, Pencil, RotateCcw, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
-import type { ChatGoal, HarnessSkillSummary } from "../api/types";
+import type { ChatGoal, GoalGuidanceDelivery, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useConfirmation } from "./DialogSystem";
 
@@ -57,6 +57,15 @@ const ALLOWED_FROM: Record<GoalAction, ChatGoal["status"][]> = {
   block: ["running"],
   // A blocked goal can complete only while it holds an agent's completion for review.
   complete: ["running", "blocked"],
+};
+
+export const GOAL_NOTE_CHARACTERS = 4_000;
+
+/** What the operator is told about when the agent hears a saved note. */
+export const NOTE_DELIVERY_STATUS: Record<GoalGuidanceDelivery, string> = {
+  next_step: "Note saved · the agent reads it before its next step",
+  running_turn: "Note sent to the running turn",
+  next_turn: "Note saved · applies from the next turn",
 };
 
 const STATE_NAMES: Record<ChatGoal["status"], string> = {
@@ -122,6 +131,9 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const [evidence, setEvidence] = useState("");
   const [editingSkills, setEditingSkills] = useState(false);
   const [editingGoal, setEditingGoal] = useState(false);
+  const [addingNote, setAddingNote] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const [noteStatus, setNoteStatus] = useState<string>();
   const editFormRef = useRef<HTMLDivElement>(null);
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
@@ -310,6 +322,33 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     } finally { setBusy(false); }
   };
 
+  const addNote = async () => {
+    const text = noteText.trim();
+    if (!goal || !sessionId || busy || !text || text.length > GOAL_NOTE_CHARACTERS) return;
+    setBusy(true); setError(undefined); setNoteStatus(undefined);
+    try {
+      const result = await api.addChatGoalNote(sessionId, text);
+      onChange(result.goal);
+      setNoteText(""); setAddingNote(false);
+      setNoteStatus(NOTE_DELIVERY_STATUS[result.delivery]);
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.goal.note_failed", "A supervisor note could not be added to a conversation goal.", caught, "goal");
+      setError(caught instanceof Error ? caught.message : "The note could not be saved. Your text is still here; try again.");
+    } finally { setBusy(false); }
+  };
+
+  const removeNote = async (noteId: string) => {
+    if (!goal || !sessionId || busy) return;
+    setBusy(true); setError(undefined); setNoteStatus(undefined);
+    try {
+      const result = await api.removeChatGoalNote(sessionId, noteId);
+      onChange(result.goal);
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.goal.note_remove_failed", "A supervisor note could not be removed from a conversation goal.", caught, "goal");
+      setError(caught instanceof Error ? caught.message : "The note could not be removed.");
+    } finally { setBusy(false); }
+  };
+
   const beginSkillEdit = () => {
     setSelectedSkillPaths(goal?.skillSnapshots.map(skill => skill.path) ?? []);
     setEditingSkills(true);
@@ -420,11 +459,20 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         {goal.plan.length > 0 && <><strong>Plan</strong><ol>{goal.plan.map((item, index) => <li key={index}>{item}</li>)}</ol></>}
       </div>
     </details>
+    {(goal.supervisorNotes?.length ?? 0) > 0 && <details className="chat-goal-notes">
+      <summary>Supervisor notes · {goal.supervisorNotes?.length}</summary>
+      <ol>{goal.supervisorNotes?.map(note => <li key={note.id}>
+        <p>{note.text}</p>
+        <small>{note.author === "butler" ? "Butler" : "You"}{note.createdAt ? ` · ${new Date(note.createdAt).toLocaleString()}` : ""}</small>
+        {!terminal && <button className="icon-button chat-goal-note-remove" type="button" aria-label="Remove note" title="Remove note" disabled={busy} onClick={() => void removeNote(note.id)}><X size={14} aria-hidden="true" /></button>}
+      </li>)}</ol>
+    </details>}
+    {noteStatus && <p role="status" className="chat-goal-note-status">{noteStatus}</p>}
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
       {goal.status === "running" && <><button className="button secondary chat-goal-pause" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button><div className="chat-goal-outcomes" role="group" aria-label="Set goal outcome"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}><Check size={14} aria-hidden="true" /> Complete</button></div></>}
       {(goal.status === "paused" || goal.status === "blocked") && !proposal && !goal.handoffTargetSessionId && !goal.heldByProject && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
-      <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginGoalEdit}><Pencil size={14} aria-hidden="true" /> Edit goal</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
+      <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginGoalEdit}><Pencil size={14} aria-hidden="true" /> Edit goal</button><button className="button quiet chat-goal-add-note" type="button" aria-expanded={addingNote} disabled={busy || settingsBusy} onClick={() => { setAddingNote(true); setEditingGoal(false); setTransition(undefined); setNoteStatus(undefined); setError(undefined); }}><MessageSquarePlus size={14} aria-hidden="true" /> Add note</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
     </div>}
     {editingGoal && !terminal && <div className="chat-goal-form" data-selection-actions-disabled ref={editFormRef}>
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
@@ -442,6 +490,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       </div></details>
       <ReviewChoice checked={requiresReview} onChange={setRequiresReview} />
       <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || invalidResumeInstruction || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
+    </div>}
+    {addingNote && !terminal && <div className="chat-goal-form chat-goal-note-form" data-selection-actions-disabled>
+      <label>Supervisor note<textarea value={noteText} maxLength={GOAL_NOTE_CHARACTERS} autoFocus placeholder="Guidance for the agent; it reaches a running turn" onChange={event => setNoteText(event.target.value)} /></label>
+      <small>{noteText.trim().length.toLocaleString()} / {GOAL_NOTE_CHARACTERS.toLocaleString()}</small>
+      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setAddingNote(false)}>Back</button><button className="button primary" type="button" disabled={busy || !noteText.trim()} onClick={() => void addNote()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : <MessageSquarePlus size={14} aria-hidden="true" />} Add note</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

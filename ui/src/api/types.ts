@@ -1936,7 +1936,28 @@ export interface ChatGoal {
   heldByProject?: boolean;
   /** Set when a running goal is not executing because no ready worker serves its project. */
   executionWaiting?: { reason: "starting" | "held" | "closing"; detail: string };
+  /** Guidance added while the goal runs, oldest first. */
+  supervisorNotes?: GoalSupervisorNote[];
   revision: number;
+}
+
+export interface GoalSupervisorNote {
+  id: Identifier;
+  text: string;
+  author: string;
+  createdAt: string;
+}
+
+/**
+ * When the working agent hears a supervisor change: before its next tool step,
+ * now (a steered harness turn), or at the goal's next turn.
+ */
+export type GoalGuidanceDelivery = "next_step" | "running_turn" | "next_turn";
+
+export interface GoalNoteResult {
+  goal: ChatGoal;
+  noteId: Identifier;
+  delivery: GoalGuidanceDelivery;
 }
 
 export interface ChatCompletionResponse {
