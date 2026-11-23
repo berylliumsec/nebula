@@ -87,6 +87,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .work_priority import is_high
 from .project_hold_gate import active_hold, held_detail, is_held
+from .recovery_markers import (
+    GOAL_PROVIDER_RETRY,
+    OPERATOR_RECOVERY_STOP,
+    TURN_GOAL_AUTO_RETRY,
+)
 from .chat import (
     ChatError,
     ChatHistoryConflict,
@@ -194,7 +199,7 @@ from .database import DatabaseBusyError, EntityRow
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
-from .providers import REASONING_EFFORTS
+from .providers import _RETRYABLE_STATUS_CODES, REASONING_EFFORTS
 from .policy import PolicyEffect, PolicyEngine, PolicyRequest
 from .process_reaping import new_owner_token, owner_environment, stop_process_tree
 from .redaction import redact_text, sanitize_display_text
@@ -379,6 +384,13 @@ _GOAL_CAPACITY_RECOVERY_INSTRUCTION = (
     "the exact hold. Otherwise continue one safe next step toward the goal."
 )
 _MAX_GOAL_CAPACITY_RETRIES = 1
+_HARNESS_GOAL_RETRY_INSTRUCTION = (
+    "The previous Core-owned goal turn was cut off by a transient harness or "
+    "connection failure, so its last steps may or may not have finished. Read the "
+    "current goal, chat, and saved tool results before acting. Do not repeat a "
+    "completed action. If an effect is uncertain, check it first. Then continue "
+    "concrete work toward the goal."
+)
 # Shutdown re-reads a harness turn this many times when its own task keeps saving it.
 _SHUTDOWN_INTERRUPT_ATTEMPTS = 3
 
@@ -1365,6 +1377,14 @@ class HarnessUnresponsiveError(HarnessTransportError):
         super().__init__(message)
 
 
+class HarnessTransportClosedError(HarnessTransportError):
+    """The vendor process or connection ended while Nebula was reading it.
+
+    Unlike a malformed or uncorrelatable message, nothing in the exchange was
+    wrong: the stream simply stopped. A running goal may retry such a turn once.
+    """
+
+
 class HarnessTurnFailedError(HarnessError):
     """The vendor ended a turn as failed while its process stayed healthy.
 
@@ -1383,6 +1403,79 @@ class HarnessTurnFailedError(HarnessError):
         self.reason_code = reason_code
         self.vendor_error_info = _bounded(vendor_error_info, limit=1_000)
         super().__init__(message)
+
+
+# Codex ``codexErrorInfo`` kinds that name a dropped or refused connection, a
+# rate limit, or an upstream server fault. ``serverOverloaded`` is left to the
+# goal's bounded capacity recovery, which checks the turn's effects first.
+_CODEX_TRANSIENT_ERROR_KINDS = frozenset(
+    {
+        "httpConnectionFailed",
+        "responseStreamConnectionFailed",
+        "responseStreamDisconnected",
+        "responseTooManyFailedAttempts",
+        "rateLimitExceeded",
+        "internalServerError",
+    }
+)
+# Text that marks spent quota or billing, never a passing condition.
+_HARNESS_QUOTA_TEXT = re.compile(
+    r"quota|usage limit|insufficient[_ ]funds|billing|credit balance", re.IGNORECASE
+)
+
+
+# HarnessTurn.metadata["diagnostic"] key: the turn failed transiently, so its
+# running goal may continue once instead of pausing.
+HARNESS_GOAL_RETRYABLE = "goal_retryable"
+
+
+def _harness_goal_retryable_failure(error: BaseException) -> bool:
+    """A harness turn failure a running goal may retry once with a fresh turn.
+
+    Transient failures qualify: the vendor's process, pipe or socket ending
+    mid-turn, an app-server that stopped answering or lost the turn, a torn
+    connection, and a rate limit, connection failure or server fault the
+    vendor reports. Sign-in, spent quota, bad requests, context overflow,
+    policy denials, Nebula's own errors and anything unrecognised do not.
+    Operator stops and Core shutdown never reach this check.
+    """
+
+    if _HARNESS_QUOTA_TEXT.search(str(error)):
+        return False
+    if isinstance(error, (HarnessUnresponsiveError, HarnessTransportClosedError)):
+        return True
+    if isinstance(error, HarnessProviderError):
+        return error.http_status in _RETRYABLE_STATUS_CODES
+    if isinstance(error, HarnessTurnFailedError):
+        info = error.vendor_error_info
+        if isinstance(info, dict) and "api_error_status" in info:
+            # Claude's error result carries the API's HTTP status.
+            return info.get("api_error_status") in _RETRYABLE_STATUS_CODES
+        kind = next(iter(info), None) if isinstance(info, dict) else info
+        if kind not in _CODEX_TRANSIENT_ERROR_KINDS:
+            return False
+        detail = info.get(kind) if isinstance(info, dict) else None
+        status = (
+            detail.get("httpStatusCode", detail.get("http_status_code"))
+            if isinstance(detail, dict)
+            else None
+        )
+        return status is None or status in _RETRYABLE_STATUS_CODES
+    if isinstance(error, HarnessError):
+        return False
+    return isinstance(error, ConnectionError)
+
+
+def _goal_retry_armed(goal: ChatGoal, turn: ChatTurn) -> bool:
+    """Whether this failed turn left its goal running for one automatic retry."""
+
+    retry = goal.metadata.get(GOAL_PROVIDER_RETRY)
+    return (
+        turn.status == ChatTurnStatus.INTERRUPTED
+        and turn.goal_id == goal.id
+        and isinstance(retry, dict)
+        and retry.get("failed_turn_id") == turn.id
+    )
 
 
 # How each vendor says a saved session is gone. Anything else (authentication,
@@ -2363,7 +2456,7 @@ class _CodexRpc:
                 )
             if self._closing:
                 return
-            raise HarnessTransportError(
+            raise HarnessTransportClosedError(
                 await self._with_stderr_tail(f"{self.transport_name} transport closed")
             )
         except asyncio.CancelledError as caught_error:
@@ -2384,10 +2477,15 @@ class _CodexRpc:
                 exc,
                 stage="harnesses",
             )
+            # A torn pipe or socket closed the stream; anything else is a
+            # defect in reading it, which a goal must not retry blindly.
+            closed = isinstance(exc, (OSError, EOFError)) or type(
+                exc
+            ).__name__.startswith("ConnectionClosed")
             error = (
                 exc
                 if isinstance(exc, HarnessTransportError)
-                else HarnessTransportError(
+                else (HarnessTransportClosedError if closed else HarnessTransportError)(
                     await self._with_stderr_tail(
                         f"{self.transport_name} transport failed: {type(exc).__name__}"
                     )
@@ -6240,9 +6338,9 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 if item.error is None
                 else f"stopped: {item.error}"
             )
-            raise HarnessTransportError(f"The Claude CLI {detail}"[:1_000]) from (
-                item.error
-            )
+            raise HarnessTransportClosedError(
+                f"The Claude CLI {detail}"[:1_000]
+            ) from item.error
         raise item.error
 
     async def _next_message(self) -> Any:
@@ -13366,6 +13464,40 @@ class HarnessRuntimeService:
                     completed.add(item_id)
         return started == completed
 
+    async def _goal_retry_candidate(self, turn: HarnessTurn, owner: ChatTurn) -> bool:
+        """Whether a failed goal turn may leave its goal running for one retry.
+
+        Only a transient vendor failure of a chat goal turn qualifies, and only
+        while Core is running and the project is not held. An operator stop
+        cancels the turn instead, and shutdown interrupts it without the
+        transient mark, so neither is retried here; restart recovery owns
+        turns Core stopped. The goal's own state is checked where it changes.
+        """
+
+        diagnostic = turn.metadata.get("diagnostic")
+        try:
+            return (
+                not self._closed
+                and isinstance(diagnostic, dict)
+                and diagnostic.get(HARNESS_GOAL_RETRYABLE) is True
+                and turn.origin == HarnessTurnOrigin.CHAT
+                and turn.status == HarnessTurnStatus.INTERRUPTED
+                and owner.status == ChatTurnStatus.INTERRUPTED
+                and owner.goal_id is not None
+                and OPERATOR_RECOVERY_STOP not in owner.request_snapshot
+                and not await is_held(self.store, owner.engagement_id, owner.session_id)
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.goal.retry_check_failed",
+                "A failed goal turn's automatic retry could not be checked; the goal pauses.",
+                exc,
+                stage="goal-auto-retry",
+                metadata={"entity_type": "harness_turn", "entity_id": turn.id},
+            )
+            return False
+
     async def _auto_recover_goal_capacity(self, turn_id: str) -> bool:
         """Continue once after a confirmed, effect-settled model overload."""
 
@@ -13548,6 +13680,10 @@ class HarnessRuntimeService:
             # step and claim are not this turn's to judge or clear.
             return
         if turn.status != ChatTurnStatus.COMPLETE:
+            if goal.status == ChatGoalStatus.RUNNING and _goal_retry_armed(goal, turn):
+                # A transient failure left the goal running; the idle-goal
+                # reconciler continues it once after a short wait.
+                return
             (
                 await self._pause_goal(
                     turn.session_id,
@@ -13613,6 +13749,15 @@ class HarnessRuntimeService:
             if latest is None or latest.status == ChatTurnStatus.COMPLETE:
                 if await self.dispatch_running_goal(
                     goal.session_id, _HARNESS_GOAL_CONTINUE_INSTRUCTION
+                ):
+                    acted.append(goal.id)
+                continue
+            if _goal_retry_armed(goal, latest):
+                if await is_held(self.store, goal.engagement_id, goal.session_id):
+                    # The hold pauses the goal; its release resumes it.
+                    continue
+                if await self.dispatch_running_goal(
+                    goal.session_id, _HARNESS_GOAL_RETRY_INSTRUCTION
                 ):
                     acted.append(goal.id)
                 continue
@@ -14988,6 +15133,13 @@ class HarnessRuntimeService:
                                 {"vendor_error_info": exc.vendor_error_info}
                                 if isinstance(exc, HarnessTurnFailedError)
                                 and exc.vendor_error_info is not None
+                                else {}
+                            ),
+                            # Read when the turn settles its goal: a transient
+                            # failure continues a running goal once.
+                            **(
+                                {HARNESS_GOAL_RETRYABLE: True}
+                                if _harness_goal_retryable_failure(exc)
                                 else {}
                             ),
                         },
@@ -21989,7 +22141,20 @@ class HarnessRuntimeService:
             HarnessTurnStatus.INTERRUPTED,
         }:
             return
+        # Decided before the unit, which re-reads the goal it changes.
+        retry_candidate = await self._goal_retry_candidate(settled, owner)
         async with self._settlement_transaction(transaction) as transaction:
+            goal = (
+                await self.store.get(ChatGoal, owner.goal_id) if owner.goal_id else None
+            )
+            retrying = (
+                retry_candidate
+                and goal is not None
+                and goal.status == ChatGoalStatus.RUNNING
+                and goal.execution_claim_id in {None, owner.id}
+                and GOAL_PROVIDER_RETRY not in goal.metadata
+            )
+            now = utc_now()
             (
                 await transaction.update(
                     HarnessTurn,
@@ -22008,16 +22173,29 @@ class HarnessRuntimeService:
                             **owner.request_snapshot,
                             "harness_usage_accounted": True,
                             "harness_usage_reported": usage_reported,
+                            **(
+                                {TURN_GOAL_AUTO_RETRY: {"armed_at": now.isoformat()}}
+                                if retrying
+                                else {}
+                            ),
                         },
                     },
                     expected_revision=owner.revision,
                 )
             )
-            if owner.goal_id:
-                goal = await self.store.get(ChatGoal, owner.goal_id)
+            if goal is not None:
                 metadata = dict(goal.metadata)
                 if not usage_reported:
                     metadata["usage_unknown"] = True
+                if retrying:
+                    # The goal stays running; the idle-goal reconciler starts
+                    # its one continuation after a short wait.
+                    metadata[GOAL_PROVIDER_RETRY] = {
+                        "failed_turn_id": owner.id,
+                        "harness_turn_id": settled.id,
+                        "armed_at": now.isoformat(),
+                        "error": str(settled.error or "")[:300],
+                    }
                 changes: dict[str, Any] = {
                     "usage": ChatTokenUsage(
                         input_tokens=goal.usage.input_tokens + usage.input_tokens,
@@ -22032,8 +22210,7 @@ class HarnessRuntimeService:
                         execution_claim_id=None,
                         execution_claimed_at=None,
                     )
-                if goal.status == ChatGoalStatus.RUNNING:
-                    now = utc_now()
+                if goal.status == ChatGoalStatus.RUNNING and not retrying:
                     changes.update(
                         status=ChatGoalStatus.PAUSED,
                         paused_at=now,
@@ -22047,6 +22224,18 @@ class HarnessRuntimeService:
                         ChatGoal, goal.id, changes, expected_revision=goal.revision
                     )
                 )
+        if retrying:
+            record_diagnostic(
+                "warning",
+                "harnesses",
+                "harnesses.goal.transient_retry_armed",
+                "A goal's harness response failed transiently; Core continues "
+                "the goal once automatically.",
+                outcome="retrying",
+                stage="goal-auto-retry",
+                retryable=True,
+                metadata={"goal_id": owner.goal_id, "turn_id": owner.id},
+            )
 
     async def _complete_owner(
         self,
@@ -22183,6 +22372,8 @@ class HarnessRuntimeService:
                     metadata = dict(goal.metadata)
                     if not usage_reported:
                         metadata["usage_unknown"] = True
+                    # A completed turn ends a transient failure streak.
+                    metadata.pop(GOAL_PROVIDER_RETRY, None)
                     changes: dict[str, Any] = {"usage": combined, "metadata": metadata}
                     if goal.execution_claim_id == chat_turn.id:
                         changes.update(
