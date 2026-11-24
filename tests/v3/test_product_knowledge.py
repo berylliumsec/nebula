@@ -67,6 +67,16 @@ def test_product_help_explains_butler_check_stage_labels(monkeypatch):
     assert "open butler check" in text
 
 
+def test_product_help_explains_butler_supervisor_powers(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I turn on Butler supervisor powers shell runner kill switch"
+    )
+    text = " ".join(" ".join(str(item["text"]) for item in matches).lower().split())
+    assert "nebula_butler_supervisor_enabled=1" in text
+    assert "kill switch" in text
+    assert "independent-review" in text
+
 def test_product_help_explains_a_chats_project_work_stage(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(

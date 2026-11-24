@@ -157,6 +157,23 @@ _BACKGROUND_CHANGES = frozenset(
         "nebula.global.create_child_project",
     }
 )
+# Supervisor powers (butler_supervisor_policy). Registered only while the
+# operator's kill switch NEBULA_BUTLER_SUPERVISOR_ENABLED is on; each tool also
+# re-checks it on every call.
+SUPERVISOR_ACTIONS = frozenset(
+    {
+        "nebula.supervisor.shell",
+        "nebula.supervisor.signal",
+        "nebula.supervisor.runner_control",
+        "nebula.supervisor.repo_publish",
+        "nebula.supervisor.run_gate",
+        "nebula.supervisor.repo_audit",
+        "nebula.supervisor.repo_restore",
+        "nebula.supervisor.independent_review",
+        "nebula.supervisor.hygiene_tick",
+    }
+)
+_BACKGROUND_CHANGES = _BACKGROUND_CHANGES | SUPERVISOR_ACTIONS
 _CATEGORIES = (
     {
         "id": "inspect",
@@ -549,6 +566,23 @@ class ButlerCapabilities:
             self._actions.update(
                 {plugin.spec.name: plugin for plugin in self._memory_actions()}
             )
+        supervisor_case = False
+        if background_case_id is not None:
+            supervisor_case = (
+                await store.get(ButlerRecoveryCase, background_case_id)
+            ).signal == "butler.global_periodic_check"
+        if not observer and (background_case_id is None or supervisor_case):
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in self._supervisor_actions(
+                        store,
+                        work,
+                        project_id,
+                        actor=background_case_id or operator_turn_id or "butler",
+                    )
+                }
+            )
         if background_case_id is not None:
             self._actions = {
                 name: plugin
@@ -577,6 +611,39 @@ class ButlerCapabilities:
                         ).plugins()
                     }
                 )
+
+    @staticmethod
+    def _supervisor_actions(
+        store: NebulaStore, work: Any, project_id: str, *, actor: str
+    ) -> list[AnalysisTool]:
+        """Butler's supervisor tools, while the operator's kill switch is on."""
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            if not load_policy().enabled:
+                return []
+        except ValueError:
+            # diagnostic-expected: a malformed host allowlist keeps the tools off.
+            return []
+        from .butler_goal_hygiene import ButlerGoalHygiene
+        from .butler_host_ops import ButlerHostOps
+        from .butler_independent_review import ButlerIndependentReview
+        from .butler_repo_forensics import ButlerRepoForensics
+
+        async def record_event(entry: dict[str, Any]) -> None:
+            await record_supervisor_event(store, project_id, entry)
+
+        actions: list[AnalysisTool] = [
+            *ButlerHostOps(
+                project_id=project_id, actor=actor, event_sink=record_event
+            ).actions(),
+            *ButlerRepoForensics().actions(),
+        ]
+        if work is not None:
+            actions += ButlerIndependentReview(store, work, project_id).actions()
+            actions += ButlerGoalHygiene(store, work).actions()
+        return actions
 
     async def _propose_goal_chat(self, arguments: dict[str, Any]) -> dict[str, Any]:
         """Propose a goal chat that names this Butler conversation as its source."""
@@ -1420,3 +1487,51 @@ BUTLER_TOOL_NAMES = frozenset(
         "nebula.capabilities.change",
     }
 )
+
+
+async def record_supervisor_event(
+    store: NebulaStore, project_id: str, entry: dict[str, Any]
+) -> None:
+    """Mirror one supervisor audit record into the project's Butler events."""
+
+    from .butler_oversight import ButlerEventPayload, _append_project_event
+
+    keys = (
+        "tool",
+        "host",
+        "outcome",
+        "exit_code",
+        "rule",
+        "duration_seconds",
+        "stdout_sha256",
+        "actor",
+    )
+    metrics = {
+        key: (str(entry[key])[:200] if isinstance(entry[key], str) else entry[key])
+        for key in keys
+        if key in entry and isinstance(entry[key], (str, int, float, bool, type(None)))
+    }
+    summary = (
+        f"Butler supervisor {entry.get('tool')} on {entry.get('host') or 'core'}: "
+        f"{entry.get('outcome')}"
+    )[:500]
+    now = utc_now()
+    async with store.transaction() as transaction:
+        await _append_project_event(
+            transaction,
+            engagement_id=project_id,
+            event_type="butler.supervisor_action",
+            payload=ButlerEventPayload(
+                project_id=project_id,
+                source="core",
+                actor_role="core",
+                summary=summary,
+                metrics=metrics,
+                verification_state="core_observed",
+            ),
+            idempotency_key="butler-supervisor:"
+            + hashlib.sha256(
+                json.dumps(entry, sort_keys=True, default=str).encode()
+            ).hexdigest(),
+            now=now,
+        )
