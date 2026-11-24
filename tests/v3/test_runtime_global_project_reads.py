@@ -950,3 +950,132 @@ async def test_chat_work_stage_uses_the_nearest_ancestors_stages(project_reads):
     assert rows[inherited.id]["session"]["metadata"]["work_stage"] == expected
     assert rows[own.id]["session"]["metadata"]["work_stage"]["label"] == "Triage"
     assert "work_stage" not in rows[shadowed.id]["session"]["metadata"]
+
+
+async def test_butler_board_filters_and_counts_goal_chats_by_work_stage(project_reads):
+    """The board narrows to chosen stage labels across projects, or to no stage."""
+    from nebula.v3.domain import ChatGoal, ChatGoalStatus, WorkItem, WorkStage
+
+    store = project_reads.store
+    parent = await store.create(
+        Engagement(
+            name="Pipeline",
+            work_stages=[
+                WorkStage(key="recon", label="Recon"),
+                WorkStage(key="lanes", label="Lanes"),
+                WorkStage(key="validate", label="Validation"),
+            ],
+        )
+    )
+    # A subproject without stages inherits its parent's labels.
+    child = await store.create(
+        Engagement(name="Pipeline child", parent_engagement_id=parent.id)
+    )
+    # Another project spells the same stage with its own key and case.
+    other = await store.create(
+        Engagement(
+            name="Other pipeline",
+            work_stages=[
+                WorkStage(key="first", label="recon"),
+                WorkStage(key="check", label="Validation"),
+            ],
+        )
+    )
+
+    async def goal_chat(project, title, stage, status=ChatGoalStatus.RUNNING):
+        session = await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id="provider",
+                model="model",
+            )
+        )
+        await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=session.id,
+                objective=f"Goal of {title}",
+                completion_criteria=["Report"],
+                status=status,
+            )
+        )
+        if stage is not None:
+            await store.create(
+                WorkItem(
+                    engagement_id=project.id,
+                    title=f"{title} status",
+                    assignee_session_id=session.id,
+                    stage=stage,
+                    status="in_progress",
+                )
+            )
+        return session
+
+    recon = await goal_chat(parent, "Parent recon", "recon")
+    child_recon = await goal_chat(child, "Child recon", "recon")
+    other_recon = await goal_chat(other, "Other recon", "first")
+    lanes_idle = await goal_chat(child, "Paused lanes", "lanes", ChatGoalStatus.PAUSED)
+    validation = await goal_chat(other, "Other validation", "check")
+    plain = await goal_chat(parent, "No stage", None)
+    plain_idle = await goal_chat(other, "Paused no stage", None, ChatGoalStatus.PAUSED)
+
+    async def board(**params):
+        answer = await project_reads.client.get(
+            "/api/v1/butler/board", params=params, headers=AUTH
+        )
+        assert answer.status_code == 200, answer.text
+        return answer.json()
+
+    def ids(body):
+        return {item["session_id"] for item in body["items"]}
+
+    everything = await board()
+    assert ids(everything) == {
+        recon.id,
+        child_recon.id,
+        other_recon.id,
+        lanes_idle.id,
+        validation.id,
+        plain.id,
+        plain_idle.id,
+    }
+    # Stage counts span projects by label, in the projects' stage order.
+    assert everything["stages"] == [
+        {"label": "Recon", "counts": {"active": 3, "idle": 0, "completed": 0}},
+        {"label": "Lanes", "counts": {"active": 0, "idle": 1, "completed": 0}},
+        {"label": "Validation", "counts": {"active": 1, "idle": 0, "completed": 0}},
+    ]
+    assert everything["no_stage"] == {"active": 1, "idle": 1, "completed": 0}
+
+    # One label, any case, matches every project's stage of that name.
+    recon_only = await board(stage="RECON")
+    assert ids(recon_only) == {recon.id, child_recon.id, other_recon.id}
+    assert recon_only["counts"] == {"active": 3, "idle": 0, "completed": 0}
+    assert {
+        project["id"]: project["counts"]["active"] for project in recon_only["projects"]
+    } == {parent.id: 1, child.id: 1, other.id: 1}
+    # Counts per stage ignore the stage filter, so other choices stay visible.
+    assert recon_only["stages"] == everything["stages"]
+    # The header's turn states stay unfiltered: a filter never hides who waits.
+    assert recon_only["states"] == everything["states"]
+
+    several = await board(stage=["Lanes", "Validation"], no_stage="true")
+    assert ids(several) == {lanes_idle.id, validation.id, plain.id, plain_idle.id}
+    assert several["counts"] == {"active": 2, "idle": 2, "completed": 0}
+
+    unstaged_idle = await board(no_stage="true", section="idle")
+    assert ids(unstaged_idle) == {plain_idle.id}
+    assert unstaged_idle["counts"]["idle"] == 1
+
+    # The filter combines with the search, which also narrows the stage counts.
+    searched = await board(stage="Recon", q="pipeline child")
+    assert ids(searched) == {child_recon.id}
+    assert searched["stages"] == [
+        {"label": "Recon", "counts": {"active": 1, "idle": 0, "completed": 0}},
+        {"label": "Lanes", "counts": {"active": 0, "idle": 1, "completed": 0}},
+    ]
+
+    unknown = await board(stage="Shipping")
+    assert unknown["items"] == []
+    assert unknown["counts"] == {"active": 0, "idle": 0, "completed": 0}

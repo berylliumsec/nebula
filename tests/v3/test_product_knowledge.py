@@ -1369,3 +1369,15 @@ def test_product_search_explains_mcp_results_and_timeouts(monkeypatch):
         and "output_preview" in str(item["text"])
         for item in matches
     )
+
+
+def test_product_help_explains_the_butler_board_stage_filter(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How do I filter the Butler board by stage to see only goals in Recon?"
+    )
+    text = " ".join(" ".join(str(item["text"]) for item in matches).lower().split())
+    assert "filtering the butler board by stage" in text
+    assert "no stage" in text
+    assert "clear stage filter" in text
+    assert "hold and resume act only on these" in text

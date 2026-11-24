@@ -1447,6 +1447,31 @@ sets priority when asked (`nebula.work.set_priority`) and reviews
 high-priority chats first; the operator does not need to tell Butler which
 chats matter.
 
+### Filtering the Butler board by stage
+
+**Stage** (beside **Group** on the Butler board) narrows the board to goal
+chats in chosen project Work stages, for example only the goals in Recon. The
+list names each stage by its label across all projects (a project that spells
+it "recon" counts with "Recon"), in the projects' stage order, followed by **No
+stage** for goal chats with no open assigned Work item that has a stage. Each
+choice shows how many goal chats it holds, counting Active, Idle and Completed
+and matching the search. Tick one or more; the control then reads "Stage:
+Recon" or "Stage: Recon + 1", and a line under the toolbar says "Showing stage
+… · N goal chats. Hold and Resume act only on these." Subprojects use their
+parent's stages, so their chats filter under the parent's labels. **Clear stage
+filter** (the × beside the control) or **Show all stages** removes the filter.
+This device remembers the filter across reloads, like the grouping; a
+remembered stage that no goal chat has any more stays listed with 0 so it can
+be removed.
+
+The filter is applied by Core (`GET /api/v1/butler/board` with `stage=<label>`,
+repeatable, and `no_stage=true`), so counts, Completed pages and Select all
+follow it. The top bar's **need you** and **working** counts stay unfiltered,
+so a filter never hides a chat waiting on the operator. While a filter is on,
+the bulk buttons say what they cover: **Hold active in Recon** holds only the
+filtered running chats, by name, and **Resume idle in Recon** resumes only the
+filtered paused or blocked goals; goals in other stages are left alone.
+
 ## Conversation stage labels
 
 A conversation's **stage** is its project's Work stage: the stage of the Work

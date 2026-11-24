@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_PROJECTS, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
+import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
 import type { ApiClient } from "./client";
 
 function item(overrides: Partial<ButlerBoardItem>): ButlerBoardItem {
@@ -222,5 +222,58 @@ describe("Butler board holds and priority", () => {
     expect(holdChats.mock.calls.map(([projectId, choice]) => [projectId, choice.sessionIds])).toEqual([["p1", ["a", "c"]], ["p2", ["b"]]]);
     expect(result.placed.map((entry) => entry.batchId).sort()).toEqual(["b-p1", "b-p2"]);
     expect(result.failed).toEqual([]);
+  });
+});
+
+describe("Butler board stage filter", () => {
+  it("sends chosen stages and No stage to Core and maps Core's stage counts", async () => {
+    const requestIfChanged = vi.fn().mockResolvedValue({
+      etag: '"s"',
+      value: {
+        counts: { active: 1, idle: 0, completed: 0 }, projects: [], items: [], truncated: false,
+        stages: [{ label: "Recon", counts: { active: 3, idle: 1, completed: 0 } }],
+        no_stage: { active: 0, idle: 2, completed: 5 },
+      },
+    });
+    const answer = await getButlerBoardIfChanged({ requestIfChanged } as unknown as ApiClient, { q: "fuzz", stages: { labels: ["Recon", "Lanes"], noStage: true } }, undefined);
+    expect(requestIfChanged).toHaveBeenCalledWith("butler/board?q=fuzz&stage=Recon&stage=Lanes&no_stage=true", undefined, { signal: undefined });
+    expect(answer?.board.stages).toEqual([{ label: "Recon", counts: { active: 3, idle: 1, completed: 0 } }]);
+    expect(answer?.board.noStage).toEqual({ active: 0, idle: 2, completed: 5 });
+  });
+
+  it("defaults stage counts for an older Core", async () => {
+    const requestIfChanged = vi.fn().mockResolvedValue({ value: { counts: { active: 0, idle: 0, completed: 0 }, items: [], truncated: false } });
+    const answer = await getButlerBoardIfChanged({ requestIfChanged } as unknown as ApiClient, {}, undefined);
+    expect(answer?.board.stages).toEqual([]);
+    expect(answer?.board.noStage).toEqual({ active: 0, idle: 0, completed: 0 });
+  });
+
+  it("toggles labels case-insensitively, summarizes, and remembers only valid choices", () => {
+    let filter = toggleStageFilter(NO_STAGE_FILTER, "Recon");
+    filter = toggleStageFilter(filter, "Lanes");
+    expect(stageFilterSummary(filter)).toBe("Recon + 1");
+    filter = toggleStageFilter(filter, "recon");
+    expect(filter.labels).toEqual(["Lanes"]);
+    filter = toggleStageFilter(filter, null);
+    expect(stageFilterActive(filter)).toBe(true);
+    expect(stageFilterSummary(filter)).toBe("Lanes + 1");
+    expect(stageFilterSummary(NO_STAGE_FILTER)).toBe("All");
+    expect(stageFilterSummary({ labels: [], noStage: true })).toBe("No stage");
+    expect(parseStageFilter(JSON.stringify(filter))).toEqual(filter);
+    expect(parseStageFilter('{"labels":["Recon"," recon ",7,""],"noStage":"yes"}')).toEqual({ labels: ["Recon"], noStage: false });
+    expect(parseStageFilter("not json")).toEqual(NO_STAGE_FILTER);
+  });
+
+  it("lists Core's stages in order, keeps a chosen stage Core no longer reports, then No stage", () => {
+    const options = stageFilterOptions({
+      stages: [{ label: "Recon", counts: { active: 2, idle: 1, completed: 0 } }, { label: "Lanes", counts: { active: 0, idle: 1, completed: 1 } }],
+      noStage: { active: 1, idle: 0, completed: 4 },
+    }, { labels: ["lanes", "Shipping"], noStage: false });
+    expect(options).toEqual([
+      { label: "Recon", name: "Recon", count: 3, selected: false },
+      { label: "Lanes", name: "Lanes", count: 2, selected: true },
+      { label: "Shipping", name: "Shipping", count: 0, selected: true },
+      { label: null, name: "No stage", count: 5, selected: false },
+    ]);
   });
 });

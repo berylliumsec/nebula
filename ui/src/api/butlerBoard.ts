@@ -69,6 +69,16 @@ export interface ButlerBoard {
   nextOffset?: number;
   /** A section had more chats than Core returned; the counts stay exact. */
   truncated: boolean;
+  /** Searched goal chats per Work stage label, in stage order; the stage filter does not narrow these. */
+  stages: BoardStageCount[];
+  /** Searched goal chats with no Work stage, per section. */
+  noStage: ButlerBoardCounts;
+}
+
+/** One Work stage label across projects, with its goal chats per section. */
+export interface BoardStageCount {
+  label: string;
+  counts: ButlerBoardCounts;
 }
 
 interface WireItem {
@@ -106,6 +116,8 @@ interface WireBoard {
   items: WireItem[];
   next_offset?: number | null;
   truncated: boolean;
+  stages?: Array<{ label: string; counts: ButlerBoardCounts }> | null;
+  no_stage?: ButlerBoardCounts | null;
 }
 
 /** The section a goal status belongs to. */
@@ -174,6 +186,8 @@ export interface ButlerBoardQuery {
   projectId?: string;
   offset?: number;
   limit?: number;
+  /** Only goal chats in these Work stages (labels) or, with ``noStage``, without one. */
+  stages?: BoardStageFilter;
 }
 
 function boardQuery(options: ButlerBoardQuery): string {
@@ -183,6 +197,8 @@ function boardQuery(options: ButlerBoardQuery): string {
   if (options.projectId) query.set("project_id", options.projectId);
   if (options.offset) query.set("offset", String(options.offset));
   if (options.limit) query.set("limit", String(options.limit));
+  for (const label of options.stages?.labels ?? []) query.append("stage", label);
+  if (options.stages?.noStage) query.set("no_stage", "true");
   return query.size ? `?${query}` : "";
 }
 
@@ -203,6 +219,8 @@ export async function getButlerBoardIfChanged(
       items: answer.value.items.map(mapItem),
       nextOffset: answer.value.next_offset ?? undefined,
       truncated: answer.value.truncated,
+      stages: answer.value.stages ?? [],
+      noStage: answer.value.no_stage ?? emptyCounts(),
     },
     etag: answer.etag,
   };
@@ -476,12 +494,12 @@ export async function releaseBoardHolds(
  * Every resumable idle goal chat Core lists, across projects or in one
  * (``projectId``), matching ``q``: not only the cards the poll returned.
  */
-export async function listResumableIdle(api: ApiClient, options: { q?: string; projectId?: string } = {}, signal?: AbortSignal): Promise<ButlerBoardItem[]> {
+export async function listResumableIdle(api: ApiClient, options: { q?: string; projectId?: string; stages?: BoardStageFilter } = {}, signal?: AbortSignal): Promise<ButlerBoardItem[]> {
   const found: ButlerBoardItem[] = [];
   let offset: number | undefined = 0;
   // Core pages a section by recent activity; the guard stops a misbehaving cursor.
   for (let pages = 0; offset !== undefined && pages < 500; pages += 1) {
-    const answer = await getButlerBoardIfChanged(api, { q: options.q, section: "idle", projectId: options.projectId, offset, limit: 200 }, undefined, signal);
+    const answer = await getButlerBoardIfChanged(api, { q: options.q, section: "idle", projectId: options.projectId, offset, limit: 200, stages: options.stages }, undefined, signal);
     if (!answer) break;
     found.push(...answer.board.items.filter(isResumableIdle));
     offset = answer.board.nextOffset !== undefined && answer.board.nextOffset > offset ? answer.board.nextOffset : undefined;
@@ -538,4 +556,75 @@ export async function resumeIdleGoals(
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
   return outcomes;
+}
+
+/**
+ * The board's stage filter: goal chats in any of these Work stage labels
+ * (across projects, any case) or, with ``noStage``, without a stage. Empty
+ * shows every goal chat. This device remembers it, like the grouping.
+ */
+export interface BoardStageFilter {
+  labels: string[];
+  noStage: boolean;
+}
+
+export const NO_STAGE_FILTER: BoardStageFilter = { labels: [], noStage: false };
+
+export function stageFilterActive(filter: BoardStageFilter): boolean {
+  return filter.labels.length > 0 || filter.noStage;
+}
+
+/** Parse the remembered filter; anything unreadable shows every stage. */
+export function parseStageFilter(stored: string | null): BoardStageFilter {
+  if (!stored) return NO_STAGE_FILTER;
+  try {
+    const value = JSON.parse(stored) as { labels?: unknown; noStage?: unknown };
+    const labels = Array.isArray(value?.labels) ? value.labels.filter((label): label is string => typeof label === "string" && label.trim().length > 0).slice(0, 50) : [];
+    return { labels: dedupeLabels(labels), noStage: value?.noStage === true };
+  } catch {
+    return NO_STAGE_FILTER; // diagnostic-expected: a damaged preference falls back to every stage
+  }
+}
+
+function dedupeLabels(labels: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return labels.map((label) => label.trim()).filter((label) => !seen.has(label.toLocaleLowerCase()) && seen.add(label.toLocaleLowerCase()));
+}
+
+/** Add or remove one stage label (any case); ``null`` toggles No stage. */
+export function toggleStageFilter(filter: BoardStageFilter, label: string | null): BoardStageFilter {
+  if (label === null) return { ...filter, noStage: !filter.noStage };
+  const key = label.toLocaleLowerCase();
+  const has = filter.labels.some((entry) => entry.toLocaleLowerCase() === key);
+  return { ...filter, labels: has ? filter.labels.filter((entry) => entry.toLocaleLowerCase() !== key) : dedupeLabels([...filter.labels, label]) };
+}
+
+/** What the Stage control says: "All", "Recon", "No stage", "Recon + 2". */
+export function stageFilterSummary(filter: BoardStageFilter): string {
+  const names = [...filter.labels, ...(filter.noStage ? ["No stage"] : [])];
+  if (!names.length) return "All";
+  return names.length === 1 ? names[0] : `${names[0]} + ${names.length - 1}`;
+}
+
+export interface BoardStageOption {
+  /** The stage label; ``null`` is No stage. */
+  label: string | null;
+  name: string;
+  /** Searched goal chats in this stage, in every section. */
+  count: number;
+  selected: boolean;
+}
+
+/**
+ * The filter's choices: Core's stages in stage order, then No stage. A
+ * chosen stage Core no longer reports stays listed with 0, so the operator
+ * can see and remove it.
+ */
+export function stageFilterOptions(board: Pick<ButlerBoard, "stages" | "noStage"> | undefined, filter: BoardStageFilter): BoardStageOption[] {
+  const total = (counts: ButlerBoardCounts) => counts.active + counts.idle + counts.completed;
+  const chosen = new Set(filter.labels.map((label) => label.toLocaleLowerCase()));
+  const listed = (board?.stages ?? []).map((stage) => ({ label: stage.label, name: stage.label, count: total(stage.counts), selected: chosen.has(stage.label.toLocaleLowerCase()) }));
+  const known = new Set(listed.map((option) => option.label.toLocaleLowerCase()));
+  const missing = filter.labels.filter((label) => !known.has(label.toLocaleLowerCase())).map((label) => ({ label, name: label, count: 0, selected: true }));
+  return [...listed, ...missing, { label: null, name: "No stage", count: board ? total(board.noStage) : 0, selected: filter.noStage }];
 }

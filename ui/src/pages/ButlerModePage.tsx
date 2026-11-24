@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Pause, Play, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Pause, Play, Plus, Search, SlidersHorizontal, Workflow, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { butlerCaseStage } from "../butlerStage";
 import { chatStageName } from "./workStages";
 import { ButlerStageLabel } from "../components/ButlerStageLabel";
 import { WorkStageLabel } from "../components/WorkStageLabel";
-import { ALL_PROJECTS, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
+import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, type BoardStageFilter, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
@@ -40,6 +40,7 @@ type LiveTurn = { prompt: string; text: string; browserAction?: boolean; error?:
 const GROUPING_KEY = "nebula.butler-mode.grouping";
 // Which board sections are open on this device ("<project or all>:<section>").
 const SECTIONS_KEY = "nebula.butler-mode.sections";
+const STAGE_FILTER_KEY = "nebula.butler-mode.stage-filter";
 const THREAD_STATE_LABEL = { waiting: "Needs you", working: "Working", idle: "Answered" } as const;
 
 type Section = "board" | "code" | "oversight" | "memory" | "settings";
@@ -113,6 +114,13 @@ export function ButlerModePage() {
   const [query, setQuery] = useState("");
   const [grouping, setGrouping] = useState<ButlerBoardGrouping>(() => readStorage(GROUPING_KEY) === "attention" ? "attention" : "project");
   const [organizeOpen, setOrganizeOpen] = useState(false);
+  const [stageFilter, setStageFilterState] = useState<BoardStageFilter>(() => parseStageFilter(readStorage(STAGE_FILTER_KEY)));
+  const [stageOpen, setStageOpen] = useState(false);
+  const setStageFilter = (next: BoardStageFilter) => { setStageFilterState(next); writeStorage(STAGE_FILTER_KEY, JSON.stringify(next)); };
+  const filteringStages = stageFilterActive(stageFilter);
+  // One key for effects: the poll and pages restart when the filter changes.
+  const stageKey = JSON.stringify(stageFilter);
+  const stages = useMemo(() => JSON.parse(stageKey) as BoardStageFilter, [stageKey]);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [sectionOpen, setSectionOpen] = useState<BoardSectionOpenState>(() => parseBoardSectionState(readStorage(SECTIONS_KEY)));
   // Completed goal chats load on request, by project ID or ALL_PROJECTS; ``count`` is Core's count they were read at.
@@ -180,7 +188,7 @@ export function ButlerModePage() {
       signal: controller.signal,
       read: async (signal) => {
         try {
-          const answer = await getButlerBoardIfChanged(api, { q: query }, boardEtag.current, signal);
+          const answer = await getButlerBoardIfChanged(api, { q: query, stages }, boardEtag.current, signal);
           setBoardError("");
           if (!answer) return "idle";
           boardEtag.current = answer.etag;
@@ -196,7 +204,11 @@ export function ButlerModePage() {
     });
     boardPoll.current = poll;
     return () => controller.abort();
-  }, [api, coreState, query]);
+  }, [api, coreState, query, stages]);
+  // A new stage filter drops the old board, so no card or bulk action from
+  // the previous filter is shown or acted on until Core answers.
+  const firstStageKey = useRef(stageKey);
+  useEffect(() => { if (firstStageKey.current !== stageKey) { firstStageKey.current = stageKey; setBoard(undefined); } }, [stageKey]);
 
   // Threads: every project's Butler mode threads, newest first.
   useEffect(() => {
@@ -334,6 +346,7 @@ export function ButlerModePage() {
     const onKey = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (organizeOpen) { setOrganizeOpen(false); return; }
+      if (stageOpen) { setStageOpen(false); return; }
       if (moreOpen) { setMoreOpen(false); return; }
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.closest("[role=dialog]")) return;
@@ -353,6 +366,8 @@ export function ButlerModePage() {
   const searching = search.trim().length > 0;
   const matchedChats = groups.reduce((sum, group) => sum + group.total, 0);
   const matchedProjects = coreCounts && board ? board.projects.length : new Set(searchedItems.map((item) => item.project.id)).size;
+  const stageOptions = useMemo(() => stageFilterOptions(board, stageFilter), [board, stageFilter]);
+  const stageTotal = board ? board.counts.active + board.counts.idle + board.counts.completed : 0;
   const openThreadSummary = threads.find((item) => item.sessionId === openThreadId);
   // Archive or delete the open thread. Core keeps an archived thread in the
   // project's archived chats; Butler mode lists only unarchived threads.
@@ -390,14 +405,16 @@ export function ButlerModePage() {
 
   // Core's exact Completed count for a project, or across projects.
   const coreCompleted = useCallback((scope: string) => scope === ALL_PROJECTS ? board?.counts.completed ?? 0 : board?.projects.find((item) => item.id === scope)?.counts.completed ?? 0, [board]);
-  const queryRef = useRef(query);
-  queryRef.current = query;
+  // Completed pages belong to one search and stage filter; a page for another is dropped.
+  const readKey = `${query}\u0000${stageKey}`;
+  const queryRef = useRef(readKey);
+  queryRef.current = readKey;
   const loadCompleted = useCallback(async (scope: string, offset: number, count: number) => {
     if (!api) return;
-    const asked = query;
+    const asked = readKey;
     setCompleted((current) => ({ ...current, [scope]: { items: current[scope]?.items ?? [], nextOffset: current[scope]?.nextOffset, loading: true, count } }));
     try {
-      const answer = await getButlerBoardIfChanged(api, { q: asked, section: "completed", projectId: scope === ALL_PROJECTS ? undefined : scope, offset, limit: 50 }, undefined);
+      const answer = await getButlerBoardIfChanged(api, { q: query, stages, section: "completed", projectId: scope === ALL_PROJECTS ? undefined : scope, offset, limit: 50 }, undefined);
       if (queryRef.current !== asked) return;
       const page = answer?.board;
       setCompleted((current) => ({ ...current, [scope]: { loading: false, count, items: offset ? [...(current[scope]?.items ?? []), ...(page?.items ?? [])] : page?.items ?? [], nextOffset: page?.nextOffset } }));
@@ -406,8 +423,8 @@ export function ButlerModePage() {
       void logCaughtDiagnostic("interface.butler_mode.completed_failed", "Butler mode could not list completed goal chats.", caught, "butler_mode");
       setCompleted((current) => ({ ...current, [scope]: { items: current[scope]?.items ?? [], nextOffset: current[scope]?.nextOffset, loading: false, count, error: caught instanceof Error ? caught.message : "Core could not list completed goal chats." } }));
     }
-  }, [api, query]);
-  useEffect(() => { setCompleted({}); }, [query]);
+  }, [api, query, stages, readKey]);
+  useEffect(() => { setCompleted({}); }, [readKey]);
   // An open Completed section reads its first page, and again when Core's count changes.
   useEffect(() => {
     for (const group of groups) {
@@ -489,7 +506,7 @@ export function ButlerModePage() {
     }
     setSelecting(groupKey);
     try {
-      const items = await listResumableIdle(api, { q: query, projectId: groupKey === ALL_PROJECTS ? undefined : groupKey });
+      const items = await listResumableIdle(api, { q: query, stages, projectId: groupKey === ALL_PROJECTS ? undefined : groupKey });
       setSelected((current) => { const next = new Map(current); for (const item of items) next.set(item.sessionId, item); return next; });
       setSelectedAll((current) => ({ ...current, [groupKey]: items.map((item) => item.sessionId) }));
       if (!items.length) setResumeSummary({ text: "No paused or blocked goals to select here.", failed: false });
@@ -528,7 +545,7 @@ export function ButlerModePage() {
     setSelecting(ALL_PROJECTS);
     let items: ButlerBoardItem[];
     try {
-      items = await listResumableIdle(api, { q: query });
+      items = await listResumableIdle(api, { q: query, stages });
     } catch (caught) {
       void logCaughtDiagnostic("interface.butler_mode.resume_list_failed", "Butler mode could not list idle goal chats to resume.", caught, "butler_mode");
       setResumeSummary({ text: `${caught instanceof Error ? caught.message : "Core could not list idle goal chats."} Retry Resume all idle.`, failed: true });
@@ -536,12 +553,12 @@ export function ButlerModePage() {
     } finally {
       setSelecting(undefined);
     }
-    if (!items.length) { setResumeSummary({ text: query.trim() ? "No paused or blocked goals match the search." : "No paused or blocked goals to resume.", failed: false }); return; }
+    if (!items.length) { setResumeSummary({ text: query.trim() || filteringStages ? `No paused or blocked goals match the ${query.trim() ? "search" : ""}${query.trim() && filteringStages ? " and " : ""}${filteringStages ? "stage filter" : ""}.` : "No paused or blocked goals to resume.", failed: false }); return; }
     const projectCount = new Set(items.map((item) => item.project.id)).size;
     const goals = `${items.length} paused or blocked ${items.length === 1 ? "goal" : "goals"}`;
     const approved = await confirm({
       title: `Resume ${items.length} idle ${items.length === 1 ? "goal" : "goals"}?`,
-      message: `${goals}${query.trim() ? ` matching “${query.trim()}”` : ""}${projectCount > 1 ? ` in ${projectCount} projects` : ""} start working again and use their budgets. Proposed goals are not started.`,
+      message: `${goals}${query.trim() ? ` matching “${query.trim()}”` : ""}${filteringStages ? ` in stage ${stageFilterSummary(stageFilter)}` : ""}${projectCount > 1 ? ` in ${projectCount} projects` : ""} start working again and use their budgets.${filteringStages ? " Goals in other stages are not resumed." : ""} Proposed goals are not started.`,
       confirmLabel: `Resume ${items.length}`,
     });
     if (approved) await runResume(items);
@@ -569,8 +586,20 @@ export function ButlerModePage() {
       finishHold(placed, failed);
     } finally { setHoldBusy(false); }
   };
+  // With a stage filter, Hold acts only on the filtered Active chats Core
+  // listed, named one by one; otherwise each project holds all its running work.
   const holdEveryActive = async () => {
     if (!api || !board || holdBusy) return;
+    if (filteringStages) {
+      const chosen = board.items.filter((item) => item.section === "active" && isHoldable(item));
+      if (!chosen.length) { setResumeSummary({ text: "Nothing running in this stage filter to hold.", failed: false }); return; }
+      setHoldBusy(true); setResumeSummary(undefined);
+      try {
+        const { placed, failed } = await holdBoardChats(api, chosen);
+        finishHold(placed, failed);
+      } finally { setHoldBusy(false); }
+      return;
+    }
     const projects = board.projects.filter((project) => project.counts.active > 0).map((project) => project.id);
     if (!projects.length) return;
     setHoldBusy(true); setResumeSummary(undefined);
@@ -843,16 +872,31 @@ export function ButlerModePage() {
           </label>)}
         </div>}
       </div>
+      <div className={styles.stageControl}>
+        <button type="button" className={styles.select} data-active={filteringStages ? "true" : undefined} aria-haspopup="dialog" aria-expanded={stageOpen} aria-label={`Filter by stage: ${stageFilterSummary(stageFilter)}`} onClick={() => setStageOpen((open) => !open)}>
+          <Workflow size={14} aria-hidden="true" /> Stage: {stageFilterSummary(stageFilter)} <ChevronDown size={13} aria-hidden="true" />
+        </button>
+        {stageOpen && <div className={`${styles.popover} ${styles.stagePopover}`} role="dialog" aria-label="Filter by stage">
+          <div className={styles.popoverHeading}>Show stages</div>
+          {stageOptions.map((option) => <label key={option.label ?? "\u0000none"} className={styles.option}>
+            <input type="checkbox" checked={option.selected} onChange={() => setStageFilter(toggleStageFilter(stageFilter, option.label))} />
+            <span className={styles.optionLabel}>{option.name}</span>
+            <span className={styles.optionCount}>{option.count.toLocaleString()}</span>
+          </label>)}
+          {filteringStages && <button type="button" className={styles.link} onClick={() => { setStageFilter(NO_STAGE_FILTER); setStageOpen(false); }}>Show all stages</button>}
+        </div>}
+      </div>
+      {filteringStages && <button type="button" className={styles.iconButton} aria-label="Clear stage filter" title="Clear stage filter" onClick={() => setStageFilter(NO_STAGE_FILTER)}><X size={14} aria-hidden="true" /></button>}
       <label className={styles.boardSearch}>
         <Search size={15} aria-hidden="true" />
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape" && search) { event.preventDefault(); setSearch(""); } }} placeholder="Search projects and chats" aria-label="Search projects and chats" />
         {searching && <button type="button" className={styles.clearSearch} aria-label="Clear search" title="Clear search" onClick={() => setSearch("")}><X size={14} aria-hidden="true" /></button>}
       </label>
       {(board?.counts.active ?? 0) > 0 && <button type="button" className={styles.secondary} disabled={holdBusy || Boolean(resumeRun)} onClick={() => void holdEveryActive()}>
-        <Pause size={13} aria-hidden="true" /> {holdBusy ? "Holding…" : "Hold all active"}
+        <Pause size={13} aria-hidden="true" /> {holdBusy ? "Holding…" : filteringStages ? `Hold active in ${stageFilterSummary(stageFilter)}` : "Hold all active"}
       </button>}
       {(board?.counts.idle ?? 0) > 0 && <button type="button" className={styles.secondary} disabled={selecting !== undefined || Boolean(resumeRun)} onClick={() => void resumeAllIdle()}>
-        <Play size={13} aria-hidden="true" /> {selecting === ALL_PROJECTS ? "Reading idle goals…" : "Resume all idle"}
+        <Play size={13} aria-hidden="true" /> {selecting === ALL_PROJECTS ? "Reading idle goals…" : filteringStages ? `Resume idle in ${stageFilterSummary(stageFilter)}` : "Resume all idle"}
       </button>}
       {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} goal chats; search to narrow.</span>}
     </div>
@@ -861,7 +905,8 @@ export function ButlerModePage() {
     {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "goal chat" : "goal chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
     {boardError && <div className={styles.error} role="alert">{boardError} The board retries on its own.</div>}
     {!board && !boardError && <p className={styles.muted}>Reading every project's goal chats…</p>}
-    {board && groups.length === 0 && <p className={styles.empty}>{searching ? `No goal chats match “${search.trim()}”.` : "No goal chats yet."}</p>}
+    {board && filteringStages && <p className={styles.searchCount} role="status">Showing stage {stageFilterSummary(stageFilter)} · {stageTotal.toLocaleString()} {stageTotal === 1 ? "goal chat" : "goal chats"}. Hold and Resume act only on these. <button type="button" className={styles.link} onClick={() => setStageFilter(NO_STAGE_FILTER)}>Show all stages</button></p>}
+    {board && groups.length === 0 && <p className={styles.empty}>{searching ? `No goal chats match “${search.trim()}”${filteringStages ? ` in stage ${stageFilterSummary(stageFilter)}` : ""}.` : filteringStages ? `No goal chats in stage ${stageFilterSummary(stageFilter)}.` : "No goal chats yet."}</p>}
     {groups.map((group) => {
       const sections = group.sections.filter((entry) => entry.count > 0 || entry.items.length > 0);
       if (group.label === undefined) return <div key={group.key} className={styles.group}>{sections.map((entry) => sectionView(group, entry))}</div>;
