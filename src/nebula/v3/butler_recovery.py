@@ -195,7 +195,16 @@ _GLOBAL_INSTRUCTIONS = (
     "replies, read its exact dialogue turn with nebula.work.await_chat_result "
     "or nebula.global.work_read and continue that conversation in this same "
     "check-in before concluding it. Do not message another main agent's child "
-    "agents. Report exact Core results, not predicted outcomes."
+    "agents. Report exact Core results, not predicted outcomes. "
+    "When the operator has enabled supervisor powers, nebula.supervisor.* "
+    "operations are listed: Core has already run goal hygiene before this check. "
+    "Use shell, signal and runner_control only to diagnose and repair lab "
+    "infrastructure, stating the reason; prefer run_gate for any check a "
+    "committed script covers and act on gate.passed. Run repo_audit after goals "
+    "commit and restore only exact paths a finding names. A goal's own closure "
+    "is a claim: obtain nebula.supervisor.independent_review before completing "
+    "it, and never write or quote a review verdict yourself. Operator-only "
+    "actions stay with the operator; report them instead of attempting them."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
 
@@ -1371,8 +1380,44 @@ class ButlerRecoveryService:
                         expected_revision=current.revision,
                     )
                 )
+        (await self._run_goal_hygiene())
         (await self._share_host_runtime(project_id))
         return True
+
+    async def _run_goal_hygiene(self) -> None:
+        """Run deterministic goal hygiene before the check's Butler case exists.
+
+        Off unless the operator enables the supervisor policy and names
+        hygiene projects; a failure is recorded and the check still runs.
+        """
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            policy = load_policy()
+            work = getattr(self.agent, "work", None)
+            if not policy.enabled or not policy.hygiene_project_ids or work is None:
+                return
+            from .butler_goal_hygiene import run_hygiene_tick
+
+            result = await run_hygiene_tick(self.store, work, policy)
+            record_diagnostic(
+                "info",
+                "butler",
+                "butler.goal_hygiene.tick",
+                "Butler goal hygiene ran before the global periodic check.",
+                outcome="completed",
+                stage="goal-hygiene",
+                metadata={"counts": result["counts"], "errors": len(result["errors"])},
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.goal_hygiene.failed",
+                "Butler goal hygiene failed; the periodic check continues.",
+                exc,
+                stage="goal-hygiene",
+            )
 
     async def _share_host_runtime(self, project_id: str) -> None:
         """Publish the host's Butler chat as the Nebula-wide default runtime.

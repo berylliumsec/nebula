@@ -2007,6 +2007,12 @@ def create_execution_kernel(
             )
             raise ProviderError(str(exc)) from exc
 
+    from .butler_independent_review import set_review_provider_factory
+
+    # Butler's independent closure reviewer resolves its operator-chosen
+    # profile through the same credential-aware factory.
+    set_review_provider_factory(provider_factory)
+
     def chat_provider_factory(profile: ProviderProfile):
         # Keep ChatService's provider seam available to embedders, but resolve
         # opaque Core-managed references before a request leaves the process.

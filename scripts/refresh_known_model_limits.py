@@ -52,6 +52,8 @@ FIRST_PARTY_OVERRIDES: dict[str, tuple[int, int | None]] = {
     "claude-3-5-haiku": (200_000, 8_192),
     "claude-3-5-sonnet": (200_000, 8_192),
     "claude-3-7-sonnet": (200_000, 64_000),
+    # Butler's default independent reviewer; same window as claude-opus-5.
+    "claude-opus-5-5": (1_000_000, 128_000),
     # DeepSeek API names (api-docs.deepseek.com). The legacy chat/reasoner
     # aliases keep their historical 128K API window as a conservative floor.
     "deepseek-flash": (1_048_576, 384_000),

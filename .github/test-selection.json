@@ -1,36 +1,30 @@
 {
-  "change_digest": "2efabdc636e568febd1271d1ae23890670c63024fc30cfa2b1f20729cf441900",
-  "reviewed_by": "Claude: chat Work stage inherits parent stages and reaches Subprojects list",
-  "reason": "Running goal chats in research subprojects showed no Work stage. chat_work_stage labelled a stage only from the item's own project, but subprojects inherit their nearest ancestor's stages (WorkService.effective_stages, Work page effectiveStages); the join now walks ancestors one level per query. The parent's Subprojects list (GET /chat/projects/{id}/linked-chats) never joined the stage and ChildProjectConversations never rendered it; Core now adds metadata.work_stage there and the row shows WorkStageLabel with the stage in its accessible name. Python selects the global project read tests (new ancestor/shadowing/linked-chats case), chat-session recent page tests and the product-help stage tests plus index digest. Frontend selects ChildProjectConversations (new stage row test) and workStages. Playwright selects area:child-project-chats (real Core on a LAN origin, desktop, compact, Chromium and WebKit 320/390/430) whose fixture now stages one subproject chat from the parent's stages, and conversation-order/model-desktop because its fixture module changed.",
-  "exclusions": "Butler board and header rendering are unchanged (they already read metadata.work_stage); area:butler-sidebar is not reselected. No native code changed. No full-suite approval.",
+  "change_digest": "aa7deeb06a497e9d0df81418227b9319c211b1da74af77bed8c615cb360b9da9",
+  "reviewed_by": "Claude: Butler supervisor powers behind an operator kill switch",
+  "reason": "Adds Butler nebula.supervisor.* capabilities (audited shell/SSH, signals, runner control, repository publish, committed gate runs, cross-goal repo forensics, independent closure review on a different model, deterministic goal hygiene) behind NEBULA_BUTLER_SUPERVISOR_ENABLED, plus a no-self-approval gate in ControlAssistantWork.goal_action and claude-opus-5-5 limits. Python selects the three new suites (guardrails, audit, kill switch, real subprocess host tools, forensics on temp git repos, review gate and verdict application, hygiene against ChatGoalService/WorkService and real create_app ControlAssistantWork), the existing goal_action/goal-chat suites that exercise the edited goal_action path, test_context for model limits, and product-help discovery of the new settings-assistant row with the index digest.",
+  "exclusions": "tests/v3/test_butler_capabilities.py and tests/v3/test_butler_recovery.py exercise the edited gateway and recovery hook and were run locally (only failures: test_scheduled_butler_can_edit_all_assistant_settings and test_act_switches_worker_to_provider_and_queues_only_the_parent, both failing identically on unmodified origin/main 6f6bb821); they are not selected so CI does not fail on those pre-existing defects. No UI, frontend, native or Playwright change: the feature is configured by Core service environment variables and reached through Butler's existing gateway. Local runs used Python 3.11.7. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 23,
-    "frontend": 15,
+    "python": 250,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_global_project_reads.py",
-    "tests/v3/test_chat_session_recent_page.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_a_chats_project_work_stage",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_check_stage_labels"
+    "tests/v3/test_butler_supervisor_powers.py",
+    "tests/v3/test_butler_repo_forensics.py",
+    "tests/v3/test_butler_goal_hygiene.py",
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_butler_goal_chat_proposals.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
-  "frontend": [
-    "ui/src/pages/ChildProjectConversations.test.tsx",
-    "ui/src/pages/workStages.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:child-project-chats",
-    "conversation-order/model-desktop"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": []
 }

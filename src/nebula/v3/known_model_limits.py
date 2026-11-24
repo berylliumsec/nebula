@@ -23,6 +23,7 @@ KNOWN_MODEL_LIMITS: dict[str, tuple[int, int | None]] = {
     "claude-opus-4-7": (1000000, 128000),
     "claude-opus-4-8": (1000000, 128000),
     "claude-opus-5": (1000000, 128000),
+    "claude-opus-5-5": (1000000, 128000),
     "claude-sonnet-4": (200000, 64000),
     "claude-sonnet-4-5": (200000, 64000),
     "claude-sonnet-4-6": (1000000, 128000),
