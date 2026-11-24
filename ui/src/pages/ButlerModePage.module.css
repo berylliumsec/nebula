@@ -451,6 +451,7 @@
 }
 
 .boardToolbar {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -559,6 +560,15 @@
 }
 
 .option:hover { background: var(--surface-hover); }
+
+/* The stage filter: a stage per row with its goal chats on the right. */
+.select[data-active="true"] { border-color: var(--focus); }
+/* The stage list opens from the toolbar's left edge, so it stays in view
+   wherever the Stage button wraps, down to 320 px. */
+.stageControl { position: static; }
+.stagePopover { width: min(300px, 100%); max-height: min(420px, 70vh); overflow-y: auto; }
+.optionLabel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.optionCount { color: var(--muted); font-size: var(--type-meta); font-variant-numeric: tabular-nums; }
 
 .group {
   display: flex;

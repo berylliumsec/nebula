@@ -40,24 +40,7 @@ async def work_stages_for_chats(
     if not ids or not projects:
         return {}
     assignee = EntityRow.payload["assignee_session_id"].as_string()
-    rows = (
-        await database.scalars(
-            select(EntityRow.payload)
-            .where(
-                EntityRow.kind == WorkItem.entity_kind,
-                EntityRow.engagement_id.in_(projects),
-                assignee.in_(ids),
-                EntityRow.payload["status"].as_string() != "done",
-            )
-            .order_by(EntityRow.updated_at.desc(), EntityRow.id.desc())
-        )
-    ).all()
-    newest: dict[str, WorkItem] = {}
-    for payload in rows:
-        item = decode_stored(WorkItem, payload)
-        if item.assignee_session_id and item.assignee_session_id not in newest:
-            newest[item.assignee_session_id] = item
-    staged = {sid: item for sid, item in newest.items() if item.stage}
+    staged = await _newest_staged_items(database, projects, assignee.in_(ids))
     if not staged:
         return {}
     labels = await _effective_stage_labels(
@@ -76,6 +59,67 @@ async def work_stages_for_chats(
             "item_status": item.status,
         }
     return found
+
+
+async def work_stage_labels_in_projects(
+    database: AsyncSession, engagement_ids: Iterable[str]
+) -> tuple[dict[str, str], dict[str, int]]:
+    """Every staged chat's stage label in these projects, and each label's rank.
+
+    The board filters and counts goal chats by stage across projects, so it
+    names a stage by its label ("Recon"), not by a project's key. The first
+    map is chat ID to label; the second ranks each label by the earliest
+    position any project gives it, so the filter lists stages in pipeline
+    order. Like ``work_stages_for_chats``, a chat's stage is its newest open
+    assigned item's, labelled by its project or nearest ancestor.
+    """
+
+    projects = {value for value in engagement_ids if value}
+    if not projects:
+        return {}, {}
+    assignee = EntityRow.payload["assignee_session_id"].as_string()
+    staged = await _newest_staged_items(database, projects, assignee.is_not(None))
+    if not staged:
+        return {}, {}
+    labels = await _effective_stage_labels(
+        database, {item.engagement_id for item in staged.values()}
+    )
+    by_chat: dict[str, str] = {}
+    rank: dict[str, int] = {}
+    for sid, item in staged.items():
+        project_labels = labels.get(item.engagement_id, {})
+        label = project_labels.get(str(item.stage))
+        if label is None:
+            continue
+        by_chat[sid] = label
+        position = list(project_labels).index(str(item.stage))
+        rank[label] = min(rank.get(label, position), position)
+    return by_chat, rank
+
+
+async def _newest_staged_items(
+    database: AsyncSession, projects: set[str], assigned: Any
+) -> dict[str, WorkItem]:
+    """Each assigned chat's newest open Work item, when that item has a stage."""
+
+    rows = (
+        await database.scalars(
+            select(EntityRow.payload)
+            .where(
+                EntityRow.kind == WorkItem.entity_kind,
+                EntityRow.engagement_id.in_(projects),
+                assigned,
+                EntityRow.payload["status"].as_string() != "done",
+            )
+            .order_by(EntityRow.updated_at.desc(), EntityRow.id.desc())
+        )
+    ).all()
+    newest: dict[str, WorkItem] = {}
+    for payload in rows:
+        item = decode_stored(WorkItem, payload)
+        if item.assignee_session_id and item.assignee_session_id not in newest:
+            newest[item.assignee_session_id] = item
+    return {sid: item for sid, item in newest.items() if item.stage}
 
 
 async def _effective_stage_labels(

@@ -382,3 +382,105 @@ it("shows Butler's case stage on a goal card and offers its Butler check", async
   await userEvent.click(within(card).getByRole("button", { expanded: false }));
   expect(await screen.findByText("Brief Fuzz parser · Butler · Needs you · opens check")).toBeInTheDocument();
 });
+
+describe("stage filter", () => {
+  const stagedPoll = {
+    ...poll,
+    stages: [{ label: "Recon", counts: { active: 1, idle: 0, completed: 0 } }, { label: "Validation", counts: { active: 1, idle: 1, completed: 0 } }],
+    no_stage: { active: 0, idle: 0, completed: 2 },
+  };
+  const reconPoll = {
+    ...stagedPoll,
+    counts: { active: 1, idle: 0, completed: 0 },
+    projects: [{ ...research, counts: { active: 1, idle: 0, completed: 0 } }],
+    items: [{ ...wire("Fuzz parser", research, "active", "working", "running", "Working"), work_stage: { key: "recon", label: "Recon", item_id: "w1", item_title: "Recon", item_status: "in_progress" } }],
+  };
+  const serve = (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    if (path.includes("stage=Recon") && path.includes("section=idle")) return { value: { ...reconPoll, items: [] }, etag: '"ri"' };
+    if (path.includes("stage=Recon")) return { value: reconPoll, etag: '"r"' };
+    return { value: stagedPoll, etag: '"b"' };
+  };
+
+  it("narrows the board to a chosen stage with counts, remembers it, and clears it", async () => {
+    requestIfChanged.mockImplementation(async (path: string) => serve(path));
+    const view = mount();
+    const board = screen.getByRole("region", { name: "Status board" });
+    await within(board).findByRole("article", { name: "Install driver: Needs you, Active" });
+
+    await userEvent.click(within(board).getByRole("button", { name: "Filter by stage: All" }));
+    const picker = within(board).getByRole("dialog", { name: "Filter by stage" });
+    const options = within(picker).getAllByRole("checkbox");
+    expect(options.map((option) => option.closest("label")?.textContent)).toEqual(["Recon1", "Validation2", "No stage2"]);
+    await userEvent.click(within(picker).getByRole("checkbox", { name: /Recon/ }));
+
+    await waitFor(() => expect(requestIfChanged).toHaveBeenCalledWith("butler/board?stage=Recon", undefined, expect.anything()));
+    await within(board).findByText(/Showing stage Recon · 1 goal chat\. Hold and Resume act only on these\./);
+    await waitFor(() => expect(within(board).queryByRole("article", { name: "Install driver: Needs you, Active" })).not.toBeInTheDocument());
+    expect(within(board).getByRole("article", { name: /^Fuzz parser: Working, Active, / })).toBeInTheDocument();
+    expect(within(board).getByRole("button", { name: "Hold active in Recon" })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("nebula.butler-mode.stage-filter")!)).toEqual({ labels: ["Recon"], noStage: false });
+
+    // A reload restores the remembered stage.
+    view.unmount();
+    requestIfChanged.mockClear();
+    mount();
+    const again = screen.getByRole("region", { name: "Status board" });
+    await within(again).findByRole("button", { name: "Filter by stage: Recon" });
+    await waitFor(() => expect(requestIfChanged).toHaveBeenCalledWith("butler/board?stage=Recon", undefined, expect.anything()));
+
+    await userEvent.click(within(again).getByRole("button", { name: "Clear stage filter" }));
+    await within(again).findByRole("button", { name: "Filter by stage: All" });
+    await within(again).findByRole("article", { name: "Install driver: Needs you, Active" });
+    expect(within(again).getByRole("button", { name: "Hold all active" })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("nebula.butler-mode.stage-filter")!)).toEqual({ labels: [], noStage: false });
+  });
+
+  it("holds only the filtered running chats, by name", async () => {
+    localStorage.setItem("nebula.butler-mode.stage-filter", JSON.stringify({ labels: ["Recon"], noStage: false }));
+    requestIfChanged.mockImplementation(async (path: string) => serve(path));
+    holdChats.mockResolvedValue({ batchId: "b1", sessionIds: ["Fuzz parser"] });
+    mount();
+    const board = screen.getByRole("region", { name: "Status board" });
+    await within(board).findByRole("article", { name: /^Fuzz parser: Working, Active, / });
+
+    await userEvent.click(within(board).getByRole("button", { name: "Hold active in Recon" }));
+    await within(board).findByText("Held 1 chat");
+    expect(holdChats).toHaveBeenCalledTimes(1);
+    expect(holdChats).toHaveBeenCalledWith("p1", { sessionIds: ["Fuzz parser"], allActive: undefined });
+  });
+
+  it("Resume idle reads only the filtered stage's idle goals and says so", async () => {
+    localStorage.setItem("nebula.butler-mode.stage-filter", JSON.stringify({ labels: ["Recon"], noStage: false }));
+    const withIdle = { ...reconPoll, counts: { active: 1, idle: 1, completed: 0 } };
+    const idleRecon = { ...withIdle, items: [{ ...wire("Paused recon", research, "idle", "idle", "paused", "Paused") }] };
+    requestIfChanged.mockImplementation(async (path: string) => {
+      if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+      if (path.includes("section=idle")) return { value: idleRecon, etag: '"i"' };
+      return { value: withIdle, etag: '"r"' };
+    });
+    confirm.mockResolvedValue(false);
+    mount();
+    const board = screen.getByRole("region", { name: "Status board" });
+    await userEvent.click(await within(board).findByRole("button", { name: "Resume idle in Recon" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(requestIfChanged).toHaveBeenCalledWith("butler/board?section=idle&limit=200&stage=Recon", undefined, { signal: undefined });
+    expect(confirm.mock.calls[0][0].message).toContain("in stage Recon");
+    expect(confirm.mock.calls[0][0].message).toContain("Goals in other stages are not resumed.");
+    expect(writeChatGoal).not.toHaveBeenCalled();
+  });
+
+  it("says when no goal chat is in the chosen stage and offers every stage again", async () => {
+    localStorage.setItem("nebula.butler-mode.stage-filter", JSON.stringify({ labels: ["Shipping"], noStage: false }));
+    const empty = { ...stagedPoll, counts: { active: 0, idle: 0, completed: 0 }, projects: [], items: [] };
+    requestIfChanged.mockImplementation(async (path: string) => path.startsWith("butler/threads") ? { value: { items: [] }, etag: '"t"' } : { value: empty, etag: '"e"' });
+    mount();
+    const board = screen.getByRole("region", { name: "Status board" });
+    await within(board).findByText("No goal chats in stage Shipping.");
+    await userEvent.click(within(board).getByRole("button", { name: "Filter by stage: Shipping" }));
+    const picker = within(board).getByRole("dialog", { name: "Filter by stage" });
+    expect(within(picker).getByRole("checkbox", { name: /Shipping/ })).toBeChecked();
+    await userEvent.click(within(picker).getByRole("button", { name: "Show all stages" }));
+    await within(board).findByRole("button", { name: "Filter by stage: All" });
+  });
+});

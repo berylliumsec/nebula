@@ -1,30 +1,36 @@
 {
-  "change_digest": "aa7deeb06a497e9d0df81418227b9319c211b1da74af77bed8c615cb360b9da9",
-  "reviewed_by": "Claude: Butler supervisor powers behind an operator kill switch",
-  "reason": "Adds Butler nebula.supervisor.* capabilities (audited shell/SSH, signals, runner control, repository publish, committed gate runs, cross-goal repo forensics, independent closure review on a different model, deterministic goal hygiene) behind NEBULA_BUTLER_SUPERVISOR_ENABLED, plus a no-self-approval gate in ControlAssistantWork.goal_action and claude-opus-5-5 limits. Python selects the three new suites (guardrails, audit, kill switch, real subprocess host tools, forensics on temp git repos, review gate and verdict application, hygiene against ChatGoalService/WorkService and real create_app ControlAssistantWork), the existing goal_action/goal-chat suites that exercise the edited goal_action path, test_context for model limits, and product-help discovery of the new settings-assistant row with the index digest.",
-  "exclusions": "tests/v3/test_butler_capabilities.py and tests/v3/test_butler_recovery.py exercise the edited gateway and recovery hook and were run locally (only failures: test_scheduled_butler_can_edit_all_assistant_settings and test_act_switches_worker_to_provider_and_queues_only_the_parent, both failing identically on unmodified origin/main 6f6bb821); they are not selected so CI does not fail on those pre-existing defects. No UI, frontend, native or Playwright change: the feature is configured by Core service environment variables and reached through Butler's existing gateway. Local runs used Python 3.11.7. No full-suite approval.",
+  "change_digest": "5badc0c267824171ee7d171a60da5df6f55a0b9bd34b19a36b91fddf11e7ae54",
+  "reviewed_by": "Claude: Butler board stage filter",
+  "reason": "Adds a Stage filter to the Butler board (All projects goal view). Core's GET /butler/board accepts repeatable stage=<label> and no_stage=true, matches labels case-insensitively across projects (subprojects use their nearest parent's stages via chat_work_stage), returns per-stage and no-stage counts that ignore the stage filter, and keeps the header's needs-you/working states unfiltered. The board sends the filter on the poll, Completed pages, Select all and Resume idle; Hold acts only on the filtered running chats by name; the filter is remembered on the device. Python selects the global project read tests (new stage filter/count test plus the existing Work stage and board reads), chat holds (the hold route the filtered Hold uses), and product help for the new section with the index digest. Frontend selects the board client, the Butler board page and the destination discovery test. Playwright selects area:butler-mode, whose real-Core LAN journey gains a stage-filter step; ui/playwright.config.ts restores the butler-mode spec to the assistant-real projects' testMatch, which #1207 dropped, so the catalogued area collects again.",
+  "exclusions": "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails identically on unmodified origin/main 9a40ef34 and is not selected. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No native code changed. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 250,
-    "frontend": 0,
+    "python": 34,
+    "frontend": 37,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_butler_supervisor_powers.py",
-    "tests/v3/test_butler_repo_forensics.py",
-    "tests/v3/test_butler_goal_hygiene.py",
-    "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_butler_goal_chat_proposals.py",
-    "tests/v3/test_context.py",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
+    "tests/v3/test_runtime_global_project_reads.py",
+    "tests/v3/test_chat_holds.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_a_chats_project_work_stage",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_the_butler_board_stage_filter"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/butlerBoard.test.ts",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/assistantDestinations.stageFilter.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:butler-mode"
+  ],
+  "checks": [
+    "frontend-audit"
+  ]
 }

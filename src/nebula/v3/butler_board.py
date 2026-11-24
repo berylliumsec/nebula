@@ -13,8 +13,10 @@ never from a scan of every project's turns. A card also carries Butler's newest 
 that Butler is investigating it or needs them, and the project Work stage
 of the Work item assigned to it. Chats without a goal, Butler's own
 conversations, side chats, subagent chats and archived projects or chats are
-never listed. Both the supervisor's API worker and the single-process app
-mount this route.
+never listed. The operator can narrow the board to goal chats in chosen Work
+stages (by label, across projects) or with no stage; every read counts the
+searched goal chats per stage so the filter shows what each choice holds.
+Both the supervisor's API worker and the single-process app mount this route.
 """
 
 from __future__ import annotations
@@ -31,7 +33,7 @@ from sqlalchemy.orm import aliased
 
 from .work_priority import marked_high
 from .butler_case_stage import cases_for_goal_chats
-from .chat_work_stage import work_stages_for_chats
+from .chat_work_stage import work_stage_labels_in_projects, work_stages_for_chats
 from .stored_entities import decode_stored
 from .chat_subagents import is_subagent_session
 from .chat_turn_headers import (
@@ -90,6 +92,8 @@ POLLED: tuple[BoardSection, ...] = ("active", "idle")
 MAX_SECTION_ITEMS = 500
 _STATE_ORDER = {"waiting": 0, "working": 1, "failed": 2, "idle": 3}
 _SUMMARY_CHARACTERS = 160
+# The board's stage filter names at most this many stages at once.
+MAX_STAGE_FILTERS = 50
 # A blocked reason up to this long is shown on the card's status line.
 _SHORT_REASON_CHARACTERS = 80
 
@@ -308,6 +312,8 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
         state: Literal["active", "idle"] | None = None,
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=200),
+        stage: list[str] = Query(default_factory=list, max_length=MAX_STAGE_FILTERS),
+        no_stage: bool = False,
     ) -> Any:
         """Goal chats across every project in Active, Idle and Completed.
 
@@ -318,34 +324,71 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
         (``project_id``). Every answer carries exact section counts in total
         and per project, and the poll also counts Active chats by turn state.
         ``state=idle`` is the older spelling of ``section=idle``.
+
+        ``stage`` (repeatable, a Work stage label, any case) and ``no_stage``
+        narrow every list and count to goal chats in those stages or with no
+        stage. ``states`` (the header's needs-you and working counts) stays
+        unfiltered, so a filter never hides a chat waiting on the operator.
+        ``stages`` and ``no_stage`` count the searched goal chats per stage
+        and section, ignoring the stage filter.
         """
 
         response.headers["Cache-Control"] = "no-store"
         chats = _GoalChats(q.strip())
         if section is None and state == "idle":
             section = "idle"
+        wanted_stages = {
+            label for value in stage if (label := " ".join(value.split()).casefold())
+        }
+        filtering = bool(wanted_stages) or no_stage
         async with store.database.session() as database:
-            by_status = list(
+            goal_rows = list(
                 await database.execute(
                     chats.select(
-                        chats.goal.engagement_id,
-                        chats.status,
-                        func.count(func.distinct(EntityRow.id)),
-                    ).group_by(chats.goal.engagement_id, chats.status)
+                        chats.goal.engagement_id, chats.status, EntityRow.id
+                    ).distinct()
                 )
             )
+            stage_of, stage_rank = await work_stage_labels_in_projects(
+                database, {str(row[0]) for row in goal_rows}
+            )
+
+            def selected(session_id: str) -> bool:
+                label = stage_of.get(session_id)
+                if label is None:
+                    return no_stage
+                return label.casefold() in wanted_stages
+
             project_counts: dict[str, dict[str, int]] = {}
+            # Per case-folded label: section counts and each spelling's chats.
+            stage_counts: dict[str, dict[str, int]] = {}
+            spellings: dict[str, dict[str, int]] = {}
+            unstaged = dict.fromkeys(SECTIONS, 0)
             proposals = 0
-            for engagement_id, status, count in by_status:
+            matching: set[str] = set()
+            for engagement_id, status, session_id in goal_rows:
                 listed_section = _SECTION_OF_STATUS.get(str(status))
                 if listed_section is None:
                     continue
+                if status == ChatGoalStatus.DRAFT.value:
+                    proposals += 1
+                label = stage_of.get(str(session_id))
+                if label is None:
+                    unstaged[listed_section] += 1
+                else:
+                    folded = label.casefold()
+                    stage_counts.setdefault(folded, dict.fromkeys(SECTIONS, 0))[
+                        listed_section
+                    ] += 1
+                    spelled = spellings.setdefault(folded, {})
+                    spelled[label] = spelled.get(label, 0) + 1
+                if filtering and not selected(str(session_id)):
+                    continue
+                matching.add(str(session_id))
                 counts = project_counts.setdefault(
                     str(engagement_id), dict.fromkeys(SECTIONS, 0)
                 )
-                counts[listed_section] += int(count)
-                if status == ChatGoalStatus.DRAFT.value:
-                    proposals += int(count)
+                counts[listed_section] += 1
             names: dict[str, str] = {}
             if project_counts:
                 for engagement_id, name in await database.execute(
@@ -361,6 +404,9 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 statement = chats.rows(name)
                 if project_id:
                     statement = statement.where(chats.goal.engagement_id == project_id)
+                if filtering and name != "active":
+                    # Active is filtered after its turn states are counted.
+                    statement = statement.where(EntityRow.id.in_(matching))
                 if section is None or section == "active":
                     # Active is ordered by turn state, which SQL cannot see.
                     statement = statement.limit(MAX_SECTION_ITEMS + 1)
@@ -434,6 +480,10 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 section_entries.append((chat, goal, project_name, turn_state, header))
             entries[name] = section_entries
 
+        folded_rank: dict[str, int] = {}
+        for label, position in stage_rank.items():
+            folded = label.casefold()
+            folded_rank[folded] = min(folded_rank.get(folded, position), position)
         totals = {
             name: sum(counts[name] for counts in project_counts.values())
             for name in SECTIONS
@@ -444,6 +494,12 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             for entry in entries["active"]:
                 if entry[3] in states:
                     states[entry[3]] += 1
+        # Core listed at most MAX_SECTION_ITEMS + 1 Active chats before the filter.
+        active_cut = len(entries.get("active", [])) > MAX_SECTION_ITEMS
+        if "active" in entries and filtering:
+            entries["active"] = [
+                entry for entry in entries["active"] if entry[0].id in matching
+            ]
         if "active" in entries:
             entries["active"].sort(
                 key=lambda item: (item[0].updated_at, item[0].id), reverse=True
@@ -458,9 +514,10 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             for name in POLLED:
                 truncated = truncated or len(entries[name]) > MAX_SECTION_ITEMS
                 shown += [(name, entry) for entry in entries[name][:MAX_SECTION_ITEMS]]
+            truncated = truncated or active_cut
         elif section == "active":
             page = entries["active"][offset : offset + limit + 1]
-            truncated = len(entries["active"]) > MAX_SECTION_ITEMS
+            truncated = active_cut
             next_offset = offset + limit if len(page) > limit else None
             shown = [("active", entry) for entry in page[:limit]]
         else:
@@ -512,6 +569,24 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                 ),
                 key=lambda item: (str(item["name"]).casefold(), str(item["id"])),
             ),
+            "stages": [
+                {
+                    # Projects may spell a stage differently ("Recon",
+                    # "recon"); show the spelling most chats use.
+                    "label": min(
+                        spellings[folded].items(), key=lambda item: (-item[1], item[0])
+                    )[0],
+                    "counts": stage_counts[folded],
+                }
+                for folded in sorted(
+                    stage_counts,
+                    key=lambda folded: (
+                        folded_rank.get(folded, len(folded_rank)),
+                        folded,
+                    ),
+                )
+            ],
+            "no_stage": unstaged,
             "section": section,
             "items": items,
             "next_offset": next_offset,

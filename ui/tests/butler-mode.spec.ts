@@ -421,6 +421,52 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await board.getByRole("button", {name: "Clear search"}).click();
       await expect(card).toBeVisible();
 
+      // Stage filter: with the working chat assigned a Recon item, Stage beside
+      // Group lists Recon and No stage with counts, narrows the board through
+      // Core, survives a reload on this device, and scopes the bulk actions.
+      const bountyRevision = (await (await api.get(`engagements/${bounty}`)).json() as {revision: number}).revision;
+      const stagesSaved = await coreMutation(api, "patch", `engagements/${bounty}/work/stages`, {stages: [{key: "recon", label: "Recon"}, {key: "lanes", label: "Lanes"}], expected_revision: bountyRevision});
+      expect(stagesSaved.ok(), await stagesSaved.text()).toBe(true);
+      const reconItem = await coreMutation(api, "post", `engagements/${bounty}/work`, {title: "Map the parser", stage: "recon", assignee_session_id: workId});
+      expect(reconItem.ok(), await reconItem.text()).toBe(true);
+      const reconItemId = (await reconItem.json() as {id: string}).id;
+      const stagedCard = board.getByRole("article", {name: new RegExp(`^${titlePattern}: Working, Active, Work stage Recon`)});
+      await expect(stagedCard).toBeVisible({timeout: 60_000});
+      const stageControl = board.getByRole("button", {name: "Filter by stage: All"});
+      const stageBox = await stageControl.boundingBox();
+      expect(stageBox && stageBox.x >= 0 && stageBox.x + stageBox.width <= width + 1, `stage filter fits ${width}px`).toBe(true);
+      await stageControl.click();
+      const stagePicker = board.getByRole("dialog", {name: "Filter by stage"});
+      await expect(stagePicker.getByRole("checkbox", {name: /Recon/})).toBeVisible();
+      await expect(stagePicker.locator("label").filter({hasText: "Recon"})).toContainText("1");
+      await expect(stagePicker.locator("label").filter({hasText: "No stage"})).toContainText("2");
+      const pickerBox = await stagePicker.boundingBox();
+      expect(pickerBox && pickerBox.x >= 0 && pickerBox.x + pickerBox.width <= width + 1, `stage picker fits ${width}px`).toBe(true);
+      expect((await new AxeBuilder({page}).include("[aria-label='Filter by stage']").analyze()).violations).toEqual([]);
+      await stagePicker.getByRole("checkbox", {name: /Recon/}).check();
+      await page.keyboard.press("Escape");
+      await expect(stagePicker).toHaveCount(0);
+      await expect(board.getByRole("status").filter({hasText: "Showing stage Recon · 1 goal chat. Hold and Resume act only on these."})).toBeVisible({timeout: 60_000});
+      await expect(proposal).toHaveCount(0);
+      await expect(stagedCard).toBeVisible();
+      await expect(board.getByRole("button", {name: "Hold active in Recon"})).toBeVisible();
+      const filteredRead = await (await api.get("butler/board?stage=Recon")).json() as Board & {stages: Array<{label: string}>};
+      expect(filteredRead.items.map(item => item.session_id)).toEqual([workId]);
+      expect(filteredRead.stages.map(stage => stage.label)).toEqual(["Recon"]);
+      await page.reload();
+      await showBoard(page);
+      await expect(board.getByRole("button", {name: "Filter by stage: Recon"})).toBeVisible({timeout: 60_000});
+      await expect(stagedCard).toBeVisible({timeout: 60_000});
+      await expect(proposal).toHaveCount(0);
+      await board.getByRole("button", {name: "Clear stage filter"}).click();
+      await expect(board.getByRole("button", {name: "Filter by stage: All"})).toBeVisible();
+      await expect(proposal).toBeVisible({timeout: 60_000});
+      await expect(board.getByRole("button", {name: "Hold all active"})).toBeVisible();
+      // Unassign the item so the rest of the journey reads the card as before.
+      const unassigned = await coreMutation(api, "patch", `engagements/${bounty}/work/${reconItemId}`, {assignee_session_id: null});
+      expect(unassigned.ok(), await unassigned.text()).toBe(true);
+      await expect(card).toBeVisible({timeout: 60_000});
+
       await showThreads(page);
       await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(research);
       // Two threads: the first is still being answered when the second finishes.
@@ -637,7 +683,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect(page.getByRole("heading", {name: "Butler", exact: true})).toBeVisible();
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the proposed goal had no checkbox, a ticked paused card resumed through Resume 1, and Resume all idle confirmed and resumed it again while leaving the proposal a draft; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core; All projects opened the Projects page and Back returned to Butler mode."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; Stage beside Group listed Recon and No stage with counts, narrowed the board through Core to the Recon chat with Hold and Resume scoped to it, kept the filter across a reload, and Clear stage filter restored every chat; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the proposed goal had no checkbox, a ticked paused card resumed through Resume 1, and Resume all idle confirmed and resumed it again while leaving the proposal a draft; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core; All projects opened the Projects page and Back returned to Butler mode."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }
