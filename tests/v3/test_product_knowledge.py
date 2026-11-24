@@ -77,6 +77,7 @@ def test_product_help_explains_butler_supervisor_powers(monkeypatch):
     assert "kill switch" in text
     assert "independent-review" in text
 
+
 def test_product_help_explains_a_chats_project_work_stage(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
