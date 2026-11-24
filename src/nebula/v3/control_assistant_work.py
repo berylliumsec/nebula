@@ -2383,6 +2383,20 @@ class ControlAssistantWork:
         body = GoalWrite.model_validate(
             {key: value for key, value in arguments.items() if key != "session_id"}
         )
+        if body.action == "complete" and current.completion_requires_review:
+            # No self-approval: Butler may complete a goal that requires review
+            # only on a Core-recorded independent review of its current proposal
+            # by a model other than the goal's own. The operator's own route is
+            # unchanged.
+            from .butler_independent_review import independent_review_approves
+
+            approved, why = independent_review_approves(current, session.model)
+            if not approved:
+                raise PermissionError(
+                    "Butler cannot approve this completion: "
+                    + why
+                    + ". Run nebula.supervisor.independent_review, or leave it to the operator."
+                )
         await self._request(
             "POST",
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/actions",
