@@ -509,8 +509,8 @@ class _Tick:
         ) as exc:  # diagnostic-expected: recorded in the tick result and audit
             self.record(project_id, goal, "work_item", "failed", str(exc)[:500])
             return
-        item = created.get("item") if isinstance(created, dict) else None
-        item_id = item.get("id") if isinstance(item, dict) else None
+        created_item = created.get("item") if isinstance(created, dict) else None
+        item_id = created_item.get("id") if isinstance(created_item, dict) else None
         self.record(
             project_id,
             goal,

@@ -37,6 +37,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import record_caught_exception
+
 
 ENABLED_ENV = "NEBULA_BUTLER_SUPERVISOR_ENABLED"
 HOSTS_ENV = "NEBULA_BUTLER_SUPERVISOR_HOSTS"
@@ -390,6 +392,8 @@ def _segment_is_read_only(segment: str) -> bool:
     try:
         words = shlex.split(segment)
     except ValueError:
+        # diagnostic-expected: unbalanced quoting cannot be proven read-only,
+        # so the segment is treated as a write and refused by the caller.
         return False
     if not words:
         return True
@@ -423,6 +427,7 @@ def _is_private_ip(value: str) -> bool:
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
+        # diagnostic-expected: a host name is not an IP literal.
         return False
     return address.is_loopback
 
@@ -457,8 +462,17 @@ def screen_command(
     for raw in policy.operator_only_patterns:
         try:
             matched = re.search(raw, text, re.IGNORECASE) is not None
-        except re.error:
-            # A malformed operator pattern fails closed.
+        except re.error as exc:
+            # A malformed operator pattern fails closed, and the operator
+            # needs to see that their pattern is broken.
+            record_caught_exception(
+                "butler",
+                "butler.supervisor.operator_pattern_invalid",
+                "An operator-only pattern for Butler supervisor tools is not a "
+                "valid regular expression; matching commands are refused.",
+                exc,
+                stage="guardrails",
+            )
             matched = True
         if matched:
             raise GuardrailViolation(

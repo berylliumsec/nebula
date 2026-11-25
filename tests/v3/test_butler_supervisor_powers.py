@@ -800,3 +800,13 @@ def test_gateway_lists_supervisor_tools_only_while_enabled(
     }
     assert names == SUPERVISOR_ACTIONS
     assert SUPERVISOR_ACTIONS <= _BACKGROUND_CHANGES
+
+
+def test_malformed_operator_pattern_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(GuardrailViolation) as caught:
+        _screen(
+            tmp_path,
+            "ls -la",
+            NEBULA_BUTLER_SUPERVISOR_OPERATOR_ONLY_PATTERNS="([unclosed",
+        )
+    assert caught.value.rule == "operator_only_configured"

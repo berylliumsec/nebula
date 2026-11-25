@@ -1,45 +1,26 @@
 {
-  "change_digest": "ce0fb4c9fbfdaf83a86d744ee032c0c0256b26b32876cd94b40039d92e49f76c",
-  "reviewed_by": "Claude: iPhone app Butler mode parity",
-  "reason": "The iPhone app (NebulaShell/1.0) now shows the desktop Butler mode page as its Butler tab instead of the docked Butler panel. Shell routes gain /butler (ButlerModePage); /projects/<id>/butler and other project links redirect to /butler?project=<id>; the Projects tab bar and 'Ask Butler about' open it. In the shell, Butler mode hides Exit Butler mode, Esc exit, 'Open full Nebula' and the chat popup's 'Open in workbench' (there is no full Nebula behind it); More \u2192 All projects opens the Projects snapshot. The docked panel mode (docked/dockFooter, project select, CSS) is removed, and the shell's full-screen panel class no longer applies while Butler mode embeds the panel. Frontend selects the Butler mode board test (new iPhone-app case), the chat popup test (no workbench link), and the assistant/launcher tests for the removed docked mode. Playwright selects area:butler-mode for the desktop page this touches and the ios-assistant-only entries, whose mocked and real-Core LAN journeys are rewritten for Butler mode. Python selects the product index digest test for the settings-assistant doc change.",
-  "exclusions": "ios-assistant-only/assistant-real-webkit-390 is not selected: its outage step (Retry connection after core.restart) times out identically on unmodified origin/main d0f987d because WebKit self-recovers to the degraded banner; the same journey passes on assistant-real-chromium-390 and assistant-real-desktop. No native code changed (the iPhone app bundles this UI). No full-suite approval.",
+  "change_digest": "d436a4c6bcd49ffc9a3d2a5570f362f79612c495135bcd776fc7531a7e85cf0a",
+  "reviewed_by": "Claude: classify Butler supervisor except handlers",
+  "reason": "Main's python (3.12) job fails the diagnostic blind-spot audit on ten unclassified except handlers added in #1315. Expected outcomes (command timeout, already-exited process, shlex and IP-literal parse fallbacks) get diagnostic-expected reasons; guardrail refusals now re-raise explicitly at the call site after auditing; an unreadable ceiling-policy file, a failed forensics audit write and a malformed operator pattern (still fail-closed) are recorded with record_caught_exception. The audit itself runs in CI; Python selects the three Butler supervisor suites that exercise every changed handler, plus a new fail-closed regression for a malformed operator pattern. butler_goal_hygiene.py also renames a reused WorkItem-typed variable so the 3.12 mypy step passes. butler_board.py renames a loop variable that shadowed a walrus-bound str (from #1317) so the 3.12 mypy step passes; the board read tests are selected for it.",
+  "exclusions": "No behaviour change outside the four butler_* modules; no UI, native or Playwright change. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 1,
-    "frontend": 98,
+    "python": 117,
+    "frontend": 0,
     "native": 0,
-    "playwright": 20
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
+    "tests/v3/test_butler_supervisor_powers.py",
+    "tests/v3/test_butler_repo_forensics.py",
+    "tests/v3/test_butler_goal_hygiene.py",
+    "tests/v3/test_runtime_global_project_reads.py"
   ],
-  "frontend": [
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/pages/ButlerChatPopup.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/components/NebulaAssistantLauncher.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:butler-mode",
-    "ios-assistant-only/desktop",
-    "ios-assistant-only/compact",
-    "ios-assistant-only/mobile-chromium-small",
-    "ios-assistant-only/mobile-chromium",
-    "ios-assistant-only/mobile-chromium-wide",
-    "ios-assistant-only/mobile-webkit-small",
-    "ios-assistant-only/mobile-webkit",
-    "ios-assistant-only/mobile-webkit-wide",
-    "ios-assistant-only/browser-chromium-landscape",
-    "ios-assistant-only/browser-webkit-landscape",
-    "ios-assistant-only/assistant-real-desktop",
-    "ios-assistant-only/assistant-real-chromium-390"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": []
 }
