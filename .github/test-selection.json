@@ -1,16 +1,16 @@
 {
-  "change_digest": "40ef8c6952a517054e5f70c48965ac6c60d0d30b6d428dd5b1ce47e847bec2ac",
+  "change_digest": "f3fd996d86438ecc7853374177014662870625a366b0c41e202f844de95a464e",
   "reviewed_by": "Claude: Butler supervisor parity",
-  "reason": "Closes the gaps between Butler and an external campaign supervisor. Review gating: NOT_READY verdict, must-dos stored on the goal and enforced on Butler and goal completion, no completion approval by a Butler that steered the goal, forged sign-off detection, closure rate limit, reopen in place (chat_goals, chat_goal_tools, control_assistant_work, butler_independent_review, butler_review_gating). Stuck-turn cancel-and-resume and supervisor-note release conditions (butler_stuck_turns, butler_note_release, chat_goal_addenda, chat). Work check-in fabrication guard (work, checkin_fabrication_guard), log-writer heartbeat and recovery (diagnostics, log_writer_health), claude-opus-5-5 tool verification (providers). Butler on a Claude harness with Anthropic provider subagents and recovery goals off the Codex pin (harnesses, butler_sessions, butler_global_capabilities). Typed operator action requests on the Butler board (operator_action_requests, butler_board, board UI). Host probes and tmp cleanup (butler_host_probes) and tool registration plus periodic sweeps (butler_capabilities, butler_recovery). Python selects every new suite and the existing suites of each edited module; Frontend selects the board client and page tests; product help covers the doc rows.",
-  "exclusions": "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fail identically on unmodified origin/main and are not selected; registration is covered by test_butler_supervisor_powers. ui ButlerModePage.send.test.tsx fails on unmodified main (mock lacks isNebulaShell) and is not selected. No native change. No live provider call: Anthropic paths use fake transports. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No full-suite approval.",
+  "reason": "Closes the gaps between Butler and an external campaign supervisor. Review gating: NOT_READY verdict, must-dos stored on the goal and enforced on Butler and goal completion, no completion approval by a Butler that steered the goal, forged sign-off detection, closure rate limit, reopen in place (chat_goals, chat_goal_tools, control_assistant_work, butler_independent_review, butler_review_gating). Stuck-turn cancel-and-resume and supervisor-note release conditions (butler_stuck_turns, butler_note_release, chat_goal_addenda, chat). Work check-in fabrication guard (work, checkin_fabrication_guard), log-writer heartbeat and recovery (diagnostics, log_writer_health), claude-opus-5-5 tool verification (providers). Butler on a Claude harness with Anthropic provider subagents and recovery goals off the Codex pin (harnesses, butler_sessions, butler_global_capabilities). Typed operator action requests on the Butler board (operator_action_requests, butler_board, board UI). Host probes and tmp cleanup (butler_host_probes) and tool registration plus periodic sweeps (butler_capabilities, butler_recovery). Python selects every new suite and the existing suites of each edited module; Frontend selects the board client and page tests; product help covers the doc rows. Butler on a harness: Butler sessions never get a native shell; Claude existing-session login is checked on Check and Test turn and CLAUDE_CONFIG_DIR is no longer blanked; Butler subagents and the independent reviewer may run on any harness profile (harnesses, harness_diagnostics, chat_subagents, chat_assistant_config, butler_sessions, butler_recovery, butler_independent_review, execution_kernel); suites for each are selected, plus the harness settings and control assistant UI tests.",
+  "exclusions": "tests/v3/test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings and tests/v3/test_butler_recovery.py::test_act_switches_worker_to_provider_and_queues_only_the_parent fail identically on unmodified origin/main and are not selected; registration is covered by test_butler_supervisor_powers. ui ButlerModePage.send.test.tsx fails on unmodified main (mock lacks isNebulaShell) and is not selected. No native change. No live provider call: Anthropic paths use fake transports. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No full-suite approval. tests/v3/test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog and ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail on unmodified main and test_harnesses.py is not selected.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 635,
-    "frontend": 43,
+    "python": 719,
+    "frontend": 139,
     "native": 0,
     "playwright": 0
   },
@@ -41,11 +41,18 @@
     "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
     "tests/v3/test_work.py",
     "tests/v3/test_work_gateway.py",
-    "tests/v3/test_work_stages.py"
+    "tests/v3/test_work_stages.py",
+    "tests/v3/test_butler_harness_parity.py",
+    "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_butler_sessions.py",
+    "tests/v3/test_harness_test_turn_reason.py"
   ],
   "frontend": [
     "ui/src/api/butlerBoard.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx"
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/NebulaControlAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [],

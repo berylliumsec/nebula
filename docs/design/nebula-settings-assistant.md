@@ -1186,10 +1186,12 @@ Butler's saved **Subagents** switch and child runtime, effort, and active-child
 limit also apply to scheduled background checks once the operator has saved a
 choice. Butler's default delegation for a provider runtime applies only to direct
 conversations; an unattended check does not delegate until the operator turns the
-switch on and saves. A disabled switch remains off; children run in Butler mode
-on a provider model through Nebula's subagent tools, and a harness child saved
-before that rule makes a background check run without subagents (diagnostic
-`butler.recovery.harness_subagent_skipped`). Vendor-native delegation is not
+switch on and saves. A disabled switch remains off. Children run in Butler mode
+through Nebula's subagent tools, on a provider model or a harness profile. A
+harness child is a control-assistant harness session with Butler's Core tools
+and no native shell. A harness child that is disabled or no longer offers its
+model makes a background check run without subagents (diagnostic
+`butler.recovery.harness_subagent_unavailable`). Vendor-native delegation is not
 enabled by this setting for background checks.
 
 ## Butler subagents in direct conversations
@@ -1199,8 +1201,8 @@ runtime delegates multi-step or independent items to subagents, tells the
 operator what it started, and ends its reply, so the next request can be sent
 while children work. Turn this off in Butler settings with **Delegate longer
 work to subagents**; set **Running at once** to cap concurrent children. Each
-child runs in Butler mode on a provider model, with Butler's Core tools and the
-project's approvals, and posts its report into Butler's conversation when it
+child runs in Butler mode on a provider model or a harness profile, with
+Butler's Core tools and the project's approvals, and posts its report into Butler's conversation when it
 finishes. The Butler panel lists working and finished children above the
 composer and adds each report as Core posts it. Finished rows clear on the next
 request. **Subagents** opens Butler's saved conversation with its Subagents

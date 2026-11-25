@@ -68,7 +68,8 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT`, `…_PREPARE_SCRIPT` | The repository publish scripts. |
 | `NEBULA_BUTLER_SUPERVISOR_GATE_ROOTS` | Git checkouts whose committed scripts may run as gates. |
 | `NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS` | Repositories that `repo_audit` and `repo_restore` may read and write. |
-| `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | The provider profile for the independent reviewer. Use an Anthropic profile. |
+| `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | A provider profile for the independent reviewer. Set this or the harness variable below, not both. |
+| `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` | A harness profile for the independent reviewer, such as a Claude harness on the host's existing login. Each review is one turn in a fresh session with no tools, no MCP server and no Core gateway. |
 | `NEBULA_BUTLER_REVIEW_MODEL` | The reviewer model. Default: `claude-opus-5-5`. It must differ from the reviewed goal's model. |
 | `NEBULA_BUTLER_REVIEW_CEILING_POLICY` | A file appended to the reviewer instructions, such as an impact-ceiling policy. |
 | `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Directories the reviewer may read evidence bytes from. |
@@ -152,8 +153,12 @@ Butler event stream.
 1. Butler calls `nebula.supervisor.independent_review` with the goal's session
    and its evidence paths. Evidence cited in the held proposal is added automatically.
 2. Core checks two things. The reviewer model must differ from the goal's model.
-   The reviewer profile must be enabled, allowlisted, and permit sensitive data.
-3. Core sends one tool-free request. It contains:
+   The reviewer profile must be enabled, allowlisted (on a harness: offer the
+   model after **Check**), and permit sensitive data.
+3. Core sends one tool-free request. On a harness profile this is one turn in
+   a new session: an empty scratch directory, every native capability off, no
+   MCP server or Core gateway, every permission request denied, and any tool
+   event ends the review with an error. It contains:
    - the completion criteria;
    - the proposal;
    - the evidence bytes, read only from the evidence roots, bounded and redacted;
@@ -161,7 +166,8 @@ Butler event stream.
 
    Butler's conversation and notes are not included.
 4. The verdict (ACCEPT, ACCEPT_WITH_RESIDUALS or REJECT) is recorded in goal
-   metadata, together with the packet digest and the reviewer identity.
+   metadata, together with the packet digest and the reviewer identity: the
+   provider id or the harness profile id, the model and the review id.
 5. The verdict is applied:
    - ACCEPT completes the goal.
    - REJECT adds the must-dos as a supervisor note and resumes the goal.
@@ -171,12 +177,16 @@ Butler event stream.
 
 ## Enabling (operator steps)
 
-1. Create an Anthropic provider profile allowing `claude-opus-5-5`.
-2. Attach its API key through the browser credential handoff.
-3. Verify the profile's tools.
+1. Create the reviewer runtime: a Claude harness on the host's existing login
+   (see "Running Butler on Claude"), or an Anthropic provider profile allowing
+   `claude-opus-5-5`.
+2. For a provider profile only: attach its API key through the browser
+   credential handoff.
+3. Verify it: **Check** and **Test turn** for a harness, tool verification for
+   a provider.
 4. Optionally, select it as Butler's model with `POST /api/v1/chat/control-assistant/session`.
 5. Set the environment variables above, starting with the host allowlist,
-   private strings, review provider and evidence roots, and leaving
+   private strings, reviewer runtime and evidence roots, and leaving
    `…_ALLOW_SUDO` off.
 6. Set `completion_requires_review=true` on the goals that need independent review.
 7. Deploy through the normal deployer.
@@ -190,7 +200,8 @@ Butler event stream.
   `complete` and the goal's own `goal.complete` are refused while any is open.
 - Butler cannot approve completion of a goal it steered (goal actions, goal
   rewrites, Butler notes). Approval must come from Core's independent review,
-  which records its provenance: provider, model, review id and packet digest.
+  which records its provenance: provider or harness profile, model, review id
+  and packet digest.
 - Goal-written supervisor or reviewer sign-off lines are refused in completion
   proposals and redacted from review packets.
 - A goal may request closure at most `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY`
@@ -217,12 +228,56 @@ the waiting goal. Open requests appear at the top of the Butler board.
 
 ## Running Butler on Claude
 
-1. Settings → Agent harnesses → **Add Claude**: API-key credential, default
-   model `claude-opus-5-5`, sensitive data and tool-result sharing allowed,
-   native Shell off. Run **Check** and **Test turn**.
-2. Settings → Model providers → **Add provider** (Anthropic), allowlist only
-   `claude-opus-5-5`, then **Reverify tool calling**.
-3. Reserve Butler with `POST /api/v1/chat/control-assistant/session` and
-   `backend: "harness"`, `harness_profile_id`, `model: "claude-opus-5-5"`,
-   `subagent_provider_id`, `subagent_model: "claude-opus-5-5"`. An existing
-   Butler chat is switched with `PATCH /api/v1/chat-sessions/{id}/assistant-config`.
+Butler, its subagents and the independent reviewer can all run on the Claude
+harness with the host's existing Claude CLI login. No Anthropic API key or
+provider profile is needed.
+
+1. **Sign the CLI in as the Core user.** Core starts the Claude CLI (the copy
+   bundled with the Claude Agent SDK, or the profile's CLI override) as a child
+   process of Core. It runs as the same OS user, with Core's `HOME`. On Linux the
+   login is stored in `$HOME/.claude/.credentials.json`, or in
+   `$CLAUDE_CONFIG_DIR` if Core's service environment sets it. For a systemd
+   user unit, the Core user is the unit's owner; in the container image, it is
+   the image's `nebula` user. The harness profile cannot set a different
+   account folder for Claude. On the Nebula host, as that user and with the
+   same `HOME` (for example `sudo -iu <core-user>`), run `claude auth login`,
+   then `claude auth status`. Turns blank `ANTHROPIC_API_KEY` and every other
+   ambient variable except a small allowlist, so only the stored login is used.
+2. Settings → Agent harnesses → **Add Claude**. Set **Authentication** to
+   *Existing session*, default model `claude-opus-5-5`, and allow sensitive data
+   and tool-result sharing. Leave native **Shell** off. Butler sessions never
+   get the native shell even if the profile enables it, because the Core user
+   may hold host privileges. Bash stays disallowed and the sandbox keeps its
+   network restrictions.
+3. Run **Check**. It runs `claude auth status` the way turns run the CLI. If
+   the CLI is not signed in, Check fails and names the OS user, `HOME` and
+   login location to fix. Then run **Test turn**. A sign-in failure there
+   gives the same explanation.
+4. Reserve Butler:
+
+   ```json
+   POST /api/v1/chat/control-assistant/session
+   {
+     "engagement_id": "<project id>",
+     "backend": "harness",
+     "harness_profile_id": "<Claude harness id>",
+     "model": "claude-opus-5-5",
+     "subagent_harness_profile_id": "<Claude harness id>",
+     "subagent_model": "claude-opus-5-5",
+     "max_active_subagents": 3,
+     "allow_cloud_tool_results": true
+   }
+   ```
+
+   `subagent_harness_profile_id` and `subagent_provider_id` are mutually
+   exclusive, and each needs `subagent_model`. Butler's children run in Butler
+   mode, with Butler's Core tools through the gateway, as control-assistant
+   harness sessions with no native shell. Background checks honor the saved
+   choice. An existing Butler chat is switched with
+   `PATCH /api/v1/chat-sessions/{id}/assistant-config`
+   (`subagent_harness_profile_id`, `subagent_model`, `allow_subagents: true`).
+5. To run the independent reviewer on Claude while goals stay on another model,
+   set `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` to the Claude harness id. Leave
+   `NEBULA_BUTLER_REVIEW_PROVIDER_ID` unset; setting both makes reviews refuse.
+   The reviewer model (default `claude-opus-5-5`) must still differ from the
+   goal's model.
