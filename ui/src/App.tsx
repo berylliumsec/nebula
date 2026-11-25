@@ -5,7 +5,7 @@ import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRout
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
-import { ShellButlerRoute, ShellProjectsPage, shellButlerPath } from "./components/ShellProjects";
+import { ShellProjectsPage, shellButlerPath } from "./components/ShellProjects";
 import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
 import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
 import { NavigationContinuity } from "./state/NavigationContinuityBoundary";
@@ -132,7 +132,7 @@ function AssistantShellLanding() {
   return <section className="page assistant-shell-empty"><h1>No projects yet</h1><p>Set up a project in full Nebula, then return here to talk to Butler.</p><a className="button secondary" href="nebula://settings">App connection</a></section>;
 }
 
-/** The iPhone app has no project pages; project links open that project's Butler. */
+/** The iPhone app has no project pages; project links open Butler mode from that project. */
 function ShellProjectRedirect() {
   const { projectId = "" } = useParams();
   return <Navigate to={shellButlerPath(projectId)} replace />;
@@ -141,7 +141,7 @@ function ShellProjectRedirect() {
 function AssistantShellHandoff() {
   const location = useLocation();
   const url = `${window.location.origin}${location.pathname}${location.search}`;
-  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone app, which has only Butler and Projects.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to Butler</Link></section>;
+  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone app, which has only Butler mode and Projects.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to Butler</Link></section>;
 }
 
 export function App() {
@@ -168,8 +168,8 @@ export function App() {
 function ApplicationRoutes() {
   if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
     <Route path="projects" element={<ShellProjectsPage />} />
+    <Route path="butler" element={route(<ButlerModePage />)} />
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
-      <Route path="butler" element={<ShellButlerRoute />} />
       <Route index element={<ShellProjectRedirect />} />
       <Route path="*" element={<ShellProjectRedirect />} />
     </Route>

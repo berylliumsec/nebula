@@ -16081,8 +16081,8 @@ reloadTest("assistant popup Butler long history keeps the composer and jump to l
   expect(accessibility.violations).toEqual([]);
 });
 
-reloadTest("iPhone assistant shell has only docked Butler and a Projects snapshot of active projects with chats", async ({page}, testInfo) => {
-  reloadTest.slow(); // One long journey: Butler layout, keyboard, Projects, failure and recovery.
+reloadTest("iPhone assistant shell opens desktop Butler mode and a Projects snapshot of active projects with chats", async ({page}, testInfo) => {
+  reloadTest.slow(); // One long journey: Butler mode layout, Projects, failure and recovery.
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
   });
@@ -16116,107 +16116,58 @@ reloadTest("iPhone assistant shell has only docked Butler and a Projects snapsho
     {...entity, id: "iphone-butler", engagement_id: "scratch-project", title: "Butler", backend: "harness", metadata: {control_assistant: true}},
   ]}));
   await page.route(/\/api\/v1\/chat\/session-activity\?engagement_id=scratch-project$/, route => route.fulfill({json: [{session_id: "chat-running", state: "working", turn_id: "turn-1"}]}));
+  const boardItem = {
+    session_id: "chat-pending", title: "Review request", project: {id: "scratch-project", name: "Scratch Project"},
+    section: "active", state: "waiting", backend: "provider", is_subagent: false, updated_at: "2026-07-14T12:00:00Z",
+    attention: {kind: "approval", action_id: "pending-approval", summary: "Approve the review request", requested_at: "2026-07-14T12:00:00Z"},
+    goal: {objective: "Review the request", status: "running", current_step: 1, plan_length: 3},
+  };
+  await page.route(/\/api\/v1\/butler\/board(?:\?|$)/, route => route.fulfill({json: {
+    counts: {active: 1, idle: 0, completed: 0}, states: {waiting: 1, working: 0, failed: 0},
+    projects: [{id: "scratch-project", name: "Scratch Project", counts: {active: 1, idle: 0, completed: 0}}],
+    items: [boardItem], truncated: false, stages: [], no_stage: {active: 1, idle: 0, completed: 0},
+  }}));
+  await page.route(/\/api\/v1\/butler\/threads(?:\?|$)/, route => route.fulfill({json: {items: []}}));
+  // An old project link (including the old /projects/<id>/butler) opens Butler mode, the page desktop shows, from that project.
   await page.goto("/projects/scratch-project/workbench?view=terminal");
-  await expect(page).toHaveURL(/\/projects\/scratch-project\/butler$/, {timeout: 30_000});
-  const controlAssistant = page.getByRole("dialog", {name: "Butler"});
-  await expect(controlAssistant).toBeVisible({timeout: 30_000});
-  await expect(controlAssistant.getByRole("button", {name: "Close Butler"})).toBeHidden();
-  await expect(controlAssistant.getByRole("combobox", {name: "Butler project"})).toHaveValue("scratch-project");
-  const appTabs = controlAssistant.getByRole("navigation", {name: "Nebula app"});
-  await expect(appTabs.getByRole("link", {name: "Butler"})).toHaveAttribute("aria-current", "page");
-  const tables = controlAssistant.getByRole("region", {name: "Butler response table"});
-  await expect(tables).toHaveCount(2);
-  const table = tables.first();
-  await expect(table.getByRole("cell", {name: "Paused"})).toBeVisible();
-  const nativeLayout = await controlAssistant.evaluate(dialog => {
-    const panel = dialog.getBoundingClientRect();
-    const viewport = window.visualViewport;
-    const composer = dialog.querySelector('[aria-label="Ask Butler a question"]')!.getBoundingClientRect();
-    const table = dialog.querySelector('[aria-label="Butler response table"]')!.getBoundingClientRect();
-    const status = dialog.querySelector('[aria-label="Butler response table"] td:last-child')!.getBoundingClientRect();
-    return {panel: {left: panel.left, right: panel.right, top: panel.top, height: panel.height},
-      viewport: {left: viewport?.offsetLeft ?? 0, top: viewport?.offsetTop ?? 0,
-        width: viewport?.width ?? innerWidth, height: viewport?.height ?? innerHeight},
-      composerBottom: composer.bottom, tableRight: table.right, statusRight: status.right};
-  });
-  expect(nativeLayout.panel.left).toBeGreaterThanOrEqual(nativeLayout.viewport.left - 1);
-  expect(nativeLayout.panel.right).toBeLessThanOrEqual(nativeLayout.viewport.left + nativeLayout.viewport.width + 1);
-  expect(Math.abs(nativeLayout.panel.top - nativeLayout.viewport.top)).toBeLessThanOrEqual(1);
-  expect(Math.abs(nativeLayout.panel.height - nativeLayout.viewport.height)).toBeLessThanOrEqual(1);
-  expect(nativeLayout.composerBottom).toBeLessThanOrEqual(nativeLayout.viewport.top + nativeLayout.viewport.height + 1);
-  expect(nativeLayout.statusRight).toBeLessThanOrEqual(nativeLayout.tableRight + 1);
-  if (page.viewportSize()!.width <= 430) {
-    const wideTable = tables.last();
-    expect(await wideTable.evaluate(element => element.scrollWidth - element.clientWidth)).toBeGreaterThan(0);
-    expect(await wideTable.evaluate(element => getComputedStyle(element, "::before").content)).toContain("Swipe for more columns");
-    await wideTable.evaluate(element => { element.scrollLeft = element.scrollWidth; });
-    expect(await wideTable.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
-    await wideTable.evaluate(element => { element.scrollLeft = 0; });
+  await expect(page).toHaveURL(/\/butler\?project=scratch-project$/, {timeout: 30_000});
+  await expect(page.getByRole("heading", {name: "Butler", level: 1})).toBeVisible({timeout: 30_000});
+  await expect(page.getByRole("dialog", {name: "Butler"})).toBeHidden();
+  // Nothing sits behind Butler mode in the app: no exit, no workbench handoff.
+  await expect(page.getByRole("button", {name: "Exit Butler mode"})).toHaveCount(0);
+  const compactMode = await page.evaluate(() => matchMedia("(max-width: 760px)").matches);
+  if (compactMode) {
+    const modeTabs = page.getByRole("tablist", {name: "Butler mode"});
+    for (const name of [/^Board/, /^Threads/, /^Oversight/, /More/]) await expect(modeTabs.getByRole("tab", {name})).toBeVisible();
+    await expect(modeTabs.getByRole("tab", {name: /^Board/})).toHaveAttribute("aria-selected", "true");
+  } else {
+    await expect(page.getByRole("navigation", {name: "Butler sections"})).toBeVisible();
   }
-  await expect(controlAssistant.getByRole("textbox", {name: "Ask Butler a question"})).toHaveAttribute("placeholder", "Message Butler…");
-  await expect(controlAssistant).toHaveAttribute("aria-modal", "true");
-  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(true);
-  expect(await controlAssistant.evaluate(dialog => {
-    const body = dialog.querySelector("#butler-view-chat")!.parentElement!;
-    return body.scrollHeight - body.clientHeight;
-  })).toBeGreaterThan(24);
-  await table.scrollIntoViewIfNeeded();
-  await page.screenshot({path: testInfo.outputPath("butler-native-fullscreen.png")});
-  const jump = controlAssistant.getByRole("button", {name: "Scroll to latest message"});
-  await expect(jump).toBeVisible();
-  const jumpBottom = await jump.evaluate(element => element.getBoundingClientRect().bottom);
-  const composerTop = await controlAssistant.getByRole("textbox", {name: "Ask Butler a question"}).evaluate(element => element.getBoundingClientRect().top);
-  expect(jumpBottom).toBeLessThanOrEqual(composerTop + 1);
-  await jump.click();
-  const startVoice = controlAssistant.getByRole("button", {name: "Start Butler Voice"});
-  await expect(startVoice).toBeVisible();
-  if (page.viewportSize()!.width <= 760 || (page.viewportSize()!.height <= 500 && await page.evaluate(() => matchMedia("(pointer: coarse)").matches))) {
-    const button = await startVoice.boundingBox();
-    const settingsButton = await controlAssistant.getByRole("button", {name: "Butler settings"}).boundingBox();
-    const composer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
-    const composerBox = await composer.boundingBox();
-    const visualBottom = await page.evaluate(() => (visualViewport?.offsetTop ?? 0) + (visualViewport?.height ?? innerHeight));
-    expectTouchTarget(button?.width, "Start Butler Voice width");
-    expectTouchTarget(button?.height, "Start Butler Voice height");
-    expect(Math.abs(button!.y - settingsButton!.y)).toBeLessThanOrEqual(1);
-    expect(button!.x).toBeLessThan(settingsButton!.x);
-    await expect(startVoice).toHaveText("");
-    expect(composerBox!.y + composerBox!.height).toBeLessThanOrEqual(visualBottom + 1);
-    await expect(composer).not.toBeFocused();
-    await expect(controlAssistant.getByRole("button", {name: "Move Butler"})).toBeHidden();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.getByText("Review request").first()).toBeVisible({timeout: 15_000});
+  await page.screenshot({path: testInfo.outputPath("iphone-butler-mode.png")});
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/butler\?project=scratch-project/);
+  if (compactMode) {
+    await page.getByRole("tablist", {name: "Butler mode"}).getByRole("tab", {name: /More/}).click();
+    const more = page.getByRole("dialog", {name: "More in Butler"});
+    await expect(more.getByRole("button", {name: "Open full Nebula"})).toHaveCount(0);
+    await more.getByRole("link", {name: "All projects"}).click();
+  } else {
+    await page.getByRole("link", {name: "All projects"}).click();
   }
-  const butlerComposer = controlAssistant.getByRole("textbox", {name: "Ask Butler a question"});
-  await butlerComposer.focus();
-  await expect(butlerComposer).toBeFocused();
-  if (testInfo.project.name === "mobile-webkit") {
-    const originalViewport = page.viewportSize()!;
-    await page.setViewportSize({width: originalViewport.width, height: originalViewport.height - 180});
-    await expect.poll(() => controlAssistant.evaluate(dialog => {
-      const panel = dialog.getBoundingClientRect();
-      const visual = window.visualViewport;
-      const input = dialog.querySelector('[aria-label="Ask Butler a question"]')!.getBoundingClientRect();
-      return Math.max(Math.abs(panel.height - (visual?.height ?? innerHeight)), input.bottom - ((visual?.offsetTop ?? 0) + (visual?.height ?? innerHeight)));
-    })).toBeLessThanOrEqual(1);
-    await page.setViewportSize(originalViewport);
-  }
-  await butlerComposer.blur();
-  await expect(appTabs).toBeVisible();
-  await expect(page.getByRole("button", {name: "Start new chat"})).toHaveCount(0);
-  await expect(page.locator(".persistent-terminal, .persistent-code-editor, .persistent-browser")).toHaveCount(0);
-  await appTabs.getByRole("link", {name: "Projects"}).click();
   await expect(page).toHaveURL(/\/projects$/);
-  await expect(controlAssistant).toBeHidden();
-  expect(await page.locator(".assistant-only-shell").evaluate(shell => (shell as HTMLElement).inert)).toBe(false);
+  const appTabs = page.getByRole("navigation", {name: "Nebula app"});
+  await expect(appTabs.getByRole("link", {name: "Projects"})).toHaveAttribute("aria-current", "page");
   const projects = page.getByRole("region", {name: "Projects"});
-  const card = projects.getByRole("listitem").filter({hasText: "Scratch Project"});
-  await expect(card).toBeVisible();
+  const projectCard = projects.getByRole("listitem").filter({hasText: "Scratch Project"});
+  await expect(projectCard).toBeVisible();
   await expect(projects.getByRole("listitem")).toHaveCount(1);
-  await expect(card).toContainText("2 chats");
-  await expect(card).toContainText("1 need you");
-  await expect(card).toContainText("1 running");
-  await card.locator("summary").click();
-  const recent = card.getByRole("list", {name: "Recent chats in Scratch Project"});
+  await expect(projectCard).toContainText("2 chats");
+  await expect(projectCard).toContainText("1 need you");
+  await expect(projectCard).toContainText("1 running");
+  await projectCard.locator("summary").click();
+  const recent = projectCard.getByRole("list", {name: "Recent chats in Scratch Project"});
   await expect(recent.getByRole("listitem")).toHaveCount(2);
   await expect(recent).not.toContainText("Butler");
   await page.screenshot({path: testInfo.outputPath("iphone-projects-snapshot.png")});
@@ -16233,12 +16184,15 @@ reloadTest("iPhone assistant shell has only docked Butler and a Projects snapsho
   sessionsFail = true;
   await projects.getByRole("button", {name: "Refresh projects"}).click();
   await expect(projects.getByRole("alert")).toContainText("1 project could not be read", {timeout: 15_000});
-  await expect(card).toContainText("2 chats");
+  await expect(projectCard).toContainText("2 chats");
   await expect(projects.getByText("No active projects with chats")).toHaveCount(0);
   sessionsFail = false;
   await projects.getByRole("button", {name: "Refresh projects"}).click();
   await expect(projects.getByRole("alert")).toHaveCount(0, {timeout: 15_000});
-  await card.getByRole("button", {name: "Ask Butler about Scratch Project"}).click();
-  await expect(page).toHaveURL(/\/projects\/scratch-project\/butler$/);
-  await expect(controlAssistant).toBeVisible();
+  await projectCard.getByRole("button", {name: "Ask Butler about Scratch Project"}).click();
+  await expect(page).toHaveURL(/\/butler\?project=scratch-project$/);
+  await expect(page.getByRole("heading", {name: "Butler", level: 1})).toBeVisible();
+  await page.goBack();
+  await appTabs.getByRole("link", {name: "Butler"}).click();
+  await expect(page).toHaveURL(/\/butler\?project=scratch-project$/);
 });

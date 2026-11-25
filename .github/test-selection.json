@@ -1,34 +1,43 @@
 {
-  "change_digest": "5badc0c267824171ee7d171a60da5df6f55a0b9bd34b19a36b91fddf11e7ae54",
-  "reviewed_by": "Claude: Butler board stage filter",
-  "reason": "Adds a Stage filter to the Butler board (All projects goal view). Core's GET /butler/board accepts repeatable stage=<label> and no_stage=true, matches labels case-insensitively across projects (subprojects use their nearest parent's stages via chat_work_stage), returns per-stage and no-stage counts that ignore the stage filter, and keeps the header's needs-you/working states unfiltered. The board sends the filter on the poll, Completed pages, Select all and Resume idle; Hold acts only on the filtered running chats by name; the filter is remembered on the device. Python selects the global project read tests (new stage filter/count test plus the existing Work stage and board reads), chat holds (the hold route the filtered Hold uses), and product help for the new section with the index digest. Frontend selects the board client, the Butler board page and the destination discovery test. Playwright selects area:butler-mode, whose real-Core LAN journey gains a stage-filter step; ui/playwright.config.ts restores the butler-mode spec to the assistant-real projects' testMatch, which #1207 dropped, so the catalogued area collects again.",
-  "exclusions": "tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails identically on unmodified origin/main 9a40ef34 and is not selected. PostgreSQL variants skip without NEBULA_TEST_POSTGRES_URL. No native code changed. No full-suite approval.",
+  "change_digest": "ce0fb4c9fbfdaf83a86d744ee032c0c0256b26b32876cd94b40039d92e49f76c",
+  "reviewed_by": "Claude: iPhone app Butler mode parity",
+  "reason": "The iPhone app (NebulaShell/1.0) now shows the desktop Butler mode page as its Butler tab instead of the docked Butler panel. Shell routes gain /butler (ButlerModePage); /projects/<id>/butler and other project links redirect to /butler?project=<id>; the Projects tab bar and 'Ask Butler about' open it. In the shell, Butler mode hides Exit Butler mode, Esc exit, 'Open full Nebula' and the chat popup's 'Open in workbench' (there is no full Nebula behind it); More \u2192 All projects opens the Projects snapshot. The docked panel mode (docked/dockFooter, project select, CSS) is removed, and the shell's full-screen panel class no longer applies while Butler mode embeds the panel. Frontend selects the Butler mode board test (new iPhone-app case), the chat popup test (no workbench link), and the assistant/launcher tests for the removed docked mode. Playwright selects area:butler-mode for the desktop page this touches and the ios-assistant-only entries, whose mocked and real-Core LAN journeys are rewritten for Butler mode. Python selects the product index digest test for the settings-assistant doc change.",
+  "exclusions": "ios-assistant-only/assistant-real-webkit-390 is not selected: its outage step (Retry connection after core.restart) times out identically on unmodified origin/main d0f987d because WebKit self-recovers to the degraded banner; the same journey passes on assistant-real-chromium-390 and assistant-real-desktop. No native code changed (the iPhone app bundles this UI). No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 34,
-    "frontend": 37,
+    "python": 1,
+    "frontend": 98,
     "native": 0,
-    "playwright": 8
+    "playwright": 20
   },
   "python": [
-    "tests/v3/test_runtime_global_project_reads.py",
-    "tests/v3/test_chat_holds.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_a_chats_project_work_stage",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_the_butler_board_stage_filter"
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
   "frontend": [
-    "ui/src/api/butlerBoard.test.ts",
     "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/assistantDestinations.stageFilter.test.ts"
+    "ui/src/pages/ButlerChatPopup.test.tsx",
+    "ui/src/components/NebulaControlAssistant.test.tsx",
+    "ui/src/components/NebulaAssistantLauncher.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:butler-mode"
+    "area:butler-mode",
+    "ios-assistant-only/desktop",
+    "ios-assistant-only/compact",
+    "ios-assistant-only/mobile-chromium-small",
+    "ios-assistant-only/mobile-chromium",
+    "ios-assistant-only/mobile-chromium-wide",
+    "ios-assistant-only/mobile-webkit-small",
+    "ios-assistant-only/mobile-webkit",
+    "ios-assistant-only/mobile-webkit-wide",
+    "ios-assistant-only/browser-chromium-landscape",
+    "ios-assistant-only/browser-webkit-landscape",
+    "ios-assistant-only/assistant-real-desktop",
+    "ios-assistant-only/assistant-real-chromium-390"
   ],
   "checks": [
     "frontend-audit"

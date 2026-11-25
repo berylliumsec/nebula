@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { FolderKanban, MessageSquare, RefreshCw } from "lucide-react";
 import { buildProjectSnapshots, relativeAge, type ProjectSnapshot } from "../api/projectSnapshots";
@@ -6,20 +6,19 @@ import type { ChatAttentionItem, ChatSessionActivity, ChatSessionSummary } from 
 import { sameJson, startVisiblePoll, type VisiblePoll } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { rememberedProjectId, useWorkspace } from "../state/WorkspaceContext";
-import { NebulaAssistantLauncherContext } from "./NebulaAssistantLauncher";
 import styles from "./ShellProjects.module.css";
 
-/** Path of Butler for one project inside the iPhone app. */
+/** Butler mode, the same page desktop shows, opened from one project inside the iPhone app. */
 export function shellButlerPath(projectId: string): string {
-  return `/projects/${encodeURIComponent(projectId)}/butler`;
+  return `/butler?project=${encodeURIComponent(projectId)}`;
 }
 
 /** The iPhone app's only two destinations. */
-export function ShellTabBar({ docked = false }: { docked?: boolean }) {
+export function ShellTabBar() {
   const { continuityScope, engagement, engagements } = useWorkspace();
   const project = engagement ?? engagements.find(item => item.id === rememberedProjectId(continuityScope)) ?? engagements[0];
-  return <nav className={`${styles.tabBar}${docked ? ` ${styles.docked}` : ""}`} aria-label="Nebula app">
-    <NavLink className={styles.tab} to={project ? shellButlerPath(project.id) : "/"}><MessageSquare size={20} aria-hidden="true" /><span>Butler</span></NavLink>
+  return <nav className={styles.tabBar} aria-label="Nebula app">
+    <NavLink className={styles.tab} to={project ? shellButlerPath(project.id) : "/butler"}><MessageSquare size={20} aria-hidden="true" /><span>Butler</span></NavLink>
     <NavLink className={styles.tab} to="/projects" end><FolderKanban size={20} aria-hidden="true" /><span>Projects</span></NavLink>
   </nav>;
 }
@@ -134,15 +133,4 @@ function ProjectCard({ item, now, onAskButler }: { item: ProjectSnapshot; now: n
       <button className="button primary" type="button" onClick={onAskButler}>Ask Butler about {item.name}</button>
     </div>
   </details>;
-}
-
-/** Shown under docked Butler; visible only when Butler hid itself (for example, to show a setting). */
-export function ShellButlerRoute() {
-  const launcher = useContext(NebulaAssistantLauncherContext);
-  return <section className={styles.page} aria-label="Butler">
-    <div className={styles.empty}><strong>Butler is hidden</strong><p>Butler stepped aside to show something else.</p>
-      {launcher && !launcher.visible && <button className="button primary" type="button" onClick={launcher.toggle}>Show Butler</button>}
-    </div>
-    <ShellTabBar />
-  </section>;
 }

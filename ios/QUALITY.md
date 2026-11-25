@@ -9,6 +9,19 @@ link, the physical Pair device control submitted it, and Core's authenticated
 device list gained one entry at the test time. The native selected address is
 device-local; successful-load history is recorded separately.
 
+## Butler mode app contract (2026-11-25)
+
+Supersedes the docked Butler below. The app's Butler tab is the desktop Butler mode
+page (`/butler?project=<id>`; Board, Threads, Oversight and More on a phone, the
+desktop columns when the app is wider than 760 px). `/projects/<id>/butler` and
+other project links redirect there. Nothing sits behind it in the app, so it has no
+**Exit Butler mode**, no **Open full Nebula** row and no **Open in workbench** in a
+chat popup; **More → All projects** opens the Projects snapshot, whose tab bar
+returns to Butler. Browser evidence: `iPhone assistant shell opens desktop Butler
+mode…` in `ui/tests/interface.spec.ts` and `iPhone assistant shell production LAN
+pairs into Butler mode…` in `ui/tests/ios-shell-real-core.spec.ts`. The bundle must
+come from a Core commit that serves `/api/v1/butler/board` (#1235 or later).
+
 ## Butler + Projects app contract (2026-11-15)
 
 Supersedes the assistant-only contract below. For the `NebulaShell/1.0` token, Core's

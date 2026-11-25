@@ -19,8 +19,8 @@ vi.mock("../state/WorkspaceContext", () => ({
 }));
 vi.mock("../state/ButlerPanelBridge", () => ({ useButlerPanelBridge: () => null }));
 vi.mock("../components/DialogSystem", () => ({ useConfirmation: () => confirm }));
-const layout = vi.hoisted(() => ({ compact: false }));
-vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => layout.compact }));
+const layout = vi.hoisted(() => ({ compact: false, shell: false }));
+vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => layout.compact, isNebulaShell: () => layout.shell }));
 vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
@@ -68,6 +68,7 @@ const completedPage = {
 beforeEach(() => {
   vi.clearAllMocks();
   layout.compact = false;
+  layout.shell = false;
   localStorage.clear();
   requestIfChanged.mockImplementation(async (path: string) => {
     if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
@@ -266,6 +267,25 @@ describe("the All projects link", () => {
     const sheet = screen.getByRole("dialog", { name: "More in Butler" });
     await userEvent.click(within(sheet).getByRole("link", { name: "All projects" }));
     expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
+  });
+
+  it("in the iPhone app, has nothing to exit to and still opens All projects", async () => {
+    layout.compact = true;
+    layout.shell = true;
+    try {
+      mountWithProjects();
+      await screen.findByRole("tab", { name: /More/ });
+      expect(screen.queryByRole("button", { name: "Exit Butler mode" })).toBeNull();
+      await userEvent.keyboard("{Escape}");
+      expect(screen.getByRole("heading", { name: "Butler", level: 1 })).toBeVisible();
+      await userEvent.click(screen.getByRole("tab", { name: /More/ }));
+      const sheet = screen.getByRole("dialog", { name: "More in Butler" });
+      expect(within(sheet).queryByRole("button", { name: "Open full Nebula" })).toBeNull();
+      await userEvent.click(within(sheet).getByRole("link", { name: "All projects" }));
+      expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
+    } finally {
+      layout.shell = false;
+    }
   });
 });
 

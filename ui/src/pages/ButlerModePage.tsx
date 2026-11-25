@@ -16,7 +16,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useConfirmation } from "../components/DialogSystem";
 import { logCaughtDiagnostic } from "../diagnostics";
-import { useCompactLayout } from "../hooks/useCompactLayout";
+import { isNebulaShell, useCompactLayout } from "../hooks/useCompactLayout";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { askAboutTarget, butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
@@ -94,6 +94,8 @@ export function ButlerModePage() {
   const butlerDrafts = drafts?.butlerDrafts ?? [];
   const navigate = useNavigate();
   const confirm = useConfirmation();
+  // The iPhone app has no full Nebula behind Butler mode: nothing to exit to, and chats open as popups.
+  const nativeShell = isNebulaShell();
   const compact = useCompactLayout();
   const [params, setParams] = useSearchParams();
   const openThreadId = params.get("thread") ?? undefined;
@@ -351,7 +353,7 @@ export function ButlerModePage() {
       const active = document.activeElement;
       if (active instanceof HTMLElement && active.closest("[role=dialog]")) return;
       if (briefId) { closeBrief(); return; }
-      exit();
+      if (!nativeShell) exit();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1161,7 +1163,7 @@ export function ButlerModePage() {
       </div>}
       {!compact && <Link className={styles.projectsLink} to="/projects" title="Every project's stages and work"><Columns3 size={15} aria-hidden="true" />All projects</Link>}
       {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
-      <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>
+      {!nativeShell && <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>}
     </header>
     {coreState !== "online" && <div className={styles.error} role="alert">Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</div>}
     {compact ? <>
@@ -1177,14 +1179,14 @@ export function ButlerModePage() {
         <div className={styles.sheet} role="dialog" aria-label="More in Butler">
           {(["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
           <Link className={styles.sheetRow} to="/projects">All projects<ChevronRight size={16} aria-hidden="true" /></Link>
-          <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>
+          {!nativeShell && <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>}
         </div>
       </div>}
     </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body}>{threadsRail}{leftColumn}{workspace}</div>}
     {popup && api && <Suspense fallback={null}><ButlerChatPopup api={api} sessionId={popup.sessionId} title={popup.title}
       live={allItems.some((item) => item.sessionId === popup.sessionId && (item.state === "working" || item.state === "waiting"))}
       onClose={() => setPopup(undefined)}
-      onOpenFull={() => { const target = popup; setPopup(undefined); navigate(chatPath(target.projectId, target.sessionId)); }} /></Suspense>}
+      onOpenFull={nativeShell ? undefined : () => { const target = popup; setPopup(undefined); navigate(chatPath(target.projectId, target.sessionId)); }} /></Suspense>}
   </div>;
 }
 

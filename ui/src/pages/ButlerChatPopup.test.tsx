@@ -47,4 +47,11 @@ describe("Butler mode chat popup", () => {
     expect(await screen.findByText(/^Message 60 /)).toBeInTheDocument();
     expect(getComputedStyle(dialog.parentElement!).gridTemplateRows).toBe("minmax(0, 1fr)");
   });
+
+  it("offers no workbench link where there is none (the iPhone app)", async () => {
+    const api = { listChatMessages: vi.fn(async () => [message(1, "user", "Hello")]) } as unknown as ApiClient;
+    render(<ButlerChatPopup api={api} sessionId="chat-1" title="Simulation" live={false} onClose={vi.fn()} />);
+    expect(await screen.findByText("Hello")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open in workbench/ })).not.toBeInTheDocument();
+  });
 });

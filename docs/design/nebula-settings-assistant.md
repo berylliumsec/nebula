@@ -1257,10 +1257,11 @@ current research aside while the project keeps working, hold chats instead
 **Butler mode** (route `/butler`) is the one place for Butler: talking to it,
 seeing every running chat across projects and what needs you, and Butler's
 oversight, memory and settings. The
-**Butler** launcher in the top bar opens Butler mode (the iPhone app keeps its
-docked Butler); the small panel's **Open Butler mode** button and asking Butler
-to "open Butler mode" do too. **Esc** or **Exit Butler mode** returns to the page
-the operator came from. There is no separate floating Butler panel on the web or
+**Butler** launcher in the top bar opens Butler mode; the small panel's **Open
+Butler mode** button and asking Butler to "open Butler mode" do too. **Esc** or
+**Exit Butler mode** returns to the page the operator came from. The iPhone app's
+Butler tab is the same Butler mode page; it has no **Exit** or **Open full
+Nebula**, and a chat's **Open full chat** opens it as a popup there. There is no separate floating Butler panel on the web or
 desktop.
 
 Butler's threads stay on the left. The top bar's sections switch the right
