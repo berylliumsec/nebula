@@ -48,6 +48,15 @@ def test_product_help_discovers_next_turn_mcp_context_choices(monkeypatch):
     assert "next turn" in text
 
 
+def test_product_help_explains_claude_account_folders(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "separate Claude account folder CLAUDE_CONFIG_DIR claude login"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "CLAUDE_CONFIG_DIR=<folder> claude login" in text
+
+
 def test_product_help_explains_adding_a_claude_harness(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge("Add Claude harness login API key")

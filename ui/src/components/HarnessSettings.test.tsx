@@ -57,7 +57,7 @@ describe("harness settings persistence boundaries", () => {
 describe("Claude harness profiles", () => {
   beforeEach(() => {vi.resetAllMocks(); api.listMcpServers.mockResolvedValue([]);});
 
-  it("creates a managed Claude profile without an account folder or CLI override", async () => {
+  it("creates a managed Claude profile with the default login and no CLI override", async () => {
     const claude: HarnessProfile = {...profile, id: "claude", name: "Claude fixture", kind: "claude_agent_sdk", executable: undefined};
     let saved = false;
     api.createHarness.mockImplementation(async () => {saved = true; return claude;});
@@ -67,7 +67,8 @@ describe("Claude harness profiles", () => {
     render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
     await user.click(screen.getByRole("button", {name: "Add Claude"}));
     const dialog = screen.getByRole("dialog", {name: "Add Claude"});
-    expect(within(dialog).queryByRole("textbox", {name: "Account home folder"})).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", {name: "Account home folder"})).toHaveValue("");
+    expect(dialog.querySelector("pre")).toBeNull();
     expect(within(dialog).queryByRole("option", {name: "Unrestricted host access"})).not.toBeInTheDocument();
     expect(within(dialog).getByText("/login")).toBeVisible();
     await user.type(within(dialog).getByRole("textbox", {name: "Name"}), claude.name);
@@ -80,6 +81,27 @@ describe("Claude harness profiles", () => {
     }));
     expect(await screen.findByText("Claude Agent SDK")).toBeVisible();
     expect(screen.getByRole("heading", {name: claude.name})).toBeVisible();
+  });
+
+  it("saves a separate Claude account folder and shows its CLAUDE_CONFIG_DIR login command", async () => {
+    const claude: HarnessProfile = {...profile, id: "claude-work", name: "Claude Work", kind: "claude_agent_sdk", executable: undefined, homeDirectory: "/accounts/claude work"};
+    api.listHarnesses.mockResolvedValue([]);
+    api.createHarness.mockResolvedValue(claude);
+    api.checkHarness.mockResolvedValue({healthy: true});
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", {name: "Add Claude"}));
+    const dialog = screen.getByRole("dialog", {name: "Add Claude"});
+    await user.type(within(dialog).getByRole("textbox", {name: "Name"}), claude.name);
+    await user.click(within(dialog).getByText("Account folder", {exact: true}));
+    await user.type(within(dialog).getByRole("textbox", {name: "Account home folder"}), "/accounts/claude work");
+    expect(within(dialog).getByRole("button", {name: "Browse folders"})).toBeVisible();
+    expect(dialog).toHaveTextContent(/CLAUDE_CONFIG_DIR set to this folder/);
+    expect(dialog.querySelector("pre")?.textContent).toBe("CLAUDE_CONFIG_DIR='/accounts/claude work' claude login");
+    await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+    await waitFor(() => expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "claude_agent_sdk", connection_mode: "spawn", home_directory: "/accounts/claude work", name: "Claude Work",
+    })));
   });
 });
 

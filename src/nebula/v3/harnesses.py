@@ -56,6 +56,7 @@ import inspect
 import json
 import os
 import re
+import shlex
 import sys
 from builtins import BaseExceptionGroup
 from abc import ABC, abstractmethod
@@ -2319,6 +2320,18 @@ def _harness_home(profile: HarnessProfile) -> Path:
     return Path.home() / (".grok" if profile.kind == HarnessKind.GROK_ACP else ".codex")
 
 
+def _available_account_folder(profile: HarnessProfile) -> Path:
+    """The profile's explicit account folder, which must exist on this host."""
+
+    home = _harness_home(profile)
+    if not home.is_dir():
+        raise HarnessConfigurationError(
+            "Account folder is unavailable on the Nebula host. "
+            "Choose or create it in the harness settings, then retry Check."
+        )
+    return home
+
+
 def _harness_environment(
     profile: HarnessProfile,
     extra: Mapping[str, str] | None = None,
@@ -2329,12 +2342,7 @@ def _harness_environment(
     if host_session:
         env.update(_user_bus_environment())
     if profile.home_directory:
-        home = _harness_home(profile)
-        if not home.is_dir():
-            raise HarnessConfigurationError(
-                "Account folder is unavailable on the Nebula host. "
-                "Choose or create it in the harness settings, then retry Check."
-            )
+        home = _available_account_folder(profile)
         key = "GROK_HOME" if profile.kind == HarnessKind.GROK_ACP else "CODEX_HOME"
         env[key] = str(home)
     return env
@@ -2342,8 +2350,15 @@ def _harness_environment(
 
 def _scrubbed_claude_environment(
     extra: Mapping[str, str] | None = None,
+    *,
+    profile: HarnessProfile | None = None,
 ) -> dict[str, str]:
-    """Override ambient variables the SDK would otherwise copy to Claude CLI."""
+    """Override ambient variables the SDK would otherwise copy to Claude CLI.
+
+    A profile with an account folder runs the CLI with that folder as its
+    ``CLAUDE_CONFIG_DIR``. The value is built per call, never written to
+    ``os.environ``, so it cannot reach another profile's process.
+    """
 
     minimal = _minimal_environment()
     scrubbed = {key: "" for key in os.environ if key not in minimal}
@@ -2356,11 +2371,13 @@ def _scrubbed_claude_environment(
         scrubbed["CLAUDE_CONFIG_DIR"] = config_dir
     else:
         scrubbed.pop("CLAUDE_CONFIG_DIR", None)
+    if profile is not None and profile.home_directory:
+        scrubbed["CLAUDE_CONFIG_DIR"] = str(_available_account_folder(profile))
     scrubbed.update(extra or {})
     return scrubbed
 
 
-def _claude_login_location() -> str:
+def _claude_login_location(profile: HarnessProfile | None = None) -> str:
     """Where the Core user's Claude CLI keeps its login, for operator messages."""
 
     try:
@@ -2370,6 +2387,11 @@ def _claude_login_location() -> str:
     except (ImportError, KeyError):
         # diagnostic-expected: an unnamed uid is reported by number.
         user = str(os.getuid())
+    if profile is not None and profile.home_directory:
+        return (
+            f"OS user {user!r}, CLAUDE_CONFIG_DIR {profile.home_directory!r} "
+            "(this profile's account folder)"
+        )
     home = os.environ.get("HOME") or str(Path.home())
     config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
     return f"OS user {user!r}, HOME {home!r}, " + (
@@ -2379,7 +2401,15 @@ def _claude_login_location() -> str:
     )
 
 
-def _claude_not_logged_in_detail() -> str:
+def _claude_not_logged_in_detail(profile: HarnessProfile | None = None) -> str:
+    if profile is not None and profile.home_directory:
+        return (
+            "Claude CLI is not logged in for this profile's account folder ("
+            + _claude_login_location(profile)
+            + "). As that OS user, run `CLAUDE_CONFIG_DIR="
+            + shlex.quote(profile.home_directory)
+            + " claude login`, then run Check and Test turn again."
+        )[:1_000]
     return (
         "Claude CLI is not logged in for the account that runs Nebula Core ("
         + _claude_login_location()
@@ -2405,7 +2435,9 @@ def _claude_cli_path(sdk: Any, profile: HarnessProfile) -> str | None:
     return None
 
 
-async def _claude_cli_logged_in(cli: str) -> bool | None:
+async def _claude_cli_logged_in(
+    cli: str, profile: HarnessProfile | None = None
+) -> bool | None:
     """``claude auth status --json`` under the environment turns use.
 
     True or False when the CLI reports ``loggedIn``; None when it cannot say
@@ -2415,7 +2447,7 @@ async def _claude_cli_logged_in(cli: str) -> bool | None:
 
     environment = {
         **{key: value for key, value in os.environ.items() if key != "CLAUDECODE"},
-        **_scrubbed_claude_environment(),
+        **_scrubbed_claude_environment(profile=profile),
     }
     with tempfile.TemporaryDirectory(prefix="nebula-claude-auth-") as cwd:
         process = await asyncio.create_subprocess_exec(
@@ -9192,13 +9224,15 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 raise HarnessConfigurationError(
                     "Claude CLI override must be an existing absolute executable"
                 )
+            if profile.home_directory:
+                _available_account_folder(profile)
             logged_in = (
                 await self._cli_logged_in(sdk, profile)
                 if profile.auth_mode == HarnessAuthMode.EXISTING_SESSION
                 else None
             )
             if logged_in is False:
-                raise HarnessConfigurationError(_claude_not_logged_in_detail())
+                raise HarnessConfigurationError(_claude_not_logged_in_detail(profile))
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
@@ -9264,7 +9298,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
         if cli is None:
             return None
         try:
-            return await _claude_cli_logged_in(cli)
+            return await _claude_cli_logged_in(cli, profile)
         except OSError as exc:
             record_caught_exception(
                 "harnesses",
@@ -9437,7 +9471,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             "permission_mode": "default",
             "can_use_tool": can_use_tool,
             "hooks": hooks,
-            "env": _scrubbed_claude_environment(),
+            "env": _scrubbed_claude_environment(profile=request.profile),
             "include_partial_messages": True,
             "include_hook_events": True,
             # Echo each stdin message when a turn takes it, so steer guidance

@@ -2733,10 +2733,16 @@ class HarnessProfile(Entity):
             raise ValueError("unrestricted permission mode requires Codex or Grok")
         if self.home_directory and (
             self.connection_mode != HarnessConnectionMode.SPAWN
-            or self.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
+            or self.kind
+            not in {
+                HarnessKind.CODEX_APP_SERVER,
+                HarnessKind.GROK_ACP,
+                HarnessKind.CLAUDE_AGENT_SDK,
+            }
         ):
             raise ValueError(
-                "account home is supported only for managed Codex and Grok processes"
+                "account home is supported only for managed Codex, Grok and "
+                "Claude processes"
             )
         native = self.native_capabilities
         if self.kind == HarnessKind.GROK_ACP:

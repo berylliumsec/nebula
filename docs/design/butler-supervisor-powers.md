@@ -239,11 +239,23 @@ provider profile is needed.
    login is stored in `$HOME/.claude/.credentials.json`, or in
    `$CLAUDE_CONFIG_DIR` if Core's service environment sets it. For a systemd
    user unit, the Core user is the unit's owner; in the container image, it is
-   the image's `nebula` user. The harness profile cannot set a different
-   account folder for Claude. On the Nebula host, as that user and with the
+   the image's `nebula` user. On the Nebula host, as that user and with the
    same `HOME` (for example `sudo -iu <core-user>`), run `claude auth login`,
    then `claude auth status`. Turns blank `ANTHROPIC_API_KEY` and every other
    ambient variable except a small allowlist, so only the stored login is used.
+
+   **Separate Claude accounts.** A Claude profile can set an **Account folder**
+   (Settings → Agent harnesses → Account folder), like Codex and Grok. Core
+   then runs the CLI for that profile's turns, Check (`claude auth status`),
+   Test turn and user skills/settings with `CLAUDE_CONFIG_DIR=<folder>`. The
+   value is built per process and never written to Core's own environment, so
+   it does not reach other profiles or their subagents, and profiles with
+   different folders can run at the same time. Sign each folder in as the Core
+   OS user with `CLAUDE_CONFIG_DIR=<folder> claude login`. A folder that does
+   not exist on the Nebula host fails Check and turns with "Account folder is
+   unavailable on the Nebula host". A profile without a folder keeps the
+   default behaviour above exactly. Once a chat has used the folder it cannot
+   be changed; add another profile to switch accounts.
 2. Settings → Agent harnesses → **Add Claude**. Set **Authentication** to
    *Existing session*, default model `claude-opus-5-5`, and allow sensitive data
    and tool-result sharing. Leave native **Shell** off. Butler sessions never
@@ -252,7 +264,8 @@ provider profile is needed.
    network restrictions.
 3. Run **Check**. It runs `claude auth status` the way turns run the CLI. If
    the CLI is not signed in, Check fails and names the OS user, `HOME` and
-   login location to fix. Then run **Test turn**. A sign-in failure there
+   login location to fix (for a profile with an account folder, the folder and
+   its `CLAUDE_CONFIG_DIR=<folder> claude login` command). Then run **Test turn**. A sign-in failure there
    gives the same explanation.
 4. Reserve Butler:
 
