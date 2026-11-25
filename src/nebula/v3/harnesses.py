@@ -283,6 +283,11 @@ HarnessOutputStream = Literal[
     "patch",
 ]
 CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
+# Models a Claude profile offers beside its own default. The SDK has no model
+# catalog call, and Settings and Butler accept only advertised models, so the
+# current exact Claude id is listed here: without it a new profile could pick
+# only the moving ``sonnet``/``opus`` aliases.
+CLAUDE_ADVERTISED_MODELS = ("claude-opus-5-5", "sonnet", "opus")
 CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
@@ -9043,8 +9048,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                                     if profile.default_model
                                     else []
                                 ),
-                                "sonnet",
-                                "opus",
+                                *CLAUDE_ADVERTISED_MODELS,
                             ]
                         )
                     ),
@@ -12769,11 +12773,15 @@ class HarnessRuntimeService:
                 if goal.token_budget is not None
                 else None,
             }
+            from .butler_note_release import retire_released_notes
             from .chat_goal_addenda import notes_progress
 
             # Supervisor notes change while the goal runs, so they ride with
-            # the turn's progress, not the standing context.
-            supervisor_notes = notes_progress(goal)
+            # the turn's progress, not the standing context. A note whose
+            # release condition now holds is retired first (never raises).
+            supervisor_notes = notes_progress(
+                await retire_released_notes(self.store, goal)
+            )
             if supervisor_notes is not None:
                 goal_progress["supervisor_notes"] = supervisor_notes
             standing_context += (
@@ -18782,7 +18790,7 @@ class HarnessRuntimeService:
                 check_in_data = WorkCheckIn.model_validate(
                     {key: value for key, value in arguments.items() if key != "item_id"}
                 )
-                update = await self.work.check_in(
+                update, guard = await self.work.check_in_guarded(
                     target_id,
                     item_id,
                     check_in_data,
@@ -18794,6 +18802,9 @@ class HarnessRuntimeService:
                     allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
+                if guard is not None:
+                    # The agent sees which cited hashes did not resolve.
+                    result["fabrication_guard"] = guard.as_dict()
                 (await self._note_goal_check_in(turn))
         except Exception as exc:
             (await self._finish_gateway_call(call.id, error=exc))
