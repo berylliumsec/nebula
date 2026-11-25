@@ -1,40 +1,40 @@
 {
-  "change_digest": "b6e563e29513e42546936651c947aea8a2e268fa21ddd4fc9b20086756820f7c",
-  "reviewed_by": "Claude: Claude harness account folders",
-  "reason": "Per-profile account folders for the Claude harness, like Codex/Grok. A claude_agent_sdk profile with home_directory runs the Claude CLI with CLAUDE_CONFIG_DIR=<folder> for turns (ClaudeAgentOptions env), Check (probe and the `claude auth status --json` subprocess), Test turn (harness_diagnostics opens through the same adapter) and user skills/settings (setting_sources=user reads CLAUDE_CONFIG_DIR); the env is built per call, never via os.environ. A missing folder raises the shared 'Account folder is unavailable on the Nebula host' error on Check and turns. Signed-out messages name the profile folder and `CLAUDE_CONFIG_DIR=<folder> claude login` (harnesses, harness_diagnostics). The domain validator accepts home_directory for managed Claude profiles (domain). Without home_directory the env construction is byte-identical. The harness settings form shows the Account folder for Claude with its login command (HarnessSettings UI). Docs: butler-supervisor-powers Claude section, harness-account-homes and the settings-assistant Claude row; product knowledge rebuilt. Python selects the new suite, the existing Claude harness/adapter/turn suites for harnesses, test_harness_test_turn_reason for harness_diagnostics, test_domain plus the two account-home domain tests in test_harnesses for domain, and the product-knowledge digest and Claude/Butler doc rows; Frontend selects the harness settings tests.",
-  "exclusions": "test_harnesses.py is selected only by its two account-home validation node ids: ::test_knowledge_access_change_refreshes_fixed_gateway_catalog and ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail on unmodified main. test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI API call changed, so the Butler workflow inventory is unchanged (registry check passes without --write-inventory). No live Claude CLI or vendor login: the SDK and CLI are fakes. No native or Playwright change. No full-suite approval.",
+  "change_digest": "e93cda116a25d8f3a53327d730514e26aeb5c93a6357425fb343276129bb3c58",
+  "reviewed_by": "Claude: goal operator action requests",
+  "reason": "Goal agents can open typed operator action requests. New goal_operator_requests module: goal.request_operator_action (provider goals via chat_goal_tools goal components and GOAL_TOOL_NAMES; harness goals via a native gateway catalog entry and dispatch in harnesses, recorded as a ToolCall) reusing operator_action_requests create/dedupe/auto-check/verification/block/sweep logic, with guardrails (owning running-goal turn, Core-only actions refused, concrete device for physical actions, decision-style reasons refused, max 3 open per goal). operator_action_requests adds the Core-only answer_question action and defaults create/close/sweep to IncidentNotifier (explicit None still disables), so every open notifies and closes resolve the incident. Claude adapter (harnesses): AdapterOpenRequest.ask_user_handler; when Core supplies it, AskUserQuestion is offered and the PreToolUse hook (or can_use_tool without hooks) denies it with Core's answer: decide-yourself for research decisions, an answer_question request plus goal block for operator-only physical/account asks, ask-in-reply outside goals. Docs: butler-supervisor-powers and nebula-settings-assistant; product knowledge rebuilt. Python selects the new suite, the operator action and model-refusal suites (default notifier), the Claude adapter suite, harness chat goal and provider goal-tool suites (test_butler_oversight, test_turn_tool_bookkeeping), five gateway/goal node ids in test_harnesses, and four product-knowledge nodes.",
+  "exclusions": "test_harnesses.py is selected only by node id: ::test_knowledge_access_change_refreshes_fixed_gateway_catalog and ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail on unmodified main. test_universal_agent_tools.py is not selected: the same 17 tests fail on an unmodified origin/main export as on this branch (verified by diffing the failure sets). test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI or UI API change (board renders action_label from Core), so no frontend tests and the Butler workflow inventory is unchanged. No live Claude CLI, Core or host: SDK and harness connections are fakes. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 189,
-    "frontend": 24,
+    "python": 233,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_claude_account_folders.py",
-    "tests/v3/test_butler_claude_harness.py",
-    "tests/v3/test_butler_harness_parity.py",
-    "tests/v3/test_claude_harness_turns.py",
-    "tests/v3/test_domain.py",
+    "tests/v3/test_goal_operator_requests.py",
+    "tests/v3/test_operator_action_requests.py",
+    "tests/v3/test_model_refusal_visibility.py",
     "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harness_test_turn_reason.py",
-    "tests/v3/test_harnesses.py::test_account_home_requires_unambiguous_absolute_path",
-    "tests/v3/test_harnesses.py::test_remote_endpoint_rejects_local_account_home",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_butler_oversight.py",
+    "tests/v3/test_turn_tool_bookkeeping.py",
+    "tests/v3/test_harnesses.py::test_harness_gateway_catalog_awaits_core_tool_components",
+    "tests/v3/test_harnesses.py::test_harness_gateway_catalog_paginates_below_ipc_limit",
+    "tests/v3/test_harnesses.py::test_completed_harness_goal_turn_releases_its_execution_claim",
+    "tests/v3/test_harnesses.py::test_harness_core_tool_dispatch_awaits_attachment_for_ssh_and_catalog",
+    "tests/v3/test_harnesses.py::test_butler_harness_has_scoped_capability_gateway_and_isolated_session",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_adding_a_claude_harness",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_claude_account_folders"
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_harness_goal_blocking",
+    "tests/v3/test_product_knowledge.py::test_product_search_explains_goal_operator_action_requests",
+    "tests/v3/test_goal_operator_requests_harness.py"
   ],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": [
-    "frontend-audit"
-  ]
+  "checks": []
 }

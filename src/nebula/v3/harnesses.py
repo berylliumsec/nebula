@@ -1237,6 +1237,14 @@ def _harness_developer_instructions(
             else ""
         )
         + (
+            "Decide research questions yourself; never ask the operator to choose. Only when the operator must act with their hands or account (replug or power-cycle a device, restart a host, attach a credential, approve an account change), call goal.request_operator_action with verification evidence instead of writing it into a Work check-in. "
+            if any(
+                item.get("name") == "goal.request_operator_action"
+                for item in gateway_tools
+            )
+            else ""
+        )
+        + (
             harness_subagent_instructions(
                 provider_subagent["model"],
                 _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
@@ -2006,6 +2014,12 @@ async def _decline_unsupported_interaction(
     return str(uuid4()), future
 
 
+# Answers a vendor's interactive ask-the-user tool (Claude's AskUserQuestion)
+# during a headless Nebula turn with the text the model reads as the result.
+AskUserHandler = Callable[[dict[str, Any]], Awaitable[str]]
+CLAUDE_ASK_USER_TOOL = "AskUserQuestion"
+
+
 @dataclass(frozen=True)
 class AdapterOpenRequest:
     profile: HarnessProfile
@@ -2017,6 +2031,8 @@ class AdapterOpenRequest:
     interaction_handler: InteractionHandler = _decline_unsupported_interaction
     gateway_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     gateway_tools: tuple[dict[str, Any], ...] = ()
+    # None: the vendor's ask-the-user tool is not offered (and is denied).
+    ask_user_handler: AskUserHandler | None = None
 
 
 class HarnessConnection(ABC):
@@ -9348,6 +9364,11 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             request.session, request.profile
         )
         native_tools = _claude_native_tools(native_capabilities)
+        ask_user = request.ask_user_handler
+        if ask_user is not None:
+            # Offered so Core sees the question; it is always answered by Core
+            # (never by a person) through the PreToolUse deny reason below.
+            native_tools = [*native_tools, CLAUDE_ASK_USER_TOOL]
         mcp_config, _ = _mcp_runtime_config(
             request.mcp_profiles,
             request.credential_store,
@@ -9376,6 +9397,20 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     allow(updated_input=input_data)
                     if allow
                     else {"behavior": "allow", "updatedInput": input_data}
+                )
+            if not server and tool_name == CLAUDE_ASK_USER_TOOL:
+                # Reached only without the PreToolUse hook: Core answers the
+                # question instead of an operator approval prompt.
+                message = (
+                    await ask_user(dict(input_data))
+                    if ask_user is not None
+                    else "Nebula does not relay AskUserQuestion in this session."
+                )
+                deny = getattr(sdk, "PermissionResultDeny", None)
+                return (
+                    deny(message=message)
+                    if deny
+                    else {"behavior": "deny", "message": message}
                 )
             ticket = await request.permission_handler(
                 HarnessPermissionRequest(
@@ -9418,6 +9453,14 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             if server == "nebula":
                 decision = "allow"
                 reason = "Nebula gateway performs the authoritative policy decision"
+            elif tool_name == CLAUDE_ASK_USER_TOOL and ask_user is not None:
+                # No person answers a headless turn: Core decides what the
+                # question becomes and the deny reason carries its answer.
+                tool_input = hook_input.get("tool_input")
+                decision = "deny"
+                reason = await ask_user(
+                    dict(tool_input) if isinstance(tool_input, Mapping) else {}
+                )
             elif server:
                 decision = "ask"
                 reason = "Nebula approval is required for this configured MCP tool"
@@ -17680,6 +17723,9 @@ class HarnessRuntimeService:
                             },
                         }
                     )
+                    from .goal_operator_requests import gateway_tool
+
+                    tools.append(gateway_tool())
             work_enabled = await self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
                 if name != "work.agents" and not work_enabled:
@@ -17731,6 +17777,7 @@ class HarnessRuntimeService:
                             "report_attention",
                             "goal.complete",
                             "goal.block",
+                            "goal.request_operator_action",
                         }
                     )
                 if allowed is not None and name not in allowed and name not in always:
@@ -17877,6 +17924,7 @@ class HarnessRuntimeService:
                             "report_attention",
                             "goal.complete",
                             "goal.block",
+                            "goal.request_operator_action",
                         }
                     )
                 if _session_provider_subagent(current) is not None:
@@ -18611,6 +18659,8 @@ class HarnessRuntimeService:
             return await self._gateway_agent_message(session, turn, name, arguments)
         if name == "goal.block":
             return await self._gateway_goal_block_call(turn, arguments)
+        if name == "goal.request_operator_action":
+            return await self._gateway_goal_operator_request_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
             if name == "work.agents":
                 # Its roster is a database read; keep it off the MCP event loop.
@@ -19172,6 +19222,59 @@ class HarnessRuntimeService:
                 "blocked_reason": saved.blocked_reason,
                 "revision": saved.revision,
             }
+        except Exception as exc:
+            (await self._finish_gateway_call(call.id, error=exc))
+            raise
+        (await self._finish_gateway_call(call.id, result=result))
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    async def _gateway_goal_operator_request_call(
+        self, turn: HarnessTurn, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Open an operator action request for the goal this turn owns."""
+
+        from .goal_operator_requests import GOAL_REQUEST_TOOL, request_from_goal_turn
+
+        if not turn.chat_turn_id or not turn.chat_session_id:
+            raise HarnessConfigurationError(
+                "Only a goal chat turn can request an operator action"
+            )
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("control_assistant") or turn.metadata.get(
+            "analysis_only"
+        ):
+            raise HarnessConfigurationError(
+                "This turn cannot request an operator action"
+            )
+        call = ToolCall(
+            engagement_id=turn.engagement_id,
+            run_id=turn.chat_turn_id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=turn.chat_turn_id,
+            tool_name=GOAL_REQUEST_TOOL,
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "goal"},
+        )
+        call = await self.store.reserve_tool_call(call)
+        (await self._attach_gateway_tool_call(turn, call.id))
+        try:
+            result = await request_from_goal_turn(
+                self.store,
+                project_id=turn.engagement_id,
+                session_id=turn.chat_session_id,
+                chat_turn_id=turn.chat_turn_id,
+                arguments=arguments,
+                runtime="harness",
+            )
         except Exception as exc:
             (await self._finish_gateway_call(call.id, error=exc))
             raise
@@ -20649,6 +20752,25 @@ class HarnessRuntimeService:
             active_turn = await self._active_gateway_turn(session.id)
             return await self._request_interaction(active_turn.id, request)
 
+        async def ask_user_handler(tool_input: dict[str, Any]) -> str:
+            from .goal_operator_requests import handle_headless_question
+
+            try:
+                active_turn = await self._active_gateway_turn(session.id)
+            except HarnessStateError as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.claude.ask_user_no_turn",
+                    "AskUserQuestion arrived without an active harness turn.",
+                    exc,
+                    stage="ask-user",
+                )
+                return (
+                    "Nebula does not relay AskUserQuestion. Decide this yourself "
+                    "and continue."
+                )
+            return await handle_headless_question(self.store, active_turn, tool_input)
+
         portable_names = profile.kind == HarnessKind.GROK_ACP
 
         async def gateway_catalog(params: dict[str, Any]) -> dict[str, Any]:
@@ -20775,6 +20897,7 @@ class HarnessRuntimeService:
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
                     interaction_handler=interaction_handler,
+                    ask_user_handler=None if analysis_only else ask_user_handler,
                 ),
             )
             if standing is not None:
