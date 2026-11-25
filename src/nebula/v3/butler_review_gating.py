@@ -76,32 +76,32 @@ _CLAIM = (
     r"(?:sign[\s_-]*off|signed[\s_-]*off|verdict|approval|approved|approves|"
     r"accepted|accepts|accept|lgtm|passed)"
 )
-# A value that only says the sign-off or verdict has not happened yet.
+# A value that only says the sign-off or verdict has not happened yet:
+# a leading "pending"/"requested"/"not yet"/"to be ...", or a bare word such
+# as "none" or "no" that is the whole value. "no objections" or "none
+# needed, supervisor agreed" are claims, not pending values.
 _PENDING_VALUE = (
-    r"(?:pending|requested|required|needed|outstanding|open|none|n/?a|tbd|"
-    r"todo|missing|absent|awaiting|in[\s_-]*progress|not[\s_-]*yet|no\b|"
-    r"unknown|to[\s_-]*be\b)"
+    r"(?:(?:pending|requested|awaiting|not[\s_-]*yet|to[\s_-]*be)\b|"
+    r"(?:required|needed|outstanding|open|none|n/?a|tbd|todo|missing|absent|"
+    r"in[\s_-]*progress|unknown|no)\s*(?:[.;,)]|$))"
 )
 # Words that put a following approval word in the future, a condition, a
 # requirement or a negation: "must be approved by", "until it is accepted",
-# "do not record LOW as an accepted disposition".
+# "do not treat it as accepted". The look-back spans at most three plain
+# words and never crosses punctuation, so "Reviewer, when asked, approved"
+# and "needs no further changes and approved" stay claims.
 _IRREALIS = re.compile(
     r"\b(?:be|to|must|should|shall|will|would|could|can|may|"
     r"might|needs?|requires?|until|unless|once|if|when|before|not|never|"
-    r"no|awaiting|await|pending|nor|without)\b(?:\s+[\w-]+){0,2}\s*$",
+    r"nothing|nobody|awaiting|await|pending|nor|without)\b(?:[ \t]+[\w-]+){0,3}[ \t]*$",
     re.IGNORECASE,
 )
-# A verdict or sign-off stated as a value or a completed event. Pending
+# A verdict or sign-off stated as a value or a completed approval. Pending
 # markers elsewhere in the clause do not cancel these.
 _STRONG_CLAIM = re.compile(
     r"(?-i:\b(?:ACCEPT(?:_WITH_RESIDUALS)?|NOT_READY|REJECT(?:ED)?)\b)"
-    r"|(?:\b(?:has|have|had)\s+(?:been\s+)?|\b(?:was|were|is|got|and|then|now|"
-    r"already)\s+)"
-    r"(?:approved|accepted|granted|signed[\s_-]*off|passed)\b"
-    r"|\b" + _AUTHORITY + r"\s+(?:has\s+|had\s+)?(?:approved|accepted|"
-    r"signed[\s_-]*off|passed|granted)\b"
-    r"|[:=]\s*[*_`]*\s*(?:approved|accepted|granted|signed[\s_-]*off|passed|"
-    r"lgtm|yes|ok|done)\b",
+    r"|\b(?:approved|accepted|granted|signed[\s_-]*off|passed|lgtm)\b"
+    r"|[:=]\s*[*_`]*\s*(?:yes|ok|done)\b",
     re.IGNORECASE,
 )
 _PENDING = re.compile(
@@ -141,8 +141,9 @@ _ATTRIBUTED = re.compile(
 _AUTHORITY_CLAIM = re.compile(
     r"\b" + _AUTHORITY + r"\b[^\n]{0,48}?\b" + _CLAIM + r"\b", re.IGNORECASE
 )
-# Clauses end at sentence punctuation or a semicolon followed by space.
-_CLAUSE_SPLIT = re.compile(r"(?<=[.;!?])\s+|\s+[\u2014\u2013]\s+")
+# Clauses end at sentence punctuation or a dash. A semicolon does not end
+# one: "Reviewer will not object; approved." is one claim.
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\s+[\u2014\u2013]\s+")
 
 
 def _attributed_claim(clause: str) -> bool:

@@ -278,6 +278,67 @@ REVIEWER_INSTRUCTIONS = (
 )
 
 
+_READ_CHUNK = 1 << 20
+
+
+def _root_relative(
+    candidate: str, roots: list[tuple[str, str]]
+) -> tuple[str, tuple[str, ...]] | None:
+    """The real root and the components below it, compared lexically."""
+
+    for lexical, real in roots:
+        for base in dict.fromkeys((lexical, real)):
+            prefix = base.rstrip("/") + "/"
+            if candidate.startswith(prefix):
+                parts = tuple(candidate[len(prefix) :].split("/"))
+                if all(part not in {"", ".", ".."} for part in parts):
+                    return real, parts
+    return None
+
+
+def _read_pinned(real_root: str, parts: tuple[str, ...]) -> tuple[bytes, int, str]:
+    """Read one regular file below ``real_root`` without following links.
+
+    Every component is opened with ``O_NOFOLLOW`` from the root descriptor,
+    so a link swapped in after the path was checked is refused instead of
+    followed. Returns the first ``MAX_FILE_BYTES + 1`` bytes, the file size
+    and the SHA-256 of the whole file, hashed in chunks from the same
+    descriptor, so memory stays bounded whatever the file size.
+    """
+
+    import hashlib
+    import stat
+
+    from .workspace import _open_directory_chain
+
+    directory = _open_directory_chain(Path(real_root), parts[:-1])
+    try:
+        descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory,
+        )
+    finally:
+        os.close(directory)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise IsADirectoryError(parts[-1])
+        hasher = hashlib.sha256()
+        head = bytearray()
+        size = 0
+        while chunk := os.read(descriptor, _READ_CHUNK):
+            hasher.update(chunk)
+            size += len(chunk)
+            if len(head) <= MAX_FILE_BYTES:
+                head += chunk[: MAX_FILE_BYTES + 1 - len(head)]
+        return bytes(head), size, hasher.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
 def _read_evidence(
     policy: SupervisorPolicy, paths: list[str], workspace: str | None = None
 ) -> list[dict[str, Any]]:
@@ -286,12 +347,18 @@ def _read_evidence(
     ``workspace`` is the goal's own project folder: a relative path resolves
     inside it, and it is always an evidence root for that goal. The
     operator's ``NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`` add absolute roots.
-    Symbolic links are resolved before the root check.
+    The path is checked lexically and then opened one component at a time
+    without following links: a symbolic link anywhere below a root is
+    refused, so the goal cannot point the reviewer outside its roots, even
+    by swapping a link in after the check.
     """
 
-    roots = [os.path.realpath(item) for item in policy.evidence_roots]
+    roots = [
+        (os.path.normpath(item), os.path.realpath(item))
+        for item in policy.evidence_roots
+    ]
     if workspace is not None:
-        roots.append(os.path.realpath(workspace))
+        roots.append((os.path.normpath(workspace), os.path.realpath(workspace)))
     if not roots:
         raise GuardrailViolation(
             "not_configured",
@@ -307,31 +374,31 @@ def _read_evidence(
                     "relative_evidence_path",
                     f"{raw} is relative and the goal's project has no workspace",
                 )
-            resolved = os.path.realpath(os.path.join(workspace, raw))
+            candidate = os.path.normpath(os.path.join(os.path.realpath(workspace), raw))
         else:
-            resolved = os.path.realpath(raw)
-        if not any(
-            resolved == r or resolved.startswith(r.rstrip("/") + "/") for r in roots
-        ):
+            candidate = os.path.normpath(raw)
+        located = _root_relative(candidate, roots)
+        if located is None:
             raise GuardrailViolation(
                 "evidence_outside_roots", f"{raw} is outside the evidence roots"
             )
-        path = Path(resolved)
-        if not path.is_file():
+        try:
+            body, size, sha256 = _read_pinned(*located)
+        except FileNotFoundError:
+            # diagnostic-expected: a cited file that does not exist is reported to the reviewer as missing.
             files.append({"path": raw, "missing": True})
             continue
-        data = path.read_bytes()
-        body = data[:MAX_FILE_BYTES]
+        except OSError as exc:
+            # A symbolic link (ELOOP/ENOTDIR under O_NOFOLLOW), a folder or a
+            # special file: refused, never followed.
+            raise GuardrailViolation(
+                "evidence_not_regular_file",
+                f"{raw} is a symbolic link, folder or special file",
+            ) from exc
         if b"\x00" in body[:4096]:
-            files.append(
-                {
-                    "path": raw,
-                    "binary": True,
-                    "bytes": len(data),
-                    "sha256": digest(data),
-                }
-            )
+            files.append({"path": raw, "binary": True, "bytes": size, "sha256": sha256})
             continue
+        body = body[:MAX_FILE_BYTES]
         if total + len(body) > MAX_EVIDENCE_BYTES:
             files.append({"path": raw, "omitted": "evidence byte budget reached"})
             continue
@@ -339,9 +406,9 @@ def _read_evidence(
         files.append(
             {
                 "path": raw,
-                "bytes": len(data),
-                "sha256": digest(data),
-                "truncated": len(data) > MAX_FILE_BYTES,
+                "bytes": size,
+                "sha256": sha256,
+                "truncated": size > MAX_FILE_BYTES,
                 "content": redact(policy, body.decode("utf-8", "replace")),
             }
         )
@@ -354,6 +421,7 @@ _BEFORE_REVIEWER = frozenset(
         "not_configured",
         "relative_evidence_path",
         "evidence_outside_roots",
+        "evidence_not_regular_file",
         "reviewer_disabled",
         "reviewer_model_not_allowed",
         "reviewer_privacy_not_authorized",
@@ -375,6 +443,12 @@ _EVIDENCE_REFUSALS: dict[str, tuple[str, str]] = {
         "to resolve it in.",
         "Pass absolute paths under NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS, or ask "
         "the operator to give the project a workspace.",
+    ),
+    "evidence_not_regular_file": (
+        "An evidence path is a symbolic link, a folder or a special file. Core "
+        "reads evidence only from regular files and never follows links.",
+        "Cite the regular file itself, inside the goal's project workspace or "
+        "the configured evidence roots.",
     ),
     "evidence_outside_roots": (
         "An evidence path is outside the goal's project workspace and the "

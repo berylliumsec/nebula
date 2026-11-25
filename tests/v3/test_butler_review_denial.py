@@ -11,6 +11,7 @@ root, relative paths resolve there, and every refusal names Core's rule.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from nebula.v3 import butler_independent_review as review_module
 from nebula.v3.butler_independent_review import (
     REVIEW_KEY,
     ButlerIndependentReview,
@@ -175,26 +177,101 @@ async def test_absolute_path_inside_the_project_workspace_is_admitted(
     assert "the service refuses external callers" in prompts[0]
 
 
-@pytest.mark.parametrize("escape", ["../outside.md", "runtime/link.md"])
+@pytest.mark.parametrize(
+    ("escape", "rule"),
+    [
+        ("../outside.md", "evidence_outside_roots"),
+        # A sibling project's workspace is not this goal's evidence root.
+        ("{sibling}/notes.md", "evidence_outside_roots"),
+        # Links are never followed, even to a file outside the roots.
+        ("runtime/link.md", "evidence_not_regular_file"),
+        ("runtime/linked-dir/notes.md", "evidence_not_regular_file"),
+        ("runtime/case-1", "evidence_not_regular_file"),
+    ],
+)
 @pytest.mark.anyio
 async def test_paths_escaping_the_workspace_are_refused(
-    tmp_path: Path, escape: str
+    tmp_path: Path, escape: str, rule: str
 ) -> None:
     workspace = _workspace(tmp_path)
     outside = tmp_path / "outside.md"
     outside.write_text("private bytes\n")
+    sibling = tmp_path / "sibling-project-workspace"
+    sibling.mkdir()
+    (sibling / "notes.md").write_text("private bytes\n")
     os.symlink(outside, workspace / "runtime/link.md")
+    os.symlink(sibling, workspace / "runtime/linked-dir")
+    escape = escape.format(sibling=sibling)
     service, _, prompts, _ = _service(tmp_path, workspace=workspace)
 
     with pytest.raises(GuidedToolError) as caught:
         await service.request(_arguments([escape]))
 
-    assert caught.value.code == "independent_review.evidence_outside_roots"
+    assert caught.value.code == f"independent_review.{rule}"
     envelope = _envelope(service, caught.value)
     # Core-authored text only: the cited path is not echoed back.
     assert escape not in envelope["problem"]
-    assert "project workspace" in envelope["problem"]
     assert prompts == []
+
+
+@pytest.mark.anyio
+async def test_link_swapped_in_after_the_check_is_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("private bytes\n")
+    target = workspace / RELATIVE[0]
+    original = review_module._root_relative
+
+    def check_then_swap(candidate, roots):
+        # The path checks out as a regular file inside the workspace, then
+        # the goal replaces it with a link before Core opens it.
+        located = original(candidate, roots)
+        target.unlink()
+        os.symlink(outside, target)
+        return located
+
+    monkeypatch.setattr(review_module, "_root_relative", check_then_swap)
+    service, _, prompts, _ = _service(tmp_path, workspace=workspace)
+
+    with pytest.raises(GuidedToolError) as caught:
+        await service.request(_arguments([RELATIVE[0]]))
+
+    assert caught.value.code == "independent_review.evidence_not_regular_file"
+    assert prompts == []
+
+
+@pytest.mark.anyio
+async def test_oversized_evidence_is_bounded_and_fully_hashed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    data = b"evidence line\n" * (review_module.MAX_FILE_BYTES // 4)
+    assert len(data) > 3 * review_module.MAX_FILE_BYTES
+    (workspace / "runtime/big.log").write_bytes(data)
+    read_sizes: list[int] = []
+    real_read = os.read
+
+    def recording_read(descriptor: int, size: int) -> bytes:
+        read_sizes.append(size)
+        return real_read(descriptor, size)
+
+    monkeypatch.setattr(review_module.os, "read", recording_read)
+    service, _, prompts, _ = _service(tmp_path, workspace=workspace)
+
+    files = review_module._read_evidence(
+        load_policy(_env(tmp_path)), ["runtime/big.log"], str(workspace)
+    )
+
+    [entry] = files
+    assert entry["truncated"] is True
+    assert entry["bytes"] == len(data)
+    assert entry["sha256"] == hashlib.sha256(data).hexdigest()
+    assert len(entry["content"]) == review_module.MAX_FILE_BYTES
+    assert read_sizes and max(read_sizes) <= review_module._READ_CHUNK
+    await service.request(_arguments(["runtime/big.log"]))
+    assert len(prompts[0]) < len(data)
 
 
 @pytest.mark.anyio

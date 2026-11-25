@@ -155,8 +155,12 @@ Butler event stream.
    and its evidence paths. Evidence cited in the held proposal is added automatically.
    A relative path resolves in the goal's project workspace, the same paths the
    workspace tools return. An absolute path must be inside that workspace or
-   under `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`. Core resolves symbolic links
-   before it checks the root.
+   under `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`. Core opens each path one
+   folder at a time and never follows a symbolic link below a root. It
+   refuses a link, a folder or a special file with
+   `independent_review.evidence_not_regular_file`, also when a link replaces
+   the file after the check. Core keeps at most the first 60,000 bytes of a
+   file and hashes the whole file in chunks.
 2. Core checks two things. The reviewer model must differ from the goal's model.
    The reviewer profile must be enabled, allowlisted (on a harness: offer the
    model after **Check**), and permit sensitive data.
