@@ -8,8 +8,10 @@ from sqlalchemy import select, update
 
 from nebula.v3.chat_subagents import recoverable_after_core_restart
 from nebula.v3.chat_turn_ledger import ChatTurnLedger
+from nebula.v3.butler_goal_hygiene import classify_reason
 from nebula.v3.database import (
     DeploymentReceiptRow,
+    ProjectHandoffRow,
     ProjectOwnershipRow,
     ProviderTurnQueueRow,
     RuntimeCapacityReservationRow,
@@ -27,7 +29,11 @@ from nebula.v3.domain import (
     ChatSubagent,
     ChatSubagentStatus,
     ChatTurn,
+    ChatGoalStatus,
     ChatTurnStatus,
+    HarnessTurn,
+    HarnessTurnOrigin,
+    HarnessTurnStatus,
     NativeHookExecution,
     RiskClass,
     ToolCall,
@@ -37,6 +43,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.execution_scope import execution_context
 from nebula.v3.process_identity import process_origin
+from nebula.v3.recovery_markers import HARNESS_RUNTIME_STOP, PROJECT_RUNTIME_STOP_CAUSE
 from nebula.v3.runtime_chat_stream import RuntimeChatJournal, SEGMENT_END
 from nebula.v3.runtime_coordination import (
     STORAGE_REPORT_COMMAND,
@@ -1078,7 +1085,8 @@ async def test_unknown_tool_effect_is_recorded_and_resumes_like_a_restart(orphan
     turn = await value.store.get(ChatTurn, value.turn.id)
     recovery = turn.request_snapshot["recovery"]
     assert recovery["unknown_tool_call_ids"] == [call.id]
-    assert recovery["cause"] == "core_restart"
+    assert recovery["cause"] == "project_runtime_stop"
+    assert turn.error.startswith("Project runtime stopped while")
     assert "resume automatically without replaying the effect" in turn.error
     # Unknown until restart reconciliation carries it forward as outcome-unknown;
     # then Core resumes the turn by itself.
@@ -1577,4 +1585,118 @@ async def test_dead_owner_requeues_tracked_request_that_saved_nothing(orphan):
             **UNSAVED_REQUEST_RESULT,
             "previous_state": "running",
         }
+    assert await value.reconcile() == result
+
+
+async def _handoff(value, *, phase="finishing", target_version="v2"):
+    async with value.coordinator.database.session() as sql:
+        await sql.merge(
+            ProjectHandoffRow(
+                project_id="one",
+                revision=1,
+                source_runtime_id=value.lease.runtime_id,
+                source_fencing_token=value.lease.fencing_token,
+                target_runtime_id="synthetic-target",
+                target_version=target_version,
+                phase=phase,
+                admission_held=True,
+                blockers=[
+                    "An accepted provider turn is finishing on its current runtime"
+                ],
+                checkpoint={},
+                updated_at_ms=0,
+            )
+        )
+
+
+async def test_runtime_stop_is_not_reported_as_a_core_restart(orphan):
+    value = orphan
+    await value.expire()
+    result = await value.reconcile()
+    assert result["deployment_handoff"] is False
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert turn.request_snapshot["recovery"]["cause"] == PROJECT_RUNTIME_STOP_CAUSE
+    assert turn.error == (
+        "Project runtime stopped before this response completed. "
+        "Core will resume it automatically."
+    )
+    # The promise holds: Core's own recovery pass owns this turn.
+    assert recoverable_after_core_restart(turn)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert goal.status == ChatGoalStatus.PAUSED
+    assert goal.blocked_reason == turn.error
+    assert "Core restarted" not in goal.blocked_reason
+
+
+async def test_deployment_handoff_eviction_is_named(orphan):
+    value = orphan
+    await _handoff(value)
+    await value.expire()
+    result = await value.reconcile()
+    assert result["deployment_handoff"] is True
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert turn.error.startswith(
+        "Project runtime stopped for a deployment handoff before this response completed."
+    )
+    assert recoverable_after_core_restart(turn)
+    goal = await value.store.get(ChatGoal, value.goal.id)
+    assert goal.blocked_reason == turn.error
+    # Butler hygiene still treats it as the transient interruption it is.
+    assert classify_reason(goal) == ("transient", "core_interrupted")
+
+
+@pytest.mark.parametrize(
+    "handoff",
+    [
+        {"phase": "verified"},
+        # A handoff to the same release is a runtime move, not a deployment.
+        {"target_version": "v1"},
+    ],
+)
+async def test_only_an_unfinished_release_handoff_counts_as_a_deployment(
+    orphan, handoff
+):
+    value = orphan
+    await _handoff(value, **handoff)
+    await value.expire()
+    result = await value.reconcile()
+    assert result["deployment_handoff"] is False
+    turn = await value.store.get(ChatTurn, value.turn.id)
+    assert turn.error.startswith("Project runtime stopped before")
+
+
+async def test_unfinished_harness_turns_are_marked_with_the_runtime_stop(orphan):
+    value = orphan
+    await _handoff(value)
+    turns = {}
+    for status in (
+        HarnessTurnStatus.RUNNING,
+        HarnessTurnStatus.QUEUED,
+        HarnessTurnStatus.COMPLETE,
+    ):
+        turns[status] = await value.store.create(
+            HarnessTurn(
+                engagement_id="one",
+                harness_session_id="synthetic-harness-session",
+                origin=HarnessTurnOrigin.ANALYSIS,
+                status=status,
+                prompt="Synthetic analysis",
+            )
+        )
+    await value.expire()
+    result = await value.reconcile()
+    assert sorted(result["runtime_stopped_harness_turn_ids"]) == sorted(
+        [turns[HarnessTurnStatus.RUNNING].id, turns[HarnessTurnStatus.QUEUED].id]
+    )
+    for status, turn in turns.items():
+        saved = await value.store.get(HarnessTurn, turn.id)
+        # Nothing is settled here; the new worker's startup does that.
+        assert saved.status == status
+        mark = saved.metadata.get(HARNESS_RUNTIME_STOP)
+        if status == HarnessTurnStatus.COMPLETE:
+            assert mark is None
+        else:
+            assert mark["runtime_id"] == value.lease.runtime_id
+            assert mark["fencing_token"] == value.lease.fencing_token
+            assert mark["deployment_handoff"] is True
     assert await value.reconcile() == result
