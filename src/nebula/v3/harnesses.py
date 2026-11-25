@@ -96,8 +96,11 @@ from .work_priority import is_high
 from .project_hold_gate import active_hold, held_detail, is_held
 from .recovery_markers import (
     GOAL_PROVIDER_RETRY,
+    HARNESS_QUEUED_CORE_RESTART_PAUSE,
+    HARNESS_RUNTIME_STOP,
     OPERATOR_RECOVERY_STOP,
     TURN_GOAL_AUTO_RETRY,
+    harness_stop_cause,
 )
 from .chat import (
     ChatError,
@@ -10228,10 +10231,17 @@ class HarnessRuntimeService:
                     )
 
     async def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
-        """Settle one harness turn whose producer died with the previous Core."""
+        """Settle one harness turn whose producer died with the previous process.
+
+        That process is the previous Core, or only this project's runtime when
+        dead-owner reconciliation marked the turn (``HARNESS_RUNTIME_STOP``):
+        a deployment handoff that stopped the worker, a crash or an OOM kill
+        while Core kept running. The recorded reasons name which one.
+        """
 
         await self._reconcile_turn_tool_calls(turn.id)
         turn = await self.store.get(HarnessTurn, turn.id)
+        stop = harness_stop_cause(turn)
         if turn.status == HarnessTurnStatus.QUEUED:
             # A queued chat or analysis turn's producer died with the
             # previous process, before or while it connected; nothing will
@@ -10241,8 +10251,9 @@ class HarnessRuntimeService:
                 (
                     await self._settle_orphaned_queued_turn(
                         turn,
-                        "Nebula Core restarted before the harness turn started.",
-                        reason="core_restart",
+                        f"{stop.subject} before the harness turn started.",
+                        reason=stop.reason,
+                        goal_pause=stop.queued_goal_pause,
                     )
                 )
             return
@@ -10252,14 +10263,21 @@ class HarnessRuntimeService:
             {
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
-                "error": "Nebula Core restarted while the harness outcome was uncertain",
+                "error": f"{stop.subject} while the harness outcome was uncertain",
+                # The stop is now recorded in the error; a stale mark must not
+                # describe a later Core restart.
+                "metadata": {
+                    key: value
+                    for key, value in turn.metadata.items()
+                    if key != HARNESS_RUNTIME_STOP
+                },
             },
             expected_revision=turn.revision,
         )
         (
             await self._expire_ended_turn_approvals(
                 interrupted_turn,
-                "Nebula Core restarted while this request was waiting; "
+                f"{stop.subject} while this request was waiting; "
                 "no decision can reach the harness.",
             )
         )
@@ -10267,12 +10285,7 @@ class HarnessRuntimeService:
         if turn.chat_session_id and turn.chat_turn_id:
             chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                (
-                    await self._pause_goal(
-                        turn.chat_session_id,
-                        "Core restarted during a harness goal turn. Review the saved reply before resuming.",
-                    )
-                )
+                (await self._pause_goal(turn.chat_session_id, stop.goal_pause))
         session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status not in {
             HarnessSessionStatus.CLOSED,
@@ -10299,14 +10312,19 @@ class HarnessRuntimeService:
                     harness_turn_id=turn.id,
                     model=session.model,
                     item_status="interrupted",
-                    summary="Nebula Core restarted while the harness outcome was uncertain.",
-                    payload={"phase": "interrupted", "reason": "core_restart"},
+                    summary=f"{stop.subject} while the harness outcome was uncertain.",
+                    payload={"phase": "interrupted", "reason": stop.reason},
                 ),
             )
         )
 
     async def _settle_orphaned_queued_turn(
-        self, turn: HarnessTurn, error: str, *, reason: str
+        self,
+        turn: HarnessTurn,
+        error: str,
+        *,
+        reason: str,
+        goal_pause: str = HARNESS_QUEUED_CORE_RESTART_PAUSE,
     ) -> None:
         """Interrupt a turn whose producer ended before the harness started it.
 
@@ -10325,7 +10343,14 @@ class HarnessRuntimeService:
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
                 "error": error,
-                "metadata": {**turn.metadata, "interrupted_reason": reason},
+                "metadata": {
+                    **{
+                        key: value
+                        for key, value in turn.metadata.items()
+                        if key != HARNESS_RUNTIME_STOP
+                    },
+                    "interrupted_reason": reason,
+                },
             },
             expected_revision=turn.revision,
         )
@@ -10333,12 +10358,7 @@ class HarnessRuntimeService:
         if turn.chat_session_id and turn.chat_turn_id:
             chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                (
-                    await self._pause_goal(
-                        turn.chat_session_id,
-                        "Core restarted before the harness goal turn started. Review it before resuming.",
-                    )
-                )
+                (await self._pause_goal(turn.chat_session_id, goal_pause))
         # The session only turns running once connected, so its status
         # belongs to other turns and stays as it is.
         session = await self.store.get(HarnessSession, turn.harness_session_id)

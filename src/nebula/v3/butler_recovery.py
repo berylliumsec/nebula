@@ -147,9 +147,16 @@ _INSTRUCTIONS = (
 
 _GLOBAL_INSTRUCTIONS = (
     "You are Butler performing one Nebula-wide scheduled check under the "
-    "operator-owned BUTLER.md mandate. Read the live project roster, choose "
+    "operator-owned BUTLER.md mandate. The packet's act_projects lists every "
+    "Act project with its open main goals (running, paused, blocked); cover "
+    "each one in your summary, not only the project hosting this check, and "
+    "read nebula.global.projects or project for anything marked truncated. "
+    "Read the live project roster, choose "
     "which projects need work, and follow the mandate within Core's controls. "
-    "A project must have current Act authority before you change its state. "
+    "A project must have current Act authority before you change its state; "
+    "pass the target project's own authority_revision. A change to another "
+    "project runs on that project's worker: state=accepted means it is queued, "
+    "not done, so read the project again before reporting it. "
     "For a chosen project in draft or paused status, first activate it with "
     "nebula.global.resume_project using current project and authority revisions. "
     "A project must be active before you create, start, or resume a main goal. "
@@ -208,6 +215,31 @@ _GLOBAL_INSTRUCTIONS = (
     "actions stay with the operator; report them instead of attempting them."
 )
 GLOBAL_STATE_ID = "butler-global-periodic-state"
+
+
+def _fit_roster(packet: dict[str, Any], rendered: str, limit: int) -> str:
+    """Shrink a scheduled check's Act-project roster until the packet fits.
+
+    Objectives go first, then the newest-listed goals from the end; each
+    project keeps its open-goal count and says how many it omitted.
+    """
+
+    rows = packet.get("act_projects")
+    if len(rendered) <= limit or not isinstance(rows, list):
+        return rendered
+    for row in rows:
+        for goal in row["goals"]:
+            goal.pop("objective", None)
+    packet["truncated"] = True
+    rendered = json.dumps(packet, ensure_ascii=False)
+    while len(rendered) > limit:
+        row = max(rows, key=lambda item: len(item["goals"]), default=None)
+        if row is None or not row["goals"]:
+            break
+        row["goals"].pop()
+        row["goals_omitted"] += 1
+        rendered = json.dumps(packet, ensure_ascii=False)
+    return rendered
 
 
 def _possible_change(steps: list[dict[str, Any]]) -> bool:
@@ -629,7 +661,9 @@ class ButlerRecoveryAgent:
             )
         )
 
-    async def _packet(self, case: ButlerRecoveryCase) -> str:
+    async def _packet(
+        self, case: ButlerRecoveryCase, *, runtime_local: bool = False
+    ) -> str:
         event = await ButlerRecoveryService(self.store).source_event(case)
         payload = ButlerEventPayload.model_validate(event.payload)
         session = (
@@ -721,6 +755,20 @@ class ButlerRecoveryAgent:
                         }
                     )
             packet["recent_recovery_goals"] = reports[:8]
+            if self.instructions_root is not None:
+                from .butler_global_capabilities import ButlerGlobalActions
+
+                # Every Act project and its open main goals, not only the
+                # project hosting this check, so one summary covers them all.
+                packet.update(
+                    await ButlerGlobalActions(
+                        self.store,
+                        self.work,
+                        self.instructions_root,
+                        case.id,
+                        runtime_local=runtime_local,
+                    ).roster()
+                )
         if case.dialogue_results:
             packet["dialogue_results"] = case.dialogue_results[-8:]
             packet["dialogue_read_turn_ids"] = case.dialogue_read_turn_ids[-8:]
@@ -743,6 +791,7 @@ class ButlerRecoveryAgent:
                 omitted.append(optional)
                 packet["omitted_for_size"] = omitted
                 rendered = json.dumps(packet, ensure_ascii=False)
+        rendered = _fit_roster(packet, rendered, 16_000)
         if len(rendered) > 16_000:
             raise ValueError("Butler recovery packet exceeds the bounded prompt size")
         return rendered
@@ -897,8 +946,10 @@ class ButlerRecoveryAgent:
                 config["harness_cyber_access_program"],
             )
             profile_id = profile.id
+            # The roster's privacy follows the account that actually runs.
+            local = profile.privacy.local_only
         session = await self._case_session(case, parent, config)
-        packet = await self._packet(case)
+        packet = await self._packet(case, runtime_local=local)
         instructions = ((await self._global_instructions(case)) or _INSTRUCTIONS) + (
             " You may delegate bounded investigation work to your own subagents, "
             "and use subagent tools to wait for, message, and stop those children. "

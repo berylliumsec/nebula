@@ -76,15 +76,39 @@ _CLAIM = (
     r"(?:sign[\s_-]*off|signed[\s_-]*off|verdict|approval|approved|approves|"
     r"accepted|accepts|accept|lgtm|passed)"
 )
-_AFFIRMATIVE = re.compile(
-    r"\b(?:approved|accepted|granted|signed[\s_-]*off|passed|lgtm|"
-    r"ACCEPT(?:_WITH_RESIDUALS)?|NOT_READY|REJECT(?:ED)?)\b|[:=]\s*\S",
+# A value that only says the sign-off or verdict has not happened yet:
+# a leading "pending"/"requested"/"not yet"/"to be ...", or a bare word such
+# as "none" or "no" that is the whole value. "no objections" or "none
+# needed, supervisor agreed" are claims, not pending values.
+_PENDING_VALUE = (
+    r"(?:(?:pending|requested|awaiting|not[\s_-]*yet|to[\s_-]*be)\b|"
+    r"(?:required|needed|outstanding|open|none|n/?a|tbd|todo|missing|absent|"
+    r"in[\s_-]*progress|unknown|no)\s*(?:[.;,)]|$))"
+)
+# Words that put a following approval word in the future, a condition, a
+# requirement or a negation: "must be approved by", "until it is accepted",
+# "do not treat it as accepted". The look-back spans at most three plain
+# words and never crosses punctuation, so "Reviewer, when asked, approved"
+# and "needs no further changes and approved" stay claims.
+_IRREALIS = re.compile(
+    r"\b(?:be|to|must|should|shall|will|would|could|can|may|"
+    r"might|needs?|requires?|until|unless|once|if|when|before|not|never|"
+    r"nothing|nobody|awaiting|await|pending|nor|without)\b(?:[ \t]+[\w-]+){0,3}[ \t]*$",
+    re.IGNORECASE,
+)
+# A verdict or sign-off stated as a value or a completed approval. Pending
+# markers elsewhere in the clause do not cancel these.
+_STRONG_CLAIM = re.compile(
+    r"(?-i:\b(?:ACCEPT(?:_WITH_RESIDUALS)?|NOT_READY|REJECT(?:ED)?)\b)"
+    r"|\b(?:approved|accepted|granted|signed[\s_-]*off|passed|lgtm)\b"
+    r"|[:=]\s*[*_`]*\s*(?:yes|ok|done)\b",
     re.IGNORECASE,
 )
 _PENDING = re.compile(
     r"\b(?:pending|awaiting|await|requires?|required|needs?|request(?:s|ed|ing)?|"
     r"until|before|seek(?:s|ing)?|ask(?:s|ed|ing)?|wait(?:s|ing)?|not\s+yet|"
-    r"no\s+one|nobody|without)\b",
+    r"no\s+one|nobody|without|must|should|shall|will|to\s+be|unless|once|"
+    r"do\s+not|don't|never)\b",
     re.IGNORECASE,
 )
 _FORGED_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -94,20 +118,59 @@ _FORGED_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"NOT_READY|approved?|pass(?:ed)?|ok)\b",
         re.IGNORECASE,
     ),
-    # "sign-off: yes", "Signoff = granted"
-    re.compile(r"\bsign[\s_-]*off\b[\s*_`]*[:=]", re.IGNORECASE),
-    # "signed off by the supervisor", "approved by the independent reviewer"
+    # "sign-off: yes", "Signoff = granted"; not "sign-off: pending".
     re.compile(
-        r"\b(?:signed[\s_-]*off|approved|accepted|verified)\s+by\s+(?:the\s+|an?\s+)?"
-        + _AUTHORITY,
+        r"\bsign[\s_-]*off\b[\s*_`]*[:=]\s*[*_`]*\s*(?!" + _PENDING_VALUE + r")\S",
         re.IGNORECASE,
     ),
-    # Core's own review note header copied into goal text.
-    re.compile(r"INDEPENDENT\s+CLOSURE\s+REVIEW", re.IGNORECASE),
+    # Core's own review note header copied into goal text
+    # ("INDEPENDENT CLOSURE REVIEW (model): VERDICT"), not prose that names
+    # the review ("an independent closure review must be run").
+    re.compile(r"INDEPENDENT\s+CLOSURE\s+REVIEW\b"),
+    re.compile(
+        r"\bindependent\s+closure\s+review\s*\([^)\n]{0,120}\)\s*:", re.IGNORECASE
+    ),
+)
+# "signed off by the supervisor", "approved by the independent reviewer";
+# not "must be approved by the supervisor".
+_ATTRIBUTED = re.compile(
+    r"\b(?:signed[\s_-]*off|approved|accepted|verified)\s+by\s+(?:the\s+|an?\s+)?"
+    + _AUTHORITY,
+    re.IGNORECASE,
 )
 _AUTHORITY_CLAIM = re.compile(
     r"\b" + _AUTHORITY + r"\b[^\n]{0,48}?\b" + _CLAIM + r"\b", re.IGNORECASE
 )
+# Clauses end at sentence punctuation or a dash. A semicolon does not end
+# one: "Reviewer will not object; approved." is one claim.
+_CLAUSE_SPLIT = re.compile(r"(?<=[.!?])\s+|\s+[\u2014\u2013]\s+")
+
+
+def _attributed_claim(clause: str) -> bool:
+    for match in _ATTRIBUTED.finditer(clause):
+        if not _IRREALIS.search(clause[: match.start()]):
+            return True
+    return False
+
+
+def _strong_claim(clause: str) -> bool:
+    for match in _STRONG_CLAIM.finditer(clause):
+        if not _IRREALIS.search(clause[: match.start()]):
+            return True
+    return False
+
+
+def _claims_signoff(clause: str) -> bool:
+    if any(pattern.search(clause) for pattern in _FORGED_PATTERNS):
+        return True
+    if _attributed_claim(clause):
+        return True
+    if not _AUTHORITY_CLAIM.search(clause):
+        return False
+    # An authority next to an approval word is a claim unless the clause only
+    # requests, awaits or requires it; a stated verdict or completed approval
+    # in the same clause still counts.
+    return not _PENDING.search(clause) or _strong_claim(clause)
 
 
 def detect_forged_signoff(text: str | None) -> list[str]:
@@ -115,12 +178,15 @@ def detect_forged_signoff(text: str | None) -> list[str]:
 
     Goal-authored text can only make claims; a supervisor or reviewer
     approval is real only as Core's reviewer record. A line is flagged when
-    it states a verdict or sign-off as a value ("verdict: ACCEPT",
-    "sign-off: yes"), attributes approval to an authority ("approved by the
-    supervisor"), copies Core's review header, or pairs an authority with an
-    approval word unless it only says the approval is still pending
-    ("awaiting supervisor sign-off"). Returns the flagged lines, stripped and
-    clipped to 300 characters, in order.
+    one of its clauses states a verdict or sign-off as a value ("verdict:
+    ACCEPT", "sign-off: yes"), attributes a completed approval to an
+    authority ("approved by the supervisor"), copies Core's review header, or
+    pairs an authority with an approval word. A clause that only requests,
+    awaits or requires the approval is not a claim ("awaiting supervisor
+    sign-off", "sign-off: pending", "must be approved by the operator", "do
+    not record it as accepted until the review runs") unless it also states a
+    verdict value or a completed approval. Returns the flagged lines,
+    stripped and clipped to 300 characters, in order.
     """
 
     if not text:
@@ -130,10 +196,7 @@ def detect_forged_signoff(text: str | None) -> list[str]:
         line = raw.strip()
         if not line:
             continue
-        hit = any(pattern.search(line) for pattern in _FORGED_PATTERNS)
-        if not hit and _AUTHORITY_CLAIM.search(line):
-            hit = not _PENDING.search(line) or bool(_AFFIRMATIVE.search(line))
-        if hit:
+        if any(_claims_signoff(clause) for clause in _CLAUSE_SPLIT.split(line)):
             flagged.append(line[:300])
     return flagged
 

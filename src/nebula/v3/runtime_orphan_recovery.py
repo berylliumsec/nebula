@@ -34,6 +34,8 @@ from .domain import (
     ChatTurnStatus,
     ChatSubagent,
     ChatSubagentStatus,
+    HarnessTurn,
+    HarnessTurnStatus,
     NativeHookExecution,
     RiskClass,
     ToolCall,
@@ -51,6 +53,11 @@ from .runtime_coordination import (
     unwritten_request,
 )
 from .runtime_chat_acceptance import CHAT_COMMANDS as CHAT_START_COMMANDS
+from .recovery_markers import (
+    HARNESS_RUNTIME_STOP,
+    PROJECT_RUNTIME_STOPPED,
+    PROJECT_RUNTIME_STOPPED_FOR_DEPLOYMENT,
+)
 from .storage import NebulaStore, NotFoundError, StoreTransaction
 
 MAX_ORPHAN_ROWS = 100
@@ -245,6 +252,14 @@ async def reconcile_dead_project(
                 raise CoordinationConflict(
                     "Too many orphaned responses; retain work for operator review"
                 )
+            deployment_handoff = await _stopped_for_deployment_handoff(
+                session, expected_owner, process.version
+            )
+            stop_cause = (
+                PROJECT_RUNTIME_STOPPED_FOR_DEPLOYMENT
+                if deployment_handoff
+                else PROJECT_RUNTIME_STOPPED
+            )
             transaction = StoreTransaction(session)
             interrupted = []
             for row in rows:
@@ -287,7 +302,7 @@ async def reconcile_dead_project(
                     turn,
                     calls,
                     hooks,
-                    cause="Project runtime stopped",
+                    cause=stop_cause,
                     transaction=transaction,
                 )
                 if unmatched_callback is not None:
@@ -319,6 +334,13 @@ async def reconcile_dead_project(
             )
             released_claims = await _release_harness_claims(
                 session, transaction, expected_owner.project_id
+            )
+            marked_harness_turns = await _mark_runtime_stopped_harness_turns(
+                session,
+                transaction,
+                expected_owner,
+                deployment_handoff=deployment_handoff,
+                stopped_at_ms=now,
             )
             settled_commands, requeued_commands = await _settle_interrupted_commands(
                 session, expected_owner
@@ -447,6 +469,8 @@ async def reconcile_dead_project(
                 "settled_admission_ids": settled,
                 "released_capacity_ids": released_capacity,
                 "released_claim_ids": released_claims,
+                "runtime_stopped_harness_turn_ids": marked_harness_turns,
+                "deployment_handoff": deployment_handoff,
                 "released_failed_provider_claim_ids": released_ended_claims,
                 "goal_review_turn_ids": review_turns,
                 "settled_command_ids": settled_commands,
@@ -958,8 +982,8 @@ async def _release_harness_claims(session, transaction, project_id: str) -> list
     harness runtime's own restart settlement clears these, after activation.
     Releasing them here (whatever the turn's status: interrupted and cancelled
     goal turns can keep theirs) lets recovery verify; the new worker's startup
-    then interrupts the unfinished turns and pauses their goals as after any
-    Core restart.
+    then interrupts the unfinished turns and pauses their goals, naming the
+    project runtime stop that ``_mark_runtime_stopped_harness_turns`` records.
     """
     await session.flush()
     rows = list(
@@ -995,6 +1019,87 @@ async def _release_harness_claims(session, transaction, project_id: str) -> list
         )
         released.append(row.id)
     return released
+
+
+async def _stopped_for_deployment_handoff(
+    session, expected_owner: ProjectLease, runtime_version: str
+) -> bool:
+    """Whether the dead owner was the source of an unfinished release handoff.
+
+    A deployment hands a project from its worker to one on the new release
+    and stops a source that does not finish within its grace. The handoff
+    row still names that exact source until recovery replaces it.
+    """
+    handoff = await session.get(ProjectHandoffRow, expected_owner.project_id)
+    return (
+        handoff is not None
+        and handoff.source_runtime_id == expected_owner.runtime_id
+        and handoff.source_fencing_token == expected_owner.fencing_token
+        and handoff.phase != HandoffPhase.VERIFIED.value
+        and handoff.target_version != runtime_version
+    )
+
+
+async def _mark_runtime_stopped_harness_turns(
+    session,
+    transaction,
+    expected_owner: ProjectLease,
+    *,
+    deployment_handoff: bool,
+    stopped_at_ms: int,
+) -> list[str]:
+    """Record on each unfinished harness turn that its project runtime stopped.
+
+    The new worker's harness startup interrupts these turns and pauses their
+    goals; without this mark it cannot tell a project runtime stop, while
+    Core kept running, from a Core restart. Nothing is settled or replayed.
+    """
+    await session.flush()
+    rows = list(
+        await session.scalars(
+            select(EntityRow)
+            .where(
+                EntityRow.engagement_id == expected_owner.project_id,
+                EntityRow.kind == HarnessTurn.entity_kind,
+                EntityRow.payload["status"]
+                .as_string()
+                .in_(
+                    (
+                        HarnessTurnStatus.QUEUED.value,
+                        HarnessTurnStatus.RUNNING.value,
+                        HarnessTurnStatus.WAITING_APPROVAL.value,
+                    )
+                ),
+            )
+            .order_by(EntityRow.id)
+            .limit(MAX_HARNESS_CLAIMS + 1)
+        )
+    )
+    if len(rows) > MAX_HARNESS_CLAIMS:
+        raise CoordinationConflict(
+            "Too many unfinished harness responses; retain work for operator review"
+        )
+    marked = []
+    for row in rows:
+        turn = decode_stored(HarnessTurn, row.payload)
+        await transaction.update(
+            HarnessTurn,
+            row.id,
+            {
+                "metadata": {
+                    **turn.metadata,
+                    HARNESS_RUNTIME_STOP: {
+                        "runtime_id": expected_owner.runtime_id,
+                        "fencing_token": expected_owner.fencing_token,
+                        "deployment_handoff": deployment_handoff,
+                        "stopped_at_ms": stopped_at_ms,
+                    },
+                }
+            },
+            expected_revision=row.revision,
+        )
+        marked.append(row.id)
+    return marked
 
 
 async def _awaits_undecided_approval(store: NebulaStore, turn: ChatTurn) -> bool:

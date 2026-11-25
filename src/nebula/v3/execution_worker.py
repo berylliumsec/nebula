@@ -197,6 +197,15 @@ async def project_application(context, lease) -> AsyncIterator[object]:
             if services.get("host_pressure") is True
             else None,
         )
+        if (
+            lease.project_id != BUTLER_HOME_PROJECT
+            and services.get("butler_background_actions") is True
+        ):
+            # A Nebula-wide Butler check hosted by this project sends its
+            # changes to other projects as commands their workers run.
+            app.state.control_assistant_work.global_butler_actions = (
+                RemoteButlerActions(client, lease)
+            )
         if services.get("browser_bridge") is True:
             app.state.browser_companion.bind_bridge(RemoteBrowserBridge(client).resolve)
         storage = getattr(app.state, "storage_integrations", None)

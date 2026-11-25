@@ -40,7 +40,13 @@ from .domain import (
 )
 from .model_refusal import PAUSE_PREFIX as MODEL_REFUSAL_PAUSE_PREFIX
 from .project_hold_gate import HOLD_MARKER, active_hold
-from .recovery_markers import OPERATOR_RECOVERY_PAUSE
+from .recovery_markers import (
+    HARNESS_DEPLOYMENT_STOP_PAUSE_PREFIX,
+    HARNESS_QUEUED_DEPLOYMENT_STOP_PAUSE_PREFIX,
+    HARNESS_QUEUED_RUNTIME_STOP_PAUSE_PREFIX,
+    HARNESS_RUNTIME_STOP_PAUSE_PREFIX,
+    OPERATOR_RECOVERY_PAUSE,
+)
 from .storage import NebulaStore, NotFoundError, revise_latest
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -96,6 +102,12 @@ _TRANSIENT_PREFIXES = (
     "Core restarted while this goal had an active worker.",
     "Core restarted during a harness goal turn.",
     "Core restarted before the harness goal turn started.",
+    # recovery_markers.py (harness_stop_cause) - only the project runtime
+    # stopped (a deployment handoff, crash or OOM kill); Core kept running.
+    HARNESS_RUNTIME_STOP_PAUSE_PREFIX,
+    HARNESS_DEPLOYMENT_STOP_PAUSE_PREFIX,
+    HARNESS_QUEUED_RUNTIME_STOP_PAUSE_PREFIX,
+    HARNESS_QUEUED_DEPLOYMENT_STOP_PAUSE_PREFIX,
 )
 # chat.py:4902-4915, chat.py:6366, chat.py:16643 - "<cause> before this
 # response completed." for Core stop/restart/runtime loss. A turn that still
