@@ -365,6 +365,18 @@ def test_product_search_explains_harness_goal_blocking(monkeypatch):
     )
 
 
+def test_product_search_explains_goal_operator_action_requests(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "How does a goal agent ask me to power-cycle a device instead of writing NEEDS YOU?"
+    )
+    assert any(
+        "goal.request_operator_action" in str(item["text"])
+        and "needs you" in str(item["text"]).lower()
+        for item in matches
+    )
+
+
 def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
