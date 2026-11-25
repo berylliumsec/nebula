@@ -1,7 +1,7 @@
 {
-  "change_digest": "7926838788eebe371fad61bf66360a2b9c1619044a3e9069b5bdc8cafbe4fd7d",
+  "change_digest": "d436a4c6bcd49ffc9a3d2a5570f362f79612c495135bcd776fc7531a7e85cf0a",
   "reviewed_by": "Claude: classify Butler supervisor except handlers",
-  "reason": "Main's python (3.12) job fails the diagnostic blind-spot audit on ten unclassified except handlers added in #1315. Expected outcomes (command timeout, already-exited process, shlex and IP-literal parse fallbacks) get diagnostic-expected reasons; guardrail refusals now re-raise explicitly at the call site after auditing; an unreadable ceiling-policy file, a failed forensics audit write and a malformed operator pattern (still fail-closed) are recorded with record_caught_exception. The audit itself runs in CI; Python selects the three Butler supervisor suites that exercise every changed handler, plus a new fail-closed regression for a malformed operator pattern. butler_goal_hygiene.py also renames a reused WorkItem-typed variable so the 3.12 mypy step passes.",
+  "reason": "Main's python (3.12) job fails the diagnostic blind-spot audit on ten unclassified except handlers added in #1315. Expected outcomes (command timeout, already-exited process, shlex and IP-literal parse fallbacks) get diagnostic-expected reasons; guardrail refusals now re-raise explicitly at the call site after auditing; an unreadable ceiling-policy file, a failed forensics audit write and a malformed operator pattern (still fail-closed) are recorded with record_caught_exception. The audit itself runs in CI; Python selects the three Butler supervisor suites that exercise every changed handler, plus a new fail-closed regression for a malformed operator pattern. butler_goal_hygiene.py also renames a reused WorkItem-typed variable so the 3.12 mypy step passes. butler_board.py renames a loop variable that shadowed a walrus-bound str (from #1317) so the 3.12 mypy step passes; the board read tests are selected for it.",
   "exclusions": "No behaviour change outside the four butler_* modules; no UI, native or Playwright change. No full-suite approval.",
   "python_versions": [
     "3.12"
@@ -9,7 +9,7 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 99,
+    "python": 117,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -17,7 +17,8 @@
   "python": [
     "tests/v3/test_butler_supervisor_powers.py",
     "tests/v3/test_butler_repo_forensics.py",
-    "tests/v3/test_butler_goal_hygiene.py"
+    "tests/v3/test_butler_goal_hygiene.py",
+    "tests/v3/test_runtime_global_project_reads.py"
   ],
   "frontend": [],
   "native": [],
