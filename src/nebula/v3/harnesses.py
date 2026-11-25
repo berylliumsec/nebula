@@ -81,7 +81,7 @@ import claude_agent_sdk
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 from packaging.version import InvalidVersion, Version
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import Field, StringConstraints, ValidationInfo, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1583,6 +1583,38 @@ class ExternalHarnessSession(NebulaModel):
     internal_session_id: str | None = Field(default=None, max_length=200)
 
 
+_SETTLED_TOOL_CALL_STATUSES = frozenset(
+    {
+        ToolCallStatus.COMPLETE,
+        ToolCallStatus.FAILED,
+        ToolCallStatus.DENIED,
+        ToolCallStatus.CANCELLED,
+    }
+)
+
+
+# Display-only HarnessEvent text fields and their model bounds. Adapters fill
+# them from vendor data (tool names, task descriptions, shell commands), whose
+# length Nebula does not control; the full value belongs in ``payload``.
+HARNESS_EVENT_DISPLAY_BOUNDS: dict[str, int] = {
+    "title": 1_000,
+    "summary": 4_000,
+    "tool_name": 1_000,
+    "operator_detail": 2_048,
+    "impact": 2_048,
+    "mode": 100,
+}
+
+
+def bound_display_text(value: str, limit: int) -> str:
+    """Fit display text into ``limit`` characters, marking a cut with an ellipsis."""
+
+    clean = value.strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1].rstrip() + "…"
+
+
 class HarnessEvent(NebulaModel):
     schema_version: Literal[
         "nebula.harness-activity/v1", "nebula.harness-activity/v2"
@@ -1675,6 +1707,22 @@ class HarnessEvent(NebulaModel):
     mode: str | None = Field(default=None, max_length=100)
     plan: list[HarnessPlanEntry] = Field(default_factory=list, max_length=256)
     goal: HarnessGoalSnapshot | None = None
+
+    @field_validator(*HARNESS_EVENT_DISPLAY_BOUNDS, mode="before")
+    @classmethod
+    def _bound_display_text(cls, value: Any, info: ValidationInfo) -> Any:
+        """Truncate over-long display text instead of failing the turn.
+
+        A vendor value (for example a Claude background task whose description
+        is a multi-kilobyte shell command) must never make the event itself
+        invalid: an invalid activity event fails the turn and pauses its goal.
+        Runs on construction and on (validated) assignment alike.
+        """
+
+        limit = HARNESS_EVENT_DISPLAY_BOUNDS.get(info.field_name or "")
+        if limit is not None and isinstance(value, str) and len(value) > limit:
+            return bound_display_text(value, limit)
+        return value
 
 
 class HarnessActivityEventList(NebulaModel):
@@ -6703,6 +6751,10 @@ def _claude_task_event(message: Any, class_name: str) -> HarnessEvent:
         payload=_bounded(
             {
                 "task_id": task_id,
+                # The title is display-bounded; keep the full description
+                # (a background shell task's command) in the payload.
+                "description": getattr(message, "description", None),
+                "summary": getattr(message, "summary", None),
                 "task_type": getattr(message, "task_type", None),
                 "last_tool_name": getattr(message, "last_tool_name", None),
                 "output_file": getattr(message, "output_file", None),
@@ -16050,12 +16102,31 @@ class HarnessRuntimeService:
             from .chat_assistant_config import chat_assistant_config
 
             chat = await self.store.get(ChatSession, original.chat_session_id or "")
+            # A retry is the chat's next turn: it runs on the chat's CURRENT
+            # runtime, never the failed turn's, which the operator may have
+            # switched away from since. Apply a pending switch first, like
+            # every other dispatch; retrying on the old harness would rebind
+            # the chat to it and silently undo the switch.
+            switcher = self.store.runtime_switch_service
+            if switcher is not None:
+                settled = await switcher.settle(chat.id)
+                if settled is None:
+                    raise HarnessStateError(
+                        "this chat has a runtime switch waiting; retry after it "
+                        "is applied or reviewed"
+                    )
+                chat = settled
+            if chat.backend != ChatBackend.HARNESS or not chat.harness_profile_id:
+                raise HarnessStateError(
+                    "this chat now runs on a provider model; send the request "
+                    "again instead of retrying the harness turn"
+                )
             original_chat_turn = await self.store.get(
                 ChatTurn, original.chat_turn_id or ""
             )
             blocked_plan = await self.plans.for_turn(original_chat_turn.id)
-            retry_profile_id = profile.id
-            retry_model = session.model
+            retry_profile_id = chat.harness_profile_id
+            retry_model = chat.model
             if blocked_plan is not None and blocked_plan.phase == "blocked":
                 saved = await chat_assistant_config(self.store, chat)
                 if saved["backend"] == ChatBackend.HARNESS.value:
@@ -16518,23 +16589,22 @@ class HarnessRuntimeService:
             call = await self.store.get(ToolCall, call_id)
         except NotFoundError:  # diagnostic-expected: no call was reserved yet
             return
-        if call.status in {
-            ToolCallStatus.COMPLETE,
-            ToolCallStatus.FAILED,
-            ToolCallStatus.DENIED,
-            ToolCallStatus.CANCELLED,
-        }:
+        if call.status in _SETTLED_TOOL_CALL_STATUSES:
             return
         (
-            await self.store.update(
+            await revise_latest(
+                self.store,
                 ToolCall,
                 call.id,
-                {
-                    "status": ToolCallStatus.CANCELLED,
-                    "error": reason,
-                    "completed_at": utc_now(),
-                },
-                expected_revision=call.revision,
+                lambda latest: (
+                    None
+                    if latest.status in _SETTLED_TOOL_CALL_STATUSES
+                    else {
+                        "status": ToolCallStatus.CANCELLED,
+                        "error": reason,
+                        "completed_at": utc_now(),
+                    }
+                ),
             )
         )
 
@@ -20899,23 +20969,34 @@ class HarnessRuntimeService:
             asyncio.get_running_loop().create_future()
         )
         if policy == McpApprovalMode.ALLOW:
+            # The adapter's tool_use event can start this row (PROPOSED ->
+            # RUNNING) while it is attached above; never move it back.
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     ToolCall,
                     call.id,
-                    {"status": ToolCallStatus.APPROVED},
-                    expected_revision=call.revision,
+                    lambda latest: (
+                        {"status": ToolCallStatus.APPROVED}
+                        if latest.status
+                        in {ToolCallStatus.PROPOSED, ToolCallStatus.WAITING_APPROVAL}
+                        else None
+                    ),
                 )
             )
             future.set_result(HarnessPermissionDecision(allowed=True, reason=rationale))
             return PermissionTicket(None, call.id, future)
         if policy == McpApprovalMode.DENY:
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     ToolCall,
                     call.id,
-                    {"status": ToolCallStatus.DENIED, "error": rationale},
-                    expected_revision=call.revision,
+                    lambda latest: (
+                        None
+                        if latest.status in _SETTLED_TOOL_CALL_STATUSES
+                        else {"status": ToolCallStatus.DENIED, "error": rationale}
+                    ),
                 )
             )
             future.set_result(
@@ -21543,31 +21624,32 @@ class HarnessRuntimeService:
                 )
             )
         elif event.type == "tool_started" and call.status == ToolCallStatus.APPROVED:
-            call = await self.store.update(
+            # The permission handler writes the same row concurrently: plan
+            # the start on the newest revision, never on the listed one.
+            call = await revise_latest(
+                self.store,
                 ToolCall,
                 call.id,
-                {"status": ToolCallStatus.RUNNING, "started_at": utc_now()},
-                expected_revision=call.revision,
+                lambda latest: (
+                    {"status": ToolCallStatus.RUNNING, "started_at": utc_now()}
+                    if latest.status == ToolCallStatus.APPROVED
+                    else None
+                ),
             )
         if event.type == "tool_completed":
             failed = bool(event.payload.get("error"))
-            call = await self.store.get(ToolCall, call.id)
-            call = await self.store.update(
-                ToolCall,
-                call.id,
-                {
-                    "status": ToolCallStatus.FAILED
-                    if failed
-                    else ToolCallStatus.COMPLETE,
-                    "result": _bounded(
-                        event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT
-                    ),
-                    "error": _safe_error(Exception(str(event.payload.get("error"))))
-                    if failed
-                    else None,
-                    "completed_at": utc_now(),
-                },
-                expected_revision=call.revision,
+            settled = {
+                "status": ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE,
+                "result": _bounded(
+                    event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT
+                ),
+                "error": _safe_error(Exception(str(event.payload.get("error"))))
+                if failed
+                else None,
+                "completed_at": utc_now(),
+            }
+            call = await revise_latest(
+                self.store, ToolCall, call.id, lambda _latest: settled
             )
         return event.model_copy(
             update={"tool_call_id": call.id, "server_id": server.id}
@@ -21657,22 +21739,29 @@ class HarnessRuntimeService:
             ToolCallStatus.PROPOSED,
             ToolCallStatus.APPROVED,
         }:
-            call = await self.store.update(
-                ToolCall,
-                call.id,
-                {
+            # The permission handler reserves this row and then settles it
+            # (approved or denied) while the vendor's tool_use events are
+            # recorded here. Plan the start on the newest revision, and only
+            # while the row may still start, instead of writing over the
+            # revision listed above.
+            def start(latest: ToolCall) -> dict[str, Any] | None:
+                if latest.status not in {
+                    ToolCallStatus.PROPOSED,
+                    ToolCallStatus.APPROVED,
+                }:
+                    return None
+                return {
                     "status": ToolCallStatus.RUNNING,
-                    "started_at": call.started_at or utc_now(),
+                    "started_at": latest.started_at or utc_now(),
                     "metadata": {
-                        **call.metadata,
+                        **latest.metadata,
                         "vendor_item_id": item_id
-                        or call.metadata.get("vendor_item_id"),
+                        or latest.metadata.get("vendor_item_id"),
                     },
-                },
-                expected_revision=call.revision,
-            )
+                }
+
+            call = await revise_latest(self.store, ToolCall, call.id, start)
         if event.type == "tool_completed":
-            call = await self.store.get(ToolCall, call.id)
             raw_error = event.payload.get("error")
             status = str(event.payload.get("status") or "").lower()
             failed = bool(raw_error) or status in {"failed", "error", "declined"}
@@ -21719,22 +21808,19 @@ class HarnessRuntimeService:
                     exc,
                     stage="artifact-persistence",
                 )
+            settled = {
+                "status": (
+                    ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
+                ),
+                "result": safe_result,
+                "error": _safe_error(Exception(str(raw_error))) if failed else None,
+                "completed_at": utc_now(),
+                "result_artifact_id": artifact_id,
+            }
+            # Saving the artifact awaits; plan on the revision current now.
             (
-                await self.store.update(
-                    ToolCall,
-                    call.id,
-                    {
-                        "status": (
-                            ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
-                        ),
-                        "result": safe_result,
-                        "error": _safe_error(Exception(str(raw_error)))
-                        if failed
-                        else None,
-                        "completed_at": utc_now(),
-                        "result_artifact_id": artifact_id,
-                    },
-                    expected_revision=call.revision,
+                await revise_latest(
+                    self.store, ToolCall, call.id, lambda _latest: settled
                 )
             )
             if artifact_id:
