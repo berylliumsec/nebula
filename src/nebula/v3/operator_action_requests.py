@@ -2,9 +2,12 @@
 
 Some blockers need a person: restart a host, power-cycle or plug in a
 device, attach a credential, look at hardware, approve an account change.
-Butler records each one as a typed request the operator sees at the top of the
-Butler board, and closes it on its own when a machine-checkable condition (the
-request's auto-check) passes.
+Butler, Core, and a goal's own agent (``goal.request_operator_action``, see
+``goal_operator_requests``) record each one as a typed request the operator
+sees at the top of the Butler board, and Butler closes it on its own when a
+machine-checkable condition (the request's auto-check) passes. Opening and
+closing a request notify through ``IncidentNotifier`` unless the caller
+passes another notifier or None.
 
 Storage. A request is a project Work item titled ``Needs you: ...`` (the
 stopgap the Butler mandate already uses, so older untyped ``Needs you:`` items
@@ -90,6 +93,7 @@ OperatorAction = Literal[
     "physical_check",
     "approve_account_change",
     "review_model_refusal",
+    "answer_question",
     "other",
 ]
 ACTIONS: tuple[str, ...] = (
@@ -100,6 +104,7 @@ ACTIONS: tuple[str, ...] = (
     "physical_check",
     "approve_account_change",
     "review_model_refusal",
+    "answer_question",
     "other",
 )
 ACTION_LABEL: dict[str, str] = {
@@ -112,6 +117,9 @@ ACTION_LABEL: dict[str, str] = {
     # Raised by Core (model_refusal); resuming or ending the goal closes it,
     # and closing it never resumes the goal.
     "review_model_refusal": "Review model refusal",
+    # Raised by Core (goal_operator_requests) when a headless goal agent asks
+    # an operator-only question; closing it resumes the goal.
+    "answer_question": "Answer agent question",
     "other": "Operator action",
 }
 # Actions about a machine: they need an auto-check, which runs once before
@@ -849,6 +857,16 @@ class DefaultCheckEvaluator:
 # ---------------------------------------------------------------------------
 
 
+# Callers that pass no notifier get ``IncidentNotifier``; ``None`` sends none.
+DEFAULT_NOTIFIER: Any = object()
+
+
+def _notifier_for(
+    store: NebulaStore, notifier: "OperatorActionNotifier | None"
+) -> "OperatorActionNotifier | None":
+    return IncidentNotifier(store) if notifier is DEFAULT_NOTIFIER else notifier
+
+
 class OperatorActionNotifier(Protocol):
     async def opened(self, request_id: str, record: OperatorActionRecord) -> None: ...
 
@@ -1113,6 +1131,11 @@ async def resume_waiting_goal(
             "reason": (
                 f"Operator action done: {ACTION_LABEL[record.action]} on "
                 f"{record.device_or_host}."
+                + (
+                    f" Read Work item {request_id} and its updates for the answer."
+                    if record.action == "answer_question"
+                    else ""
+                )
             )[:2000],
         },
     )
@@ -1169,10 +1192,11 @@ async def close_request(
     evidence: list[str],
     closed_by: str,
     work: Any = None,
-    notifier: OperatorActionNotifier | None = None,
+    notifier: OperatorActionNotifier | None = DEFAULT_NOTIFIER,
 ) -> dict[str, Any]:
     """Close or cancel one request, notify, and resume a goal waiting on it."""
 
+    notifier = _notifier_for(store, notifier)
     service = WorkService(store)
     item = await service.get(project_id, request_id)
     if not is_request_title(item.title):
@@ -1229,10 +1253,15 @@ async def create_request(
     *,
     work: Any = None,
     evaluator: CheckEvaluator | None = None,
-    notifier: OperatorActionNotifier | None = None,
+    notifier: OperatorActionNotifier | None = DEFAULT_NOTIFIER,
 ) -> dict[str, Any]:
-    """Verify, de-duplicate, then save one request as a ``Needs you:`` Work item."""
+    """Verify, de-duplicate, then save one request as a ``Needs you:`` Work item.
 
+    Opening notifies through ``IncidentNotifier`` unless a notifier (or None)
+    is passed.
+    """
+
+    notifier = _notifier_for(store, notifier)
     verification = arguments.get("verification")
     if not isinstance(verification, list) or not verification:
         raise ValueError(
@@ -1370,7 +1399,7 @@ async def sweep_operator_actions(
     work: Any = None,
     *,
     evaluator: CheckEvaluator | None = None,
-    notifier: OperatorActionNotifier | None = None,
+    notifier: OperatorActionNotifier | None = DEFAULT_NOTIFIER,
     project_ids: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Re-check open requests, close those that pass, and resume their goals.
@@ -1381,6 +1410,7 @@ async def sweep_operator_actions(
     """
 
     evaluator = evaluator or DefaultCheckEvaluator(store)
+    notifier = _notifier_for(store, notifier)
     service = WorkService(store)
     selected = list(project_ids) if project_ids is not None else None
     actions: list[dict[str, Any]] = []
