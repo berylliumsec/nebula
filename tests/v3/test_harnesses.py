@@ -6408,7 +6408,7 @@ def test_account_home_requires_unambiguous_absolute_path(home):
 
 
 def test_remote_endpoint_rejects_local_account_home():
-    with pytest.raises(ValueError, match="managed Codex and Grok"):
+    with pytest.raises(ValueError, match="managed Codex, Grok and Claude"):
         HarnessProfile(
             name="remote",
             kind=HarnessKind.CODEX_APP_SERVER,

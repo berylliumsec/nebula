@@ -178,7 +178,7 @@ async def run_harness_test_turn(
         from .harnesses import _claude_not_logged_in_detail
 
         # Say where the CLI looked for its login and how to sign in there.
-        detail = _claude_not_logged_in_detail()
+        detail = _claude_not_logged_in_detail(profile)
     current = await store.get(HarnessProfile, profile_id)
     capabilities = current.capabilities.model_copy(
         update={

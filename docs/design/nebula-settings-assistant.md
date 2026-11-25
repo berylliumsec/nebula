@@ -229,8 +229,10 @@ permission mode remains operator-owned.
 Assistant harnesses offer Codex, Grok and Claude. **Add Claude** creates a
 managed Claude Agent SDK process; the CLI path is optional because the SDK
 bundles one. It signs in with the host's existing `claude` login (`/login`) or
-an API key credential. Claude profiles use managed approvals only, have no
-separate account home folder, and do not offer browser, computer-use or image
+an API key credential. An optional account folder runs that profile's Claude
+CLI with `CLAUDE_CONFIG_DIR` set to the folder; sign it in on the host with
+`CLAUDE_CONFIG_DIR=<folder> claude login`. Claude profiles use
+managed approvals only and do not offer browser, computer-use or image
 generation capabilities.
 
 Follow-up preferences use `body.expected_revision` from the current project
