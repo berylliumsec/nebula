@@ -231,6 +231,12 @@ async def test_diagnostic_settings_files_errors_and_direct_bounded_telemetry(set
 async def test_shared_automation_image_prepare_replay_and_changed_runner(settings):
     runtime = settings.host.observations.automation
     assert not (await settings.client.get("/api/v1/automation/runtime")).json()["ready"]
+    # Core start launches Setup's runner detection, which re-verifies every
+    # stored runner profile with the real container runtime. Let it settle
+    # before saving the inert profile, or it can mark that profile unhealthy.
+    detection = settings.host.operator.setup._refresh_task
+    if detection is not None:
+        await detection
     profile = await settings.store.create(
         RunnerProfile(
             id="local",
