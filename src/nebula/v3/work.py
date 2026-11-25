@@ -29,6 +29,8 @@ from .domain import (
     WorkStage,
     WorkUpdate,
 )
+from .checkin_fabrication_guard import FabricationRejected, GuardResult, check_text
+from .diagnostics import record_caught_exception, record_diagnostic
 from .runtime_platform import RuntimeToolComponents, require_project_scope
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -58,8 +60,11 @@ class WorkCreate(NebulaModel):
     request_id: str | None = Field(default=None, min_length=1, max_length=200)
 
 
+MAX_CHECK_IN_SUMMARY = 4_000
+
+
 class WorkCheckIn(NebulaModel):
-    summary: str = Field(min_length=1, max_length=4_000)
+    summary: str = Field(min_length=1, max_length=MAX_CHECK_IN_SUMMARY)
     next_step: str | None = Field(default=None, max_length=2_000)
     blocker: str | None = Field(default=None, max_length=2_000)
     status: WorkStatus | None = None
@@ -813,6 +818,41 @@ class WorkService:
                 continue
         raise ConflictError("work item changed concurrently; retry")
 
+    async def _fabrication_guard(
+        self, engagement_id: str, data: WorkCheckIn
+    ) -> GuardResult | None:
+        """Check an agent check-in's text; a guard failure never blocks it."""
+
+        text = "\n".join(
+            part for part in (data.summary, data.next_step, data.blocker) if part
+        )
+        try:
+            return await asyncio.to_thread(check_text, engagement_id, text)
+        except Exception as exc:
+            record_caught_exception(
+                "projects",
+                "projects.fabrication_guard_failed",
+                "The Work check-in fabrication guard failed; the check-in continues.",
+                exc,
+                stage="work-check-in",
+            )
+            return None
+
+    @staticmethod
+    def _flagged_check_in(data: WorkCheckIn, guard: GuardResult) -> WorkCheckIn:
+        """Append the guard's finding to the summary within its length bound."""
+
+        note = guard.note()
+        room = MAX_CHECK_IN_SUMMARY - len(note) - 2
+        summary = (
+            data.summary
+            if len(data.summary) <= room
+            else data.summary[: max(0, room - 1)].rstrip() + "…"
+        )
+        return data.model_copy(
+            update={"summary": f"{summary}\n\n{note}"[:MAX_CHECK_IN_SUMMARY]}
+        )
+
     async def check_in(
         self,
         engagement_id: str,
@@ -827,6 +867,40 @@ class WorkService:
         allow_parent_source_session: bool = False,
         notify: bool = True,
     ) -> WorkUpdate:
+        update, _guard = await self.check_in_guarded(
+            engagement_id,
+            item_id,
+            data,
+            actor_kind=actor_kind,
+            actor_id=actor_id,
+            source_session_id=source_session_id,
+            source_turn_id=source_turn_id,
+            source_run_id=source_run_id,
+            allow_parent_source_session=allow_parent_source_session,
+            notify=notify,
+        )
+        return update
+
+    async def check_in_guarded(
+        self,
+        engagement_id: str,
+        item_id: str,
+        data: WorkCheckIn,
+        *,
+        actor_kind: Literal["operator", "agent", "import"],
+        actor_id: str,
+        source_session_id: str | None = None,
+        source_turn_id: str | None = None,
+        source_run_id: str | None = None,
+        allow_parent_source_session: bool = False,
+        notify: bool = True,
+    ) -> tuple[WorkUpdate, GuardResult | None]:
+        """Record a check-in; agent text first passes the fabrication guard.
+
+        ``flag`` mode appends the finding to the stored summary and records a
+        diagnostic; ``reject`` mode raises :class:`FabricationRejected`.
+        """
+
         (
             await self._session(
                 engagement_id,
@@ -856,11 +930,36 @@ class WorkService:
                     existing.engagement_id == engagement_id
                     and existing.item_id == item_id
                 ):
-                    return existing
+                    return existing, None
                 raise ConflictError("request_id is already used for another work item")
             except NotFoundError:
                 # diagnostic-expected: an unused request ID has no existing update.
                 pass
+        guard = (
+            await self._fabrication_guard(engagement_id, data)
+            if actor_kind == "agent"
+            else None
+        )
+        if guard is not None and guard.flagged:
+            record_diagnostic(
+                "warning",
+                "projects",
+                "projects.work_checkin_fabrication_flagged",
+                "A Work check-in cited commits or sign-offs the guard could not find: "
+                + guard.note(),
+                project_id=engagement_id,
+                outcome="denied" if guard.mode == "reject" else "degraded",
+                stage="work-check-in",
+                metadata={
+                    "mode": guard.mode,
+                    "count": len(guard.phantom_hashes),
+                    "warning_count": len(guard.forged_signoffs),
+                    "entity_id": item_id,
+                },
+            )
+            if guard.mode == "reject":
+                raise FabricationRejected(guard.phantom_hashes, guard.forged_signoffs)
+            data = self._flagged_check_in(data, guard)
         for _ in range(3):
             item = await self.get(engagement_id, item_id)
             if (
@@ -921,12 +1020,12 @@ class WorkService:
                     )
                 if notify:
                     self.changes.publish()
-                return update
+                return update, guard
             except ConflictError:
                 # diagnostic-expected: concurrent check-ins retry after an ID lookup.
                 if update_id:
                     try:
-                        return await self.store.get(WorkUpdate, update_id)
+                        return await self.store.get(WorkUpdate, update_id), guard
                     except NotFoundError:
                         # diagnostic-expected: the conflicting write was another item edit.
                         pass
@@ -1369,7 +1468,7 @@ class WorkBroker:
                     if key != "item_id"
                 }
             )
-            update = await self.service.check_in(
+            update, guard = await self.service.check_in_guarded(
                 target_id,
                 item_id,
                 check_in_data,
@@ -1380,9 +1479,10 @@ class WorkBroker:
                 source_run_id=None if invocation.chat_session_id else invocation.run_id,
                 allow_parent_source_session=True,
             )
-            return ToolExecutionResult(
-                output={"update": update.model_dump(mode="json")}
-            )
+            output: dict[str, object] = {"update": update.model_dump(mode="json")}
+            if guard is not None:
+                output["fabrication_guard"] = guard.as_dict()
+            return ToolExecutionResult(output=output)
         raise ValueError("unknown Work tool")
 
 
