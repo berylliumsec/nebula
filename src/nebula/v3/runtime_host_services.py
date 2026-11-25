@@ -436,6 +436,9 @@ class HostSharedServices:
                             "integration_credentials": True,
                             "web_search": True,
                             "butler_actions": True,
+                            # Admits a Nebula-wide check's background changes
+                            # from the Act project worker hosting it.
+                            "butler_background_actions": True,
                             "host_settings": self.host_settings.assistant_bridge.routes(),
                             "knowledge": self.knowledge is not None,
                             "product_guidance": dict(self.product_guidance),

@@ -618,6 +618,9 @@ class ButlerCapabilities:
                             instructions_root,
                             background_case_id,
                             runtime_local=background_runtime_local,
+                            # Set on an execution worker: changes to other
+                            # projects run on their own workers.
+                            remote_actions=getattr(work, "global_butler_actions", None),
                         ).plugins()
                     }
                 )

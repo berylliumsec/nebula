@@ -161,6 +161,7 @@ async def test_shared_service_capabilities_require_a_valid_private_peer(shared):
         "integration_credentials": True,
         "web_search": True,
         "butler_actions": True,
+        "butler_background_actions": True,
         "host_settings": shared.services.host_settings.assistant_bridge.routes(),
         "knowledge": False,
         "product_guidance": {"state": "unavailable"},

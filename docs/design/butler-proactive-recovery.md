@@ -59,6 +59,23 @@ schedules, approvals, questions, and saved Assistant settings. Core validates
 each target, current revision, and project authority before a change. Device
 controls and global provider or harness setup remain separate from the project
 Assistant work catalog.
+The Nebula-wide check runs on the worker of the Act project that hosts it, yet
+it covers every Act project. Its prompt lists each Act project with its open
+main goals (running, paused, blocked: goal and chat IDs, title, status, Work
+stage), capped and marked `truncated` when it omits any. Its reads see every
+project's committed rows; its row locks and writes stay fenced to the host
+project. A change to another project runs on that project's own worker as a
+`butler.action/v1` command that names the check's case. The host submits it
+only while that case is investigating in the sender's project, and the target
+runs it only under its own current Act authority, at the revision Butler read,
+with Work enabled and no hold. A Watch, Steer or local-only project is refused
+with one generic message that names neither the project nor its authority.
+Each target gets its own command. A queued change returns `state=accepted`,
+not a result; it may still run within its ten-minute expiry after the check
+closes, under the target's own Act check. A worker uses this route only when
+its host advertises `butler_background_actions`. Recovery goals, project
+resumption and child projects stay in the host project. Per-project checks
+keep their project scope.
 The event detector, capability schemas, project authority, and verifier are
 Core contracts. The model selects the remedy and may combine tools; it is not
 limited to a table of preset responses.
