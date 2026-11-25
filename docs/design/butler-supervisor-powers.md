@@ -41,6 +41,7 @@ All of these are reached through Butler's existing gateway
 | `nebula.supervisor.tmp_cleanup` | Finds idle full-repository exports under the cleanup roots; deletes only after a dry run. |
 | `nebula.supervisor.log_writer_status` | Reads the health of Core's file log writer. |
 | `nebula.supervisor.request_operator_action`, `list_operator_actions`, `close_operator_action` | Raise, list and close typed requests for things only the operator can do. |
+| `nebula.supervisor.route_goal_runtime` | Routes one goal's runtime under the operator's stage-based routing policy: a route name, `auto` or `release`, with `dry_run`. See [Stage-based runtime routing](#stage-based-runtime-routing). |
 
 **Where the tools are available:**
 - Interactive project Butler.
@@ -281,3 +282,29 @@ provider profile is needed.
    `NEBULA_BUTLER_REVIEW_PROVIDER_ID` unset; setting both makes reviews refuse.
    The reviewer model (default `claude-opus-5-5`) must still differ from the
    goal's model.
+
+## Stage-based runtime routing
+
+A research goal's main agent can run on a harness profile (for example the
+Claude login above) while its Work stage is a validation-class stage, with its
+subagents on a provider model. Bulk stages stay fully on the provider. The
+operator sets the routes in `NEBULA_GOAL_RUNTIME_ROUTING` (JSON) and turns them
+on with `NEBULA_GOAL_RUNTIME_ROUTING_ENABLED`, which is off by default.
+
+- Routing changes only goals it owns. A goal whose current or pending settings
+  already match its route is recorded as in policy and is not switched again.
+  A goal whose runtime differs, for example from a manual choice, is recorded
+  as out of policy and left alone until an operator or Butler route action
+  (`POST /api/v1/chat/sessions/{id}/goal/runtime-route`,
+  `nebula.supervisor.route_goal_runtime`).
+- A switch is the Assistant settings writer's audited change, and it keeps the
+  goal's MCP servers. It is evaluated at the turn boundary before the goal's
+  next turn and never while a turn runs. Core refuses a harness profile
+  without a verified Check/Test turn.
+- A harness turn that stops at a usage or rate limit runs on the route's
+  fallback runtime. The harness is tried again after a cooldown.
+- The independent reviewer must differ from the goal's current main model and,
+  after routing, from the model family of every main model the goal ran on.
+
+The config shape, turn-boundary rule, fallback and rollout plan are in
+[goal-runtime-routing.md](goal-runtime-routing.md).
