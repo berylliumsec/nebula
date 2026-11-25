@@ -183,13 +183,15 @@ class ButlerHostOps:
                 pass
         return entry
 
-    async def _refuse(
+    async def _audit_refusal(
         self,
         policy: SupervisorPolicy,
         tool: str,
         error: GuardrailViolation,
         **fields: Any,
     ) -> None:
+        """Record a refused call; the caller re-raises the refusal."""
+
         await self._record(
             policy,
             {
@@ -200,7 +202,6 @@ class ButlerHostOps:
                 **fields,
             },
         )
-        raise error
 
     async def _exec(
         self,
@@ -252,10 +253,13 @@ class ButlerHostOps:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
         except TimeoutError:
+            # diagnostic-expected: a command over its time limit is a reported
+            # outcome; it is killed and audited as outcome "timeout".
             timed_out = True
             try:
                 os.killpg(process.pid, signal_module.SIGKILL)
             except ProcessLookupError:
+                # diagnostic-expected: the process group exited before the kill.
                 pass
             stdout, stderr = await process.communicate()
         duration = round(time.monotonic() - started, 3)
@@ -308,7 +312,10 @@ class ButlerHostOps:
         try:
             screen_command(policy, command, host=host, cwd=cwd)
         except GuardrailViolation as error:
-            await self._refuse(policy, tool, error, host=host.name, command=command)
+            await self._audit_refusal(
+                policy, tool, error, host=host.name, command=command
+            )
+            raise
         if host.local:
             argv = ["bash", "-o", "pipefail", "-c", command]
             run_cwd = cwd
@@ -334,13 +341,14 @@ class ButlerHostOps:
         try:
             host = policy.host(arguments["host"])
         except GuardrailViolation as error:
-            await self._refuse(
+            await self._audit_refusal(
                 policy,
                 "shell",
                 error,
                 host=arguments["host"],
                 command=arguments["command"],
             )
+            raise
         return await self._run_on(
             policy,
             tool="shell",
@@ -359,13 +367,17 @@ class ButlerHostOps:
         if name not in _SIGNALS:
             raise GuardrailViolation("invalid_signal", name)
         if host.local and pid in {os.getpid(), os.getppid()}:
-            await self._refuse(
+            refusal = GuardrailViolation(
+                "protected_process", "Core may not signal itself"
+            )
+            await self._audit_refusal(
                 policy,
                 "signal",
-                GuardrailViolation("protected_process", "Core may not signal itself"),
+                refusal,
                 host=host.name,
                 command=f"kill -s {name} {pid}",
             )
+            raise refusal
         expected = arguments["expected_command_substring"]
         if not re.fullmatch(r"[A-Za-z0-9 ._/:=@+-]{3,200}", expected):
             raise GuardrailViolation("invalid_argument", "expected_command_substring")
@@ -476,7 +488,8 @@ class ButlerHostOps:
                 )
             _require_committed(path)
         except GuardrailViolation as error:
-            await self._refuse(policy, "run_gate", error, command=str(path))
+            await self._audit_refusal(policy, "run_gate", error, command=str(path))
+            raise
         args = [str(item) for item in arguments.get("args") or []]
         if any(
             item.startswith("-") and "=" not in item and len(item) > 40 for item in args

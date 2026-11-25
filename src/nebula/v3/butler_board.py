@@ -375,16 +375,16 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                     continue
                 if status == ChatGoalStatus.DRAFT.value:
                     proposals += 1
-                label = stage_of.get(str(session_id))
-                if label is None:
+                stage_label = stage_of.get(str(session_id))
+                if stage_label is None:
                     unstaged[listed_section] += 1
                 else:
-                    folded = label.casefold()
+                    folded = stage_label.casefold()
                     stage_counts.setdefault(folded, dict.fromkeys(SECTIONS, 0))[
                         listed_section
                     ] += 1
                     spelled = spellings.setdefault(folded, {})
-                    spelled[label] = spelled.get(label, 0) + 1
+                    spelled[stage_label] = spelled.get(stage_label, 0) + 1
                 if filtering and not selected(str(session_id)):
                     continue
                 matching.add(str(session_id))

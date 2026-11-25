@@ -423,10 +423,8 @@ class ButlerHostProbes:
         error: GuardrailViolation,
         **fields: Any,
     ) -> None:
-        try:
-            await self._ops._refuse(policy, tool, error, **fields)
-        except GuardrailViolation as raised:
-            raise _AuditedRefusal(raised.rule, raised.detail) from raised
+        await self._ops._audit_refusal(policy, tool, error, **fields)
+        raise _AuditedRefusal(error.rule, error.detail) from error
 
     async def _run(
         self,
