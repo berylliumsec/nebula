@@ -35,6 +35,7 @@ from .butler_supervisor_policy import (
     screen_path_write,
     write_audit,
 )
+from .diagnostics import record_caught_exception
 from .domain import RiskClass
 from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
@@ -784,9 +785,16 @@ class ButlerRepoForensics:
     def _audit(self, policy: SupervisorPolicy, record: dict[str, Any]) -> None:
         try:
             write_audit(policy, record)
-        except OSError:
+        except OSError as exc:
             # A failed audit write must not hide the original outcome.
-            pass
+            record_caught_exception(
+                "butler_supervisor",
+                "butler_supervisor.repo_audit_write_failed",
+                "A Butler repository forensics audit record could not be written.",
+                exc,
+                stage="repo_forensics_audit",
+                metadata={"tool": str(record.get("tool") or "")},
+            )
 
     async def repo_audit(self, arguments: dict[str, Any]) -> dict[str, Any]:
         policy = self.policy_loader()
