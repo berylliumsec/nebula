@@ -16,6 +16,8 @@ from .recovery_markers import (
     GOAL_PROVIDER_RETRY,
     OPERATOR_RECOVERY_PAUSE,
     OPERATOR_RECOVERY_STOP,
+    PROJECT_RUNTIME_STOP_CAUSE,
+    PROJECT_RUNTIME_STOPPED,
     TURN_CALLBACK_STALL,
     TURN_GOAL_AUTO_RETRY,
 )
@@ -318,7 +320,7 @@ from .chat_turn_outcomes import (
     turn_outcome_text,
 )
 from .work_priority import is_high
-from .project_hold_gate import active_hold, held_detail, is_held
+from .project_hold_gate import HOLD_MARKER, active_hold, held_detail, is_held
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -4353,22 +4355,64 @@ class ChatService:
             (await self.start_provider_turn(prepared, automatic_recovery=True))
             return True
         except Exception as exc:
+            # Recorded as a failure whatever its class: a refusal here leaves
+            # a goal whose pause reason promised an automatic resume.
             record_caught_exception(
                 "chat",
                 "chat.core_shutdown_auto_resume_failed",
                 "A safely interrupted conversation could not resume after Core restarted.",
                 exc,
                 stage="startup-recovery",
+                operation_failed=True,
             )
             (await self._retry_recovery_next_pass(saved.id, cause=exc))
             if goal is not None:
-                (
-                    await self._pause_running_session_goal(
-                        saved.session_id,
-                        "Automatic recovery is waiting for the next Core recovery pass.",
-                    )
+                waiting = (
+                    "Automatic recovery is waiting for the next Core recovery pass"
+                    f" (the last attempt failed: {type(exc).__name__})."
                 )
+                paused = await self._pause_running_session_goal(
+                    saved.session_id, waiting
+                )
+                if paused is not None and paused.status == ChatGoalStatus.PAUSED:
+                    (await self._restate_recovery_pause(paused, waiting))
         return False
+
+    async def _restate_recovery_pause(self, goal: ChatGoal, reason: str) -> None:
+        """Replace a paused goal's promise of automatic resume after it failed.
+
+        Interruption recovery pauses a goal with a reason that says Core will
+        resume it. When that resume cannot start, the goal stays paused and
+        the reason must say so instead of still promising it. A pause the
+        operator or a project hold owns keeps its own reason.
+        """
+
+        if (
+            goal.status != ChatGoalStatus.PAUSED
+            or goal.blocked_reason == reason
+            or OPERATOR_RECOVERY_PAUSE in goal.metadata
+            or goal.metadata.get(HOLD_MARKER) is not None
+        ):
+            return
+        try:
+            (
+                await self.store.update(
+                    ChatGoal,
+                    goal.id,
+                    {"blocked_reason": reason},
+                    expected_revision=goal.revision,
+                )
+            )
+        except ConflictError as exc:
+            # diagnostic-expected: the goal moved meanwhile (resumed, charged
+            # or paused again); the next failed pass restates it.
+            record_caught_exception(
+                "chat",
+                "chat.restart_recovery.pause_reason_changed",
+                "A goal changed while Core restated its recovery pause.",
+                exc,
+                stage="startup-recovery",
+            )
 
     async def _retry_recovery_next_pass(
         self, turn_id: str, *, cause: BaseException | None = None
@@ -4696,6 +4740,9 @@ class ChatService:
                     "Core interrupted this turn's wait after it made no progress "
                     "and resumed the turn once. Treat tool "
                     if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                    else "Core recovered this turn automatically after its project "
+                    "runtime stopped; Core itself did not restart. Treat tool "
+                    if recovery.get("cause") == PROJECT_RUNTIME_STOP_CAUSE
                     else "Core recovered this turn automatically after restart. Treat tool "
                 )
                 + f"invocations {unknown_tools or 'none'} and hook executions "
@@ -4830,8 +4877,10 @@ class ChatService:
         """Park a turn Core can no longer drive so the operator can resume it.
 
         ``cause`` names what stopped the work ("Core restarted", "Core
-        stopped"); a graceful stop and a crash leave the same recoverable
-        state, with unknown tool and hook outcomes flagged for reconciliation.
+        stopped", or a project runtime stop starting with
+        ``PROJECT_RUNTIME_STOPPED``, which may name a deployment handoff); a
+        graceful stop and a crash leave the same recoverable state, with
+        unknown tool and hook outcomes flagged for reconciliation.
         ``recovery_cause`` and ``detail`` replace the recorded cause and the
         operator-facing reason (the callback stall watchdog's own).
         """
@@ -4898,10 +4947,9 @@ class ChatService:
         # resumes without replaying them. Only an existing goal hold waits for
         # the operator (and an unmatched callback, which its caller marks).
         goal = (await self.store.get(ChatGoal, turn.goal_id)) if turn.goal_id else None
+        runtime_stop = cause.startswith(PROJECT_RUNTIME_STOPPED)
         preserve_hold = (
-            cause == "Project runtime stopped"
-            and goal is not None
-            and goal.status != ChatGoalStatus.RUNNING
+            runtime_stop and goal is not None and goal.status != ChatGoalStatus.RUNNING
         )
         detail = detail or (
             f"{cause} before this response completed. The existing goal hold "
@@ -4928,6 +4976,8 @@ class ChatService:
                 or (
                     "runtime_loss"
                     if preserve_hold
+                    else PROJECT_RUNTIME_STOP_CAUSE
+                    if runtime_stop
                     else "core_shutdown"
                     if cause == "Core stopped"
                     else "core_restart"
