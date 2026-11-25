@@ -2805,11 +2805,12 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
 
 
 def _intent_only_restart_entry(
-    intent: Mapping[str, Any],
+    intent: Mapping[str, Any], *, runtime_stop: bool = False
 ) -> tuple[dict[str, Any], str]:
     """Settle a step recorded as started whose ToolCall was never created.
 
-    Core restarted between the ledger intent and the broker's record, so
+    Core restarted (or, with ``runtime_stop``, only the project runtime
+    stopped) between the ledger intent and the broker's record, so
     nothing says whether the call ran. A read changed nothing and can run
     again; anything else is an unknown effect that must not be repeated.
     Returns the settled entry and its ledger event type.
@@ -2817,6 +2818,12 @@ def _intent_only_restart_entry(
 
     call_id = str(intent["tool_call_id"])
     name = str(intent.get("name") or "unknown")
+    stopped = (
+        "The project runtime stopped while Core kept running"
+        if runtime_stop
+        else "Core restarted"
+    )
+    summary_cause = "the project runtime stopped" if runtime_stop else "Core restart"
     if name in RETRIEVAL_TOOL_NAMES:
         observation = {
             "schema": "nebula.restart-interrupted/v1",
@@ -2826,7 +2833,7 @@ def _intent_only_restart_entry(
             "side_effects": "none",
             "retry_safe": True,
             "detail": (
-                "Core restarted before this read returned its result. It changed "
+                f"{stopped} before this read returned its result. It changed "
                 "nothing; call it again if you still need the result."
             ),
         }
@@ -2835,7 +2842,11 @@ def _intent_only_restart_entry(
             "status": "failed",
             "provider_result": serialize_model_result(observation),
             "trusted_result": False,
-            "result_summary": "Interrupted by a Core restart; the read can run again.",
+            "result_summary": (
+                "Interrupted because the project runtime stopped; the read can run again."
+                if runtime_stop
+                else "Interrupted by a Core restart; the read can run again."
+            ),
             "recovered_from_restart_rerunnable": True,
         }, "restart_rerunnable"
     observation = {
@@ -2844,7 +2855,7 @@ def _intent_only_restart_entry(
         "tool_call_id": call_id,
         "tool_name": name,
         "detail": (
-            "Core restarted after this invocation may have started, but no "
+            f"{stopped} after this invocation may have started, but no "
             "trustworthy terminal receipt was recorded. Do not repeat the "
             "same invocation. Inspect current state before any follow-up."
         ),
@@ -2854,7 +2865,7 @@ def _intent_only_restart_entry(
         "status": "failed",
         "provider_result": serialize_model_result(observation),
         "trusted_result": False,
-        "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+        "result_summary": f"Outcome unknown after {summary_cause}; identical replay is blocked.",
         "recovered_from_restart_unknown": True,
     }, "restart_unknown"
 
@@ -3213,6 +3224,15 @@ async def unarchive_chat_session(store: NebulaStore, session_id: str) -> None:
             ConflictError
         ):  # diagnostic-expected: concurrent writer won; re-read and retry
             continue
+
+
+# Text only an interruption-recovery pause reason carries: the promise
+# _interrupt_orphaned_turn makes, and the wait a failed resume records.
+_AUTOMATIC_RESUME_PROMISES = (
+    "resume it automatically",
+    "resume automatically",
+    "Automatic recovery is waiting for the next Core recovery pass",
+)
 
 
 class ChatService:
@@ -4375,21 +4395,36 @@ class ChatService:
                     saved.session_id, waiting
                 )
                 if paused is not None and paused.status == ChatGoalStatus.PAUSED:
-                    (await self._restate_recovery_pause(paused, waiting))
+                    (
+                        await self._restate_recovery_pause(
+                            paused, waiting, interruption=saved.error
+                        )
+                    )
         return False
 
-    async def _restate_recovery_pause(self, goal: ChatGoal, reason: str) -> None:
+    async def _restate_recovery_pause(
+        self, goal: ChatGoal, reason: str, *, interruption: str | None
+    ) -> None:
         """Replace a paused goal's promise of automatic resume after it failed.
 
         Interruption recovery pauses a goal with a reason that says Core will
         resume it. When that resume cannot start, the goal stays paused and
-        the reason must say so instead of still promising it. A pause the
-        operator or a project hold owns keeps its own reason.
+        the reason must say so instead of still promising it. Only that
+        recovery reason is replaced: the interrupted turn's own interruption
+        text, or a reason that promises an automatic resume. Any other pause
+        (completion review, Butler, a model refusal, a required hook, the
+        operator or a project hold) keeps its own reason.
         """
 
+        current = goal.blocked_reason or ""
+        owned = bool(current) and (
+            (interruption is not None and current == interruption)
+            or any(promise in current for promise in _AUTOMATIC_RESUME_PROMISES)
+        )
         if (
             goal.status != ChatGoalStatus.PAUSED
-            or goal.blocked_reason == reason
+            or not owned
+            or current == reason
             or OPERATOR_RECOVERY_PAUSE in goal.metadata
             or goal.metadata.get(HOLD_MARKER) is not None
         ):
@@ -4610,6 +4645,9 @@ class ChatService:
                             "Core stopped waiting for this invocation's result after "
                             "the wait made no progress"
                             if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                            else "The project runtime stopped while Core kept running, "
+                            "after this invocation may have started"
+                            if recovery.get("cause") == PROJECT_RUNTIME_STOP_CAUSE
                             else "Core restarted after this invocation may have started"
                         )
                         + ", but no trustworthy terminal receipt was recorded. Do not "
@@ -4626,6 +4664,9 @@ class ChatService:
                     "result_summary": (
                         "Outcome unknown after a stalled wait; identical replay is blocked."
                         if recovery.get("cause") == CALLBACK_STALL_CAUSE
+                        else "Outcome unknown after the project runtime stopped; "
+                        "identical replay is blocked."
+                        if recovery.get("cause") == PROJECT_RUNTIME_STOP_CAUSE
                         else "Outcome unknown after Core restart; identical replay is blocked."
                     ),
                     "recovered_from_restart_unknown": True,
@@ -4703,7 +4744,10 @@ class ChatService:
                     pass
                 else:
                     continue
-                entry, event_type = _intent_only_restart_entry(item)
+                entry, event_type = _intent_only_restart_entry(
+                    item,
+                    runtime_stop=recovery.get("cause") == PROJECT_RUNTIME_STOP_CAUSE,
+                )
                 history = [
                     other
                     for other in history

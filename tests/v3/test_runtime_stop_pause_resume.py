@@ -27,6 +27,9 @@ from nebula.v3.domain import (
     HarnessTurnStatus,
     utc_now,
 )
+from nebula.v3.domain import GOAL_COMPLETION_REVIEW_REASON
+from nebula.v3.model_refusal import PAUSE_PREFIX as MODEL_REFUSAL_PAUSE_PREFIX
+from nebula.v3.chat import RETRIEVAL_TOOL_NAMES
 from nebula.v3.recovery_markers import (
     HARNESS_CORE_RESTART_PAUSE,
     HARNESS_RUNTIME_STOP,
@@ -143,6 +146,8 @@ async def test_harness_goal_pause_names_what_stopped(tmp_path, deployment, runni
     await runtime.startup()
     settled = await store.get(HarnessTurn, harness_turn.id)
     assert settled.status == HarnessTurnStatus.INTERRUPTED
+    # Settled once; a later real Core restart must not read a stale mark.
+    assert HARNESS_RUNTIME_STOP not in settled.metadata
     assert (await store.get(ChatTurn, turn.id)).status == ChatTurnStatus.INTERRUPTED
     goal = await goals.get(created.session.id)
     assert goal.status == ChatGoalStatus.PAUSED
@@ -286,5 +291,54 @@ async def test_failed_resume_keeps_an_operator_pause_reason(tmp_path):
         {"metadata": {OPERATOR_RECOVERY_PAUSE: True}},
         expected_revision=goal.revision,
     )
-    await service._restate_recovery_pause(goal, "Automatic recovery is waiting.")
+    await service._restate_recovery_pause(
+        goal, "Automatic recovery is waiting.", interruption=turn.error
+    )
     assert (await store.get(ChatGoal, goal.id)).blocked_reason == goal.blocked_reason
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        GOAL_COMPLETION_REVIEW_REASON,
+        MODEL_REFUSAL_PAUSE_PREFIX + "synthetic): review the refused request.",
+    ],
+)
+async def test_failed_resume_keeps_a_pause_reason_it_does_not_own(tmp_path, reason):
+    store, goal, turn, service = await _stopped_goal_turn(tmp_path, "foreign-pause")
+    goal = await store.update(
+        ChatGoal, goal.id, {"blocked_reason": reason}, expected_revision=goal.revision
+    )
+    attempts = []
+
+    async def prepare(turn_id):
+        attempts.append(turn_id)
+        raise ChatHistoryConflict("synthetic refusal")
+
+    service.prepare_resume = prepare  # type: ignore[method-assign]
+
+    async def scenario():
+        await service.startup()
+        result = await service.resume_turns_stopped_by_core()
+        await service.shutdown()
+        return result
+
+    assert await scenario() == []
+    assert attempts == [turn.id]
+    kept = await store.get(ChatGoal, goal.id)
+    assert kept.status == ChatGoalStatus.PAUSED
+    assert kept.blocked_reason == reason
+
+
+@pytest.mark.parametrize("runtime_stop", [False, True])
+def test_unknown_step_tells_the_model_what_stopped(runtime_stop):
+    from nebula.v3.chat import _intent_only_restart_entry
+
+    for name in ("workspace.write", sorted(RETRIEVAL_TOOL_NAMES)[0]):
+        entry, _event = _intent_only_restart_entry(
+            {"tool_call_id": "synthetic-call", "name": name, "step": 1},
+            runtime_stop=runtime_stop,
+        )
+        text = entry["provider_result"] + entry["result_summary"]
+        assert ("Core restart" in text) is not runtime_stop
+        assert ("project runtime stopped" in text) is runtime_stop
