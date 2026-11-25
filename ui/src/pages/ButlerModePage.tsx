@@ -6,7 +6,7 @@ import { butlerCaseStage } from "../butlerStage";
 import { chatStageName } from "./workStages";
 import { ButlerStageLabel } from "../components/ButlerStageLabel";
 import { WorkStageLabel } from "../components/WorkStageLabel";
-import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, type BoardStageFilter, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
+import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, type BoardStageFilter, SECTION_LABEL, VIEW_SECTION_LABEL, holdAllActive, holdBoardChats, isHoldable, releaseBoardHolds, type BoardViewSection, type PlacedHold, boardElapsed, boardSectionOpen, boardStatusLabel, cancelProposedGoalChat, isResumableIdle, listResumableIdle, resumeIdleGoals, goalChatProposalFromReceipt, parseBoardSectionState, sectionOfGoalStatus, startProposedGoalChat, toggleBoardSection, type BoardSectionOpenState, type GoalChatProposal, getButlerBoardIfChanged, groupButlerBoard, operatorActionCheckLabel, resolveOperatorAction, type OperatorActionRequest, listButlerThreadsIfChanged, type ButlerBoard, type ButlerBoardGroup, type ButlerBoardGrouping, type ButlerBoardItem, type ButlerBoardSectionGroup, type ButlerThread } from "../api/butlerBoard";
 import type { ChatStreamEvent, PersistedChatMessage } from "../api/types";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
@@ -141,6 +141,8 @@ export function ButlerModePage() {
   // Chats just held, for Undo; holding never asks first because release restores exactly what was held.
   const [heldUndo, setHeldUndo] = useState<{ placed: PlacedHold[]; count: number }>();
   const [holdBusy, setHoldBusy] = useState(false);
+  const [resolvingRequest, setResolvingRequest] = useState<string>();
+  const [requestError, setRequestError] = useState("");
 
   const [threads, setThreads] = useState<ButlerThread[]>([]);
   const [threadsError, setThreadsError] = useState("");
@@ -566,6 +568,22 @@ export function ButlerModePage() {
     if (approved) await runResume(items);
   };
   const refreshBoard = () => { boardEtag.current = undefined; boardPoll.current?.poke(); };
+  const resolveRequest = async (request: OperatorActionRequest, outcome: "done" | "cancelled") => {
+    if (!api || resolvingRequest) return;
+    setResolvingRequest(request.id);
+    setRequestError("");
+    try {
+      await resolveOperatorAction(api, request, outcome);
+      // Leave the card at once; the next poll confirms it.
+      setBoard((current) => current && { ...current, operatorActions: current.operatorActions.filter((item) => item.id !== request.id) });
+      refreshBoard();
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.operator_action_failed", "Butler mode could not close an operator action request.", caught, "butler_mode");
+      setRequestError(`${caught instanceof Error ? caught.message : "Core could not save that."} The request is still open.`);
+    } finally {
+      setResolvingRequest(undefined);
+    }
+  };
   const heldCount = (placed: PlacedHold[]) => placed.reduce((sum, entry) => sum + entry.sessionIds.length, 0);
   const finishHold = (placed: PlacedHold[], failed: Array<{ error: string }>) => {
     const count = heldCount(placed);
@@ -902,6 +920,7 @@ export function ButlerModePage() {
       </button>}
       {board?.truncated && <span className={styles.muted}>Showing the first {board.items.length} goal chats; search to narrow.</span>}
     </div>
+    {board && board.operatorActions.length > 0 && <OperatorActionsPanel requests={board.operatorActions} busy={resolvingRequest} error={requestError} onResolve={(request, outcome) => void resolveRequest(request, outcome)} />}
     {resumeRun && <p className={styles.resumeStatus} role="status">Resuming {resumeRun.done.toLocaleString()} of {resumeRun.total.toLocaleString()}…</p>}
     {!resumeRun && resumeSummary && <p className={styles.resumeStatus} role="status" data-failed={resumeSummary.failed ? "true" : undefined}>{resumeSummary.text} <button type="button" className={styles.link} onClick={() => setResumeSummary(undefined)}>Dismiss</button></p>}
     {board && searching && groups.length > 0 && <p className={styles.searchCount} role="status">{matchedChats} {matchedChats === 1 ? "goal chat" : "goal chats"} in {matchedProjects} {matchedProjects === 1 ? "project" : "projects"} match{search !== query ? " · searching Core…" : ""}</p>}
@@ -1188,6 +1207,33 @@ export function ButlerModePage() {
       onClose={() => setPopup(undefined)}
       onOpenFull={nativeShell ? undefined : () => { const target = popup; setPopup(undefined); navigate(chatPath(target.projectId, target.sessionId)); }} /></Suspense>}
   </div>;
+}
+
+const URGENCY_LABEL: Record<OperatorActionRequest["urgency"], string> = { blocking: "Blocking", high: "High", normal: "Normal", low: "Low" };
+
+/** Things only the operator can do, at the top of the board until done, cancelled or closed by their auto-check. */
+function OperatorActionsPanel({ requests, busy, error, onResolve }: { requests: OperatorActionRequest[]; busy?: string; error: string; onResolve: (request: OperatorActionRequest, outcome: "done" | "cancelled") => void }) {
+  return <section className={styles.operatorActions} aria-label="Needs you">
+    <h2 className={styles.operatorActionsHead}>Needs you <span className={styles.muted}>{requests.length.toLocaleString()} {requests.length === 1 ? "request" : "requests"}</span></h2>
+    {error && <div className={styles.error} role="alert">{error}</div>}
+    <ul className={styles.operatorActionList}>{requests.map((request) => <li key={request.id} className={styles.operatorAction} data-urgency={request.urgency}>
+      <div className={styles.operatorActionTitle}>
+        <span className={styles.operatorUrgency} data-urgency={request.urgency}>{URGENCY_LABEL[request.urgency]}</span>
+        <strong>{request.typed ? request.actionLabel : request.title}</strong>
+        {request.deviceOrHost && <span className={styles.operatorDevice}>{request.deviceOrHost}</span>}
+      </div>
+      <p className={styles.cardNote}>{request.reason}</p>
+      <div className={styles.operatorActionMeta}>
+        <span>{request.project.name || "Untitled project"}</span>
+        {request.goal && <Link to={chatPath(request.project.id, request.goal.sessionId)}>{request.goal.title || "Goal chat"}{request.goal.status ? ` · ${request.goal.status}` : ""}</Link>}
+        <span data-check={request.lastCheck?.passed === true ? "passes" : undefined}>{operatorActionCheckLabel(request)}</span>
+      </div>
+      <div className={styles.operatorActionButtons}>
+        <button type="button" className={styles.primary} disabled={busy !== undefined} aria-label={`Mark done: ${request.title}`} onClick={() => onResolve(request, "done")}>{busy === request.id ? "Saving…" : "Done"}</button>
+        <button type="button" className={styles.secondary} disabled={busy !== undefined} aria-label={`Cancel request: ${request.title}`} onClick={() => onResolve(request, "cancelled")}>Cancel</button>
+      </div>
+    </li>)}</ul>
+  </section>;
 }
 
 function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, onDecide, onStop, onAsk, onOpen, showProject, selectable, selected, selectDisabled, onSelect, onRelease, onPriority, releaseDisabled }: {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
+import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, operatorActionCheckLabel, resolveOperatorAction, OPERATOR_ACTION_CANCEL_SUMMARY, OPERATOR_ACTION_DONE_SUMMARY, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
 import type { ApiClient } from "./client";
 
 function item(overrides: Partial<ButlerBoardItem>): ButlerBoardItem {
@@ -275,5 +275,57 @@ describe("Butler board stage filter", () => {
       { label: "Shipping", name: "Shipping", count: 0, selected: true },
       { label: null, name: "No stage", count: 5, selected: false },
     ]);
+  });
+});
+
+describe("operator action requests", () => {
+  const wire = (overrides: Record<string, unknown>) => ({
+    id: "w1", project: { id: "p1", name: "Research" }, title: "Needs you: Restart host on lab-host-1", typed: true,
+    action: "restart_host", action_label: "Restart host", device_or_host: "lab-host-1", reason: "Hung after an update",
+    urgency: "normal", status: "open", goal: null, evidence: ["ssh timed out"], check: { kind: "tcp_reachable", params: { port: 22 } },
+    last_check: null, created_at: "2026-11-20T10:00:00Z", ...overrides,
+  });
+
+  it("maps the poll's requests most urgent first and tolerates an older Core", async () => {
+    const requestIfChanged = vi.fn().mockResolvedValue({
+      etag: '"o"',
+      value: {
+        counts: { active: 0, idle: 0, completed: 0 }, items: [], truncated: false,
+        operator_actions: [
+          wire({ id: "normal" }),
+          wire({ id: "blocking", urgency: "blocking", goal: { session_id: "s1", title: "Lab run", status: "blocked" }, last_check: { passed: false, detail: "refused", checked_at: "2026-11-20T10:05:00Z" } }),
+          wire({ id: "odd", urgency: "someday", status: "weird", check: null, typed: false }),
+        ],
+      },
+    });
+    const answer = await getButlerBoardIfChanged({ requestIfChanged } as unknown as ApiClient, {}, undefined);
+    const requests = answer!.board.operatorActions;
+    expect(requests.map((request) => request.id)).toEqual(["blocking", "normal", "odd"]);
+    expect(requests[0]).toMatchObject({ deviceOrHost: "lab-host-1", actionLabel: "Restart host", goal: { sessionId: "s1", title: "Lab run", status: "blocked" }, lastCheck: { passed: false, detail: "refused" } });
+    expect(requests[2]).toMatchObject({ urgency: "normal", status: "open", check: undefined, typed: false });
+
+    const older = vi.fn().mockResolvedValue({ value: { counts: { active: 0, idle: 0, completed: 0 }, items: [], truncated: false } });
+    expect((await getButlerBoardIfChanged({ requestIfChanged: older } as unknown as ApiClient, {}, undefined))?.board.operatorActions).toEqual([]);
+  });
+
+  it("says what the auto-check shows", () => {
+    const check = { kind: "tcp_reachable", params: {} };
+    expect(operatorActionCheckLabel({})).toBe("No auto-check: mark it done when finished");
+    expect(operatorActionCheckLabel({ check })).toBe("Auto-check tcp_reachable: not run yet");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: false, detail: "refused", checkedAt: "t" } })).toBe("Auto-check tcp_reachable: not yet (refused)");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: null, detail: "", checkedAt: "t" } })).toBe("Auto-check tcp_reachable: unknown");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: true, detail: "open", checkedAt: "t" } })).toBe("Auto-check tcp_reachable passes (open); closing");
+  });
+
+  it("marks done or cancels through a Work check-in that closes the item", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const api = { request } as unknown as ApiClient;
+    await resolveOperatorAction(api, { id: "w 1", project: { id: "p/1", name: "Research" } }, "done");
+    await resolveOperatorAction(api, { id: "w2", project: { id: "p1", name: "Research" } }, "cancelled");
+    expect(request.mock.calls[0][0]).toBe("engagements/p%2F1/work/w%201/updates");
+    expect(JSON.parse(request.mock.calls[0][1].body)).toEqual({ summary: OPERATOR_ACTION_DONE_SUMMARY, status: "done", request_id: "board-operator-action:w 1" });
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ summary: OPERATOR_ACTION_CANCEL_SUMMARY, status: "done" });
+    // Core reads a check-in starting with this text as a cancel.
+    expect(OPERATOR_ACTION_CANCEL_SUMMARY.startsWith("Operator cancelled this request")).toBe(true);
   });
 });

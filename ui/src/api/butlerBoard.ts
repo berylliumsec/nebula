@@ -73,6 +73,50 @@ export interface ButlerBoard {
   stages: BoardStageCount[];
   /** Searched goal chats with no Work stage, per section. */
   noStage: ButlerBoardCounts;
+  /** Open operator action requests ("Needs you:" Work items), most urgent first; only on a poll. */
+  operatorActions: OperatorActionRequest[];
+}
+
+export type OperatorActionUrgency = "low" | "normal" | "high" | "blocking";
+
+/** Something only the operator can do (restart a host, plug in a device…), as Butler recorded it. */
+export interface OperatorActionRequest {
+  /** The Work item that holds the request. */
+  id: string;
+  project: { id: string; name: string };
+  title: string;
+  /** False for an older plain "Needs you:" Work item without Butler's typed record. */
+  typed: boolean;
+  action: string;
+  actionLabel: string;
+  deviceOrHost: string;
+  reason: string;
+  urgency: OperatorActionUrgency;
+  status: "open" | "closed" | "cancelled";
+  goal?: { sessionId: string; title: string; status?: string };
+  evidence: string[];
+  check?: { kind: string; params: Record<string, unknown> };
+  /** Butler's newest evaluation of the auto-check; ``passed`` is null when it could not tell. */
+  lastCheck?: { passed: boolean | null; detail: string; checkedAt: string };
+  createdAt: string;
+}
+
+interface WireOperatorAction {
+  id: string;
+  project: { id: string; name: string };
+  title: string;
+  typed: boolean;
+  action: string;
+  action_label: string;
+  device_or_host: string;
+  reason: string;
+  urgency: string;
+  status: string;
+  goal?: { session_id: string; title?: string | null; status?: string | null } | null;
+  evidence?: string[] | null;
+  check?: { kind: string; params?: Record<string, unknown> | null } | null;
+  last_check?: { passed: boolean | null; detail?: string | null; checked_at: string } | null;
+  created_at: string;
 }
 
 /** One Work stage label across projects, with its goal chats per section. */
@@ -118,6 +162,67 @@ interface WireBoard {
   truncated: boolean;
   stages?: Array<{ label: string; counts: ButlerBoardCounts }> | null;
   no_stage?: ButlerBoardCounts | null;
+  operator_actions?: WireOperatorAction[] | null;
+}
+
+const URGENCIES: readonly OperatorActionUrgency[] = ["blocking", "high", "normal", "low"];
+
+function mapOperatorAction(wire: WireOperatorAction): OperatorActionRequest {
+  const urgency = URGENCIES.find((value) => value === wire.urgency) ?? "normal";
+  const status = wire.status === "closed" || wire.status === "cancelled" ? wire.status : "open";
+  return {
+    id: wire.id,
+    project: wire.project,
+    title: wire.title,
+    typed: wire.typed,
+    action: wire.action,
+    actionLabel: wire.action_label,
+    deviceOrHost: wire.device_or_host,
+    reason: wire.reason,
+    urgency,
+    status,
+    goal: wire.goal ? { sessionId: wire.goal.session_id, title: wire.goal.title ?? "", status: wire.goal.status ?? undefined } : undefined,
+    evidence: wire.evidence ?? [],
+    check: wire.check ? { kind: wire.check.kind, params: wire.check.params ?? {} } : undefined,
+    lastCheck: wire.last_check ? { passed: wire.last_check.passed, detail: wire.last_check.detail ?? "", checkedAt: wire.last_check.checked_at } : undefined,
+    createdAt: wire.created_at,
+  };
+}
+
+/** Most urgent first; Core already orders them, this keeps an edited list in order. */
+export function sortOperatorActions(requests: readonly OperatorActionRequest[]): OperatorActionRequest[] {
+  return [...requests].sort((a, b) => (URGENCIES.indexOf(a.urgency) - URGENCIES.indexOf(b.urgency)) || a.createdAt.localeCompare(b.createdAt));
+}
+
+/** What a request's auto-check says now. */
+export function operatorActionCheckLabel(request: Pick<OperatorActionRequest, "check" | "lastCheck">): string {
+  if (!request.check) return "No auto-check: mark it done when finished";
+  const last = request.lastCheck;
+  if (!last) return `Auto-check ${request.check.kind}: not run yet`;
+  const detail = last.detail ? ` (${last.detail})` : "";
+  if (last.passed === true) return `Auto-check ${request.check.kind} passes${detail}; closing`;
+  if (last.passed === false) return `Auto-check ${request.check.kind}: not yet${detail}`;
+  return `Auto-check ${request.check.kind}: unknown${detail}`;
+}
+
+/** Summaries Core reads back: a check-in starting with the cancel text cancels the request. */
+export const OPERATOR_ACTION_DONE_SUMMARY = "Operator marked this request done from the Butler board.";
+export const OPERATOR_ACTION_CANCEL_SUMMARY = "Operator cancelled this request from the Butler board.";
+
+/**
+ * Mark a request done or cancel it: a Work check-in that closes its Work
+ * item. Butler's next check records the outcome and resumes a goal that was
+ * waiting on a done request.
+ */
+export async function resolveOperatorAction(api: ApiClient, request: Pick<OperatorActionRequest, "id" | "project">, outcome: "done" | "cancelled"): Promise<void> {
+  await api.request(`engagements/${encodeURIComponent(request.project.id)}/work/${encodeURIComponent(request.id)}/updates`, {
+    method: "POST",
+    body: JSON.stringify({
+      summary: outcome === "cancelled" ? OPERATOR_ACTION_CANCEL_SUMMARY : OPERATOR_ACTION_DONE_SUMMARY,
+      status: "done",
+      request_id: `board-operator-action:${request.id}`,
+    }),
+  });
 }
 
 /** The section a goal status belongs to. */
@@ -221,6 +326,7 @@ export async function getButlerBoardIfChanged(
       truncated: answer.value.truncated,
       stages: answer.value.stages ?? [],
       noStage: answer.value.no_stage ?? emptyCounts(),
+      operatorActions: sortOperatorActions((answer.value.operator_actions ?? []).map(mapOperatorAction)),
     },
     etag: answer.etag,
   };

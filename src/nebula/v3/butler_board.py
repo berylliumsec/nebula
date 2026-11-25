@@ -13,7 +13,9 @@ never from a scan of every project's turns. A card also carries Butler's newest 
 that Butler is investigating it or needs them, and the project Work stage
 of the Work item assigned to it. Chats without a goal, Butler's own
 conversations, side chats, subagent chats and archived projects or chats are
-never listed. The operator can narrow the board to goal chats in chosen Work
+never listed. A poll also lists open operator action requests (``Needs you:``
+Work items, see ``operator_action_requests``) for the top of the board. The
+operator can narrow the board to goal chats in chosen Work
 stages (by label, across projects) or with no stage; every read counts the
 searched goal chats per stage so the filter shows what each choice holds.
 Both the supervisor's API worker and the single-process app mount this route.
@@ -44,6 +46,7 @@ from .chat_turn_headers import (
 )
 from .conditional_reads import conditional, content_etag, json_native, native_etag
 from .database import EntityRow
+from .diagnostics import record_caught_exception
 from .domain import (
     GOAL_COMPLETION_REVIEW_REASON,
     Approval,
@@ -588,6 +591,11 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
             ],
             "no_stage": unstaged,
             "section": section,
+            # Operator action requests (open "Needs you:" Work items) lead the
+            # poll; search and stage filters never hide them.
+            "operator_actions": (
+                await _operator_actions(store) if section is None else None
+            ),
             "items": items,
             "next_offset": next_offset,
             "truncated": truncated,
@@ -680,6 +688,24 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
 
     router.include_router(chat_brief_router(store))
     return router
+
+
+async def _operator_actions(store: NebulaStore) -> list[dict[str, Any]]:
+    """Open operator action requests; a failed read leaves the board readable."""
+
+    from .operator_action_requests import board_requests
+
+    try:
+        return await board_requests(store)
+    except Exception as exc:
+        record_caught_exception(
+            "butler",
+            "butler.board.operator_actions_failed",
+            "The Butler board could not read operator action requests.",
+            exc,
+            stage="butler-board",
+        )
+        return []
 
 
 async def _with_holds(

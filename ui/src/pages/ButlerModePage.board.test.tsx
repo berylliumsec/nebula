@@ -13,7 +13,8 @@ const getPendingChatTurn = vi.fn(async () => null);
 const holdChats = vi.fn();
 const releaseChats = vi.fn();
 const setChatSessionPriority = vi.fn();
-const api = { requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn, setChatSessionPriority, projectHolds: { holdChats, releaseChats } };
+const request = vi.fn();
+const api = { request, requestIfChanged, writeChatGoal, getChatGoal, listChatMessages, getPendingChatTurn, setChatSessionPriority, projectHolds: { holdChats, releaseChats } };
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: undefined, engagements: [], providers: [], harnesses: [], selectEngagement: vi.fn() }),
 }));
@@ -502,5 +503,70 @@ describe("stage filter", () => {
     expect(within(picker).getByRole("checkbox", { name: /Shipping/ })).toBeChecked();
     await userEvent.click(within(picker).getByRole("button", { name: "Show all stages" }));
     await within(board).findByRole("button", { name: "Filter by stage: All" });
+  });
+});
+
+describe("operator action requests", () => {
+  const needsYou = {
+    id: "w1", project: research, title: "Needs you: Restart host on lab-host-1", typed: true,
+    action: "restart_host", action_label: "Restart host", device_or_host: "lab-host-1", reason: "The host stopped answering after an update.",
+    urgency: "blocking", status: "open", goal: { session_id: "Fuzz parser", title: "Fuzz parser", status: "blocked" }, evidence: [],
+    check: { kind: "tcp_reachable", params: { port: 22 } }, last_check: { passed: false, detail: "connection refused", checked_at: "2026-11-20T10:05:00Z" },
+    created_at: "2026-11-20T10:00:00Z",
+  };
+  const legacy = { ...needsYou, id: "w2", typed: false, title: "Needs you: plug the probe back in", action: "other", action_label: "Operator action", device_or_host: "", reason: "The bench probe is unplugged.", urgency: "low", goal: null, check: null, last_check: null };
+
+  let open: Array<typeof needsYou | typeof legacy> = [];
+  beforeEach(() => {
+    open = [legacy, needsYou];
+    requestIfChanged.mockImplementation(async (path: string) => {
+      if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+      if (path.includes("section=completed")) return { value: completedPage, etag: '"c"' };
+      return { value: { ...poll, operator_actions: open }, etag: `"b${open.length}"` };
+    });
+    // Core closes the Work item, so the next poll no longer lists it.
+    request.mockImplementation(async (path: string) => { open = open.filter((item) => !path.includes(`/work/${item.id}/`)); return {}; });
+  });
+
+  it("shows open requests at the top of the board with urgency, device, reason, goal and check", async () => {
+    mount();
+    const board = screen.getByRole("region", { name: "Status board" });
+    const panel = await within(board).findByRole("region", { name: "Needs you" });
+    // Above every goal chat.
+    const firstCard = within(board).getAllByRole("article")[0];
+    expect(panel.compareDocumentPosition(firstCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const items = within(panel).getAllByRole("listitem");
+    expect(items.map((item) => item.getAttribute("data-urgency"))).toEqual(["blocking", "low"]);
+    expect(within(items[0]).getByText("Blocking")).toBeVisible();
+    expect(within(items[0]).getByText("Restart host")).toBeVisible();
+    expect(within(items[0]).getByText("lab-host-1")).toBeVisible();
+    expect(within(items[0]).getByText("The host stopped answering after an update.")).toBeVisible();
+    expect(within(items[0]).getByRole("link", { name: "Fuzz parser · blocked" })).toHaveAttribute("href", "/projects/p1/workbench?view=chat&session=Fuzz%20parser");
+    expect(within(items[0]).getByText("Auto-check tcp_reachable: not yet (connection refused)")).toBeVisible();
+    expect(within(items[1]).getByText("Needs you: plug the probe back in")).toBeVisible();
+    expect(within(items[1]).getByText("No auto-check: mark it done when finished")).toBeVisible();
+  });
+
+  it("marks a request done or cancels it with a Work check-in", async () => {
+    mount();
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Mark done: Needs you: Restart host on lab-host-1" }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request.mock.calls[0][0]).toBe("engagements/p1/work/w1/updates");
+    expect(JSON.parse(request.mock.calls[0][1].body)).toMatchObject({ status: "done", summary: "Operator marked this request done from the Butler board." });
+    await waitFor(() => expect(within(panel).queryByText("lab-host-1")).not.toBeInTheDocument());
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel request: Needs you: plug the probe back in" }));
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ status: "done", summary: "Operator cancelled this request from the Butler board." });
+  });
+
+  it("keeps a request and says so when Core refuses the check-in", async () => {
+    request.mockRejectedValueOnce(new Error("Work item changed."));
+    mount();
+    const panel = await screen.findByRole("region", { name: "Needs you" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Mark done: Needs you: Restart host on lab-host-1" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("Work item changed. The request is still open.");
+    expect(within(panel).getByText("lab-host-1")).toBeVisible();
   });
 });
