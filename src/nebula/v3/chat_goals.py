@@ -148,6 +148,14 @@ class GoalMustDoWaive(BaseModel):
 REOPEN_HISTORY_LIMIT = 20
 
 
+class GoalRuntimeRoute(BaseModel):
+    """Operator route for stage-based goal runtime routing."""
+
+    route: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+    dry_run: bool = False
+
+
 class GoalUpdate(GoalCreate):
     expected_revision: int = Field(ge=1)
     # The plan entry now being worked on (0-based). Sent as null it clears the
@@ -1989,6 +1997,29 @@ def goals_router(
         # Operator route only: no Butler tool calls it, and Butler's
         # must_do_resolve takes an artifact, never a waiver.
         return await service.waive_must_do(session_id, item_id, body)
+
+    @router.get("/chat/sessions/{session_id}/goal/runtime-route")
+    async def read_goal_runtime_route(session_id: str) -> dict[str, Any]:
+        from .goal_runtime_routing import routing_status
+
+        return await routing_status(store, session_id)
+
+    @router.post("/chat/sessions/{session_id}/goal/runtime-route")
+    async def route_goal_runtime(
+        session_id: str, body: GoalRuntimeRoute
+    ) -> dict[str, Any]:
+        # The operator's explicit route: a route name, auto or release. The
+        # switch is the Assistant settings writer's, audited on the chat.
+        from .goal_runtime_routing import route_goal_runtime as route_goal
+
+        return await route_goal(
+            store,
+            session_id,
+            route=body.route,
+            reason=body.reason,
+            actor="operator",
+            dry_run=body.dry_run,
+        )
 
     @router.get(
         "/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal]

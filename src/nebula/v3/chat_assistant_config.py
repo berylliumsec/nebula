@@ -302,8 +302,14 @@ async def update_chat_assistant_config(
     *,
     expected_revision: int,
     workspace_resolver: MaybeAsync[[str], Path] | None = None,
+    preserve_selection: bool = False,
 ) -> ChatSession:
-    """Validate every supplied choice, save atomically, and retain chat binding."""
+    """Validate every supplied choice, save atomically, and retain chat binding.
+
+    ``preserve_selection`` keeps the MCP, hook and subagent choices of this
+    selection when it moves a harness chat to a provider, which otherwise
+    resets them; goal runtime routing passes the goal's own selection.
+    """
 
     if (
         session.metadata.get("side_chat") is True
@@ -414,6 +420,7 @@ async def update_chat_assistant_config(
             metadata,
             switcher.binding(selected),
             expected_revision=expected_revision,
+            preserve_selection=preserve_selection,
         )
     return await store.update(
         ChatSession,

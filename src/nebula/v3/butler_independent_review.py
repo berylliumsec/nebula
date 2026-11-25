@@ -166,9 +166,15 @@ def proposal_digest(goal: ChatGoal) -> str | None:
 
 
 def independent_review_approves(
-    goal: ChatGoal, goal_model: str | None
+    goal: ChatGoal, goal_model: str | None, *, session: ChatSession | None = None
 ) -> tuple[bool, str]:
-    """Whether Core holds an independent approval for the goal's current proposal."""
+    """Whether Core holds an independent approval for the goal's current proposal.
+
+    ``goal_model`` is the goal's current main model. With the goal chat in
+    ``session`` the reviewer must also differ from a pending runtime switch's
+    model and, once routing moved the goal, from the model family of every
+    main model it ran on (``goal_runtime_routing.reviewer_conflict``).
+    """
 
     record = goal.metadata.get(REVIEW_KEY)
     if not isinstance(record, dict):
@@ -183,6 +189,16 @@ def independent_review_approves(
         return False, "the reviewer model is the goal's own model"
     if record.get("reviewer_session_id") in {goal.session_id}:
         return False, "the reviewer is the goal's own session"
+    if session is not None:
+        from .goal_runtime_routing import reviewer_conflict
+
+        conflict = reviewer_conflict(
+            session,
+            record.get("reviewer_model"),
+            reviewer_harness_profile_id=record.get("reviewer_harness_profile_id"),
+        )
+        if conflict:
+            return False, conflict
     if record.get("source") != REVIEW_SOURCE:
         return False, "the review record was not written by Core's reviewer"
     provenance = record.get("approval_provenance")
@@ -389,6 +405,21 @@ class ButlerIndependentReview:
                 "reviewer_not_independent",
                 "the reviewer model is the goal's own model; configure a different "
                 "NEBULA_BUTLER_REVIEW_MODEL",
+            )
+        from .goal_runtime_routing import reviewer_conflict
+
+        # The goal's main runtime may have moved (operator switch or stage
+        # routing): compare with what it runs on now, is about to run on, and
+        # was routed to, not only the model it started with.
+        conflict = reviewer_conflict(
+            session,
+            policy.review_model,
+            reviewer_harness_profile_id=policy.review_harness_profile_id,
+        )
+        if conflict:
+            raise ReviewUnavailable(
+                "reviewer_not_independent",
+                conflict + "; configure a different NEBULA_BUTLER_REVIEW_MODEL",
             )
         if policy.review_provider_id and policy.review_harness_profile_id:
             raise ReviewUnavailable(

@@ -589,6 +589,7 @@ def butler_completion_gate(
     goal_model: str | None,
     *,
     completion_summary: str | None = None,
+    session: Any = None,
 ) -> tuple[bool, str]:
     """Whether Butler's ``complete`` goal action may proceed."""
 
@@ -596,7 +597,7 @@ def butler_completion_gate(
 
     steered = butler_steered(goal)
     if goal.completion_requires_review or steered:
-        approved, why = independent_review_approves(goal, goal_model)
+        approved, why = independent_review_approves(goal, goal_model, session=session)
         if not approved:
             if steered and not goal.completion_requires_review:
                 why += " (Butler steered this goal: " + "; ".join(steered) + ")"

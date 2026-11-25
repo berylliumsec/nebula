@@ -2414,7 +2414,10 @@ class ControlAssistantWork:
             # than the goal's own; never while review must-dos are open. The
             # operator's own route is unchanged.
             approved, why = butler_completion_gate(
-                current, session.model, completion_summary=body.completion_summary
+                current,
+                session.model,
+                completion_summary=body.completion_summary,
+                session=session,
             )
             if not approved:
                 raise PermissionError(

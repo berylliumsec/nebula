@@ -180,6 +180,7 @@ SUPERVISOR_ACTIONS = frozenset(
         "nebula.supervisor.request_operator_action",
         "nebula.supervisor.list_operator_actions",
         "nebula.supervisor.close_operator_action",
+        "nebula.supervisor.route_goal_runtime",
     }
 )
 _BACKGROUND_CHANGES = _BACKGROUND_CHANGES | SUPERVISOR_ACTIONS
@@ -647,6 +648,7 @@ class ButlerCapabilities:
         from .butler_note_release import ButlerNoteRelease
         from .butler_review_gating import ButlerMustDoResolver
         from .butler_stuck_turns import ButlerStuckTurns
+        from .goal_runtime_routing import ButlerGoalRuntimeRouting
         from .operator_action_requests import ButlerOperatorActions
 
         actions: list[AnalysisTool] = [
@@ -658,6 +660,7 @@ class ButlerCapabilities:
             ).actions(),
             *ButlerRepoForensics().actions(),
             _log_writer_status_action(),
+            *ButlerGoalRuntimeRouting(store, project_id, actor=actor).actions(),
         ]
         if work is not None:
             actions += ButlerIndependentReview(store, work, project_id).actions()
