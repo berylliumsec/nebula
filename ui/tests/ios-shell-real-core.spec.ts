@@ -6,7 +6,7 @@ import { withOwnedCleanup } from "./fixtures/owned-cleanup";
 
 /*
  * The installed iPhone app (NebulaShell/1.0) against a production-built LAN Core:
- * pairing, docked Butler, and the Projects snapshot of an active project whose
+ * pairing, Butler mode (the page desktop shows), and the Projects snapshot of an active project whose
  * chat waits on an approval. The iPhone app has no chat view, so the turn is
  * started and decided through Core's API. This journey lives outside
  * real-core.spec.ts, which is above the public commit guard's per-file limit.
@@ -21,7 +21,7 @@ function localNetworkIpv4(): string {
   throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
 }
 
-test("iPhone assistant shell production LAN pairs into docked Butler, snapshots a project awaiting approval, and reconnects", async ({page}, testInfo) => {
+test("iPhone assistant shell production LAN pairs into Butler mode, snapshots a project awaiting approval, and reconnects", async ({page}, testInfo) => {
   test.setTimeout(150_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
   let pendingTurn: Promise<unknown> | undefined;
@@ -46,29 +46,35 @@ test("iPhone assistant shell production LAN pairs into docked Butler, snapshots 
     await page.getByLabel("Device name").fill("iPhone shell acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
 
-    // Paired: Butler is the app, docked full screen with the app tab bar.
-    await expect(page).toHaveURL(/\/projects\/[^/]+\/butler$/, {timeout: 20_000});
-    const projectId = decodeURIComponent(new URL(page.url()).pathname.split("/")[2]);
-    const butler = page.getByRole("dialog", {name: "Butler"});
-    await expect(butler).toBeVisible({timeout: 20_000});
-    await expect(butler.getByRole("button", {name: "Close Butler"})).toBeHidden();
-    await expect(butler.getByRole("combobox", {name: "Butler project"})).toHaveValue(projectId);
-    const tabs = butler.getByRole("navigation", {name: "Nebula app"});
-    await expect(tabs.getByRole("link", {name: "Butler"})).toHaveAttribute("aria-current", "page");
-    const view = await butler.evaluate(dialog => {
-      const bounds = dialog.getBoundingClientRect();
-      const visual = window.visualViewport;
-      return {top: bounds.top, height: bounds.height, visualTop: visual?.offsetTop ?? 0, visualHeight: visual?.height ?? innerHeight};
-    });
-    expect(Math.abs(view.top - view.visualTop)).toBeLessThanOrEqual(1);
-    expect(Math.abs(view.height - view.visualHeight)).toBeLessThanOrEqual(1);
-    await butler.getByRole("button", {name: "Start Butler Voice"}).click();
+    // Paired: the app opens Butler mode, the same page desktop shows, from the remembered project.
+    await expect(page).toHaveURL(/\/butler\?project=[^&]+$/, {timeout: 20_000});
+    const projectId = new URL(page.url()).searchParams.get("project")!;
+    await expect(page.getByRole("heading", {name: "Butler", level: 1})).toBeVisible({timeout: 20_000});
+    await expect(page.getByRole("region", {name: "Status board"})).toBeVisible({timeout: 20_000});
+    await expect(page.getByRole("dialog", {name: "Butler"})).toBeHidden();
+    await expect(page.getByRole("button", {name: "Exit Butler mode"})).toHaveCount(0);
+    const compactMode = await page.evaluate(() => matchMedia("(max-width: 760px)").matches);
+    if (compactMode) {
+      await page.getByRole("tab", {name: /^Threads/}).click();
+      if (!await page.getByRole("textbox", {name: "Message Butler"}).isVisible()) await page.getByRole("navigation", {name: "Butler threads"}).getByRole("button", {name: "New", exact: true}).click();
+    }
+    await expect(page.getByRole("textbox", {name: "Message Butler"})).toBeVisible();
+    await expect(page.getByRole("combobox", {name: "Project for the new thread"})).toHaveValue(projectId);
+    await testInfo.attach("iphone-shell-butler-mode", {body: await page.screenshot(), contentType: "image/png"});
+    await page.getByRole("button", {name: "Start Butler Voice"}).click();
     await expect(page.getByRole("dialog", {name: "Butler Voice"}).getByRole("alert")).toContainText("trusted HTTPS address");
     await page.getByRole("button", {name: "Exit voice mode"}).click();
-    await expect(page.getByRole("button", {name: "New chat", exact: true})).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
     // No chats yet: the project is active but not listed.
-    await tabs.getByRole("link", {name: "Projects"}).click();
+    if (compactMode) {
+      await page.getByRole("tab", {name: /More/}).click();
+      const more = page.getByRole("dialog", {name: "More in Butler"});
+      await expect(more.getByRole("button", {name: "Open full Nebula"})).toHaveCount(0);
+      await more.getByRole("link", {name: "All projects"}).click();
+    } else {
+      await page.getByRole("link", {name: "All projects"}).click();
+    }
     await expect(page).toHaveURL(/\/projects$/);
     const projects = page.getByRole("region", {name: "Projects"});
     await expect(projects.getByText("No active projects with chats")).toBeVisible({timeout: 20_000});
@@ -114,8 +120,11 @@ test("iPhone assistant shell production LAN pairs into docked Butler, snapshots 
     await expect(page.locator(".workspace-state-banner.failed")).toHaveCount(0, {timeout: 30_000});
     await card.locator("summary").click();
     await card.getByRole("button", {name: /^Ask Butler about /}).click();
-    await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/butler$`));
-    await expect(butler).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/butler\\?project=${projectId}$`));
+    await expect(page.getByRole("region", {name: "Status board"})).toBeVisible({timeout: 20_000});
+    await page.goBack();
+    await page.getByRole("navigation", {name: "Nebula app"}).getByRole("link", {name: "Butler"}).click();
+    await expect(page).toHaveURL(new RegExp(`/butler\\?project=${projectId}$`));
   }, [
     {name: "Core fixture", dispose: () => core.stop()},
     {name: "pending fixture turn", dispose: async () => { await pendingTurn; }},
