@@ -227,6 +227,36 @@ and an open request for the same action and device is returned instead of a
 duplicate. The periodic check closes requests whose check passes and resumes
 the waiting goal. Open requests appear at the top of the Butler board.
 
+Goal agents raise the same requests with `goal.request_operator_action`
+(`goal_request_operator_action` for provider goals; a native gateway tool for
+harness goals). It is only for operator-only physical or account actions:
+replug, plug in or power-cycle a device, restart a host, attach a credential,
+approve an account change, or a physical check. Operator autonomy is in force,
+so goals decide research questions themselves. Core links the request to the
+calling goal (project, goal chat and the turn in `created_by`), keeps the
+verification, auto-check and de-duplication (same action, device and goal)
+rules, and refuses: a turn that does not own the running goal; Core-only
+actions (`review_model_refusal`, `answer_question`); a physical action whose
+device or host is a placeholder ("device", "the host"); a reason that asks for
+a decision ("should I", "which ... should"), or any question for `other`; and a
+fourth open request for one goal. `block_goal: true` blocks the goal on
+`operator-action:<id>`, and the periodic sweep resumes it when the request
+closes.
+
+Opening and closing a request notify the operator. Every open (Butler, Core or
+a goal) adds the `Needs you:` Work item, which the Butler board lists at the
+top, and opens a Butler incident (`source=operator_action`, event
+`incident.opened`) in the project's oversight feed; closing resolves it.
+Nebula has no push channel: the iOS app is a web view of the same UI, and the
+web app's service worker does not register for push.
+
+A Claude harness model in a headless Nebula turn can call `AskUserQuestion`.
+Core offers it only to answer it: the PreToolUse hook denies it with Core's
+reply. A research decision gets "decide this yourself"; a question that asks
+the operator to act with hands or account (replug, power-cycle, unlock, enter
+a passcode, approve an account change) opens an `answer_question` request and
+blocks the goal; a turn that is not a goal is told to ask in its reply.
+
 ## Running Butler on Claude
 
 Butler, its subagents and the independent reviewer can all run on the Claude
