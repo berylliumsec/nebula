@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .stored_entities import decode_stored
+from .butler_check_summary import summary_target_snapshot, validate_summary_target
 from .butler_instructions import ButlerInstructionsError, MAX_INSTRUCTIONS_BYTES
 from .butler_recovery import DEFAULT_CHECK_INTERVAL_MINUTES, GLOBAL_STATE_ID
 from .database import EntityRow
@@ -31,9 +32,16 @@ class ButlerInstructionsUpdate(BaseModel):
     expected_sha256: str | None = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ButlerSummaryTarget(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+
+
 class ButlerCheckIntervalUpdate(BaseModel):
-    check_interval_minutes: int = Field(ge=1, le=1440)
+    check_interval_minutes: int | None = Field(default=None, ge=1, le=1440)
     expected_revision: int = Field(ge=0)
+    # Present to change where check summaries post; null restores the default.
+    summary_target: ButlerSummaryTarget | None = None
 
 
 async def butler_check_interval_snapshot(store: NebulaStore) -> dict[str, Any]:
@@ -48,6 +56,7 @@ async def butler_check_interval_snapshot(store: NebulaStore) -> dict[str, Any]:
             if state and state.last_periodic_at
             else None
         ),
+        "summary_target": await summary_target_snapshot(store),
     }
 
 
@@ -247,21 +256,43 @@ def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter
     async def update_check_interval(
         request: ButlerCheckIntervalUpdate,
     ) -> dict[str, Any]:
+        changes: dict[str, Any] = {}
+        if request.check_interval_minutes is not None:
+            changes["check_interval_minutes"] = request.check_interval_minutes
+        if "summary_target" in request.model_fields_set:
+            target = request.summary_target
+            if target is not None:
+                try:
+                    (
+                        await validate_summary_target(
+                            store, target.project_id, target.session_id
+                        )
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+            changes["check_summary_target_project_id"] = (
+                target.project_id if target else None
+            )
+            changes["check_summary_target_session_id"] = (
+                target.session_id if target else None
+            )
+        if not changes:
+            raise HTTPException(
+                status_code=422,
+                detail="Send check_interval_minutes or summary_target to save",
+            )
         async with store.transaction(immediate=True) as transaction:
             row = await transaction.session.get(EntityRow, GLOBAL_STATE_ID)
             state = decode_stored(ButlerGlobalState, row.payload) if row else None
             if (state.revision if state else 0) != request.expected_revision:
                 raise HTTPException(
                     status_code=409,
-                    detail="Butler's check interval changed; reload before saving",
+                    detail="Butler's check settings changed; reload before saving",
                 )
             if state is None:
                 (
                     await transaction.add(
-                        ButlerGlobalState(
-                            id=GLOBAL_STATE_ID,
-                            check_interval_minutes=request.check_interval_minutes,
-                        )
+                        ButlerGlobalState(id=GLOBAL_STATE_ID, **changes)
                     )
                 )
             else:
@@ -269,7 +300,7 @@ def butler_instructions_router(data_root: Path, store: NebulaStore) -> APIRouter
                     await transaction.update(
                         ButlerGlobalState,
                         state.id,
-                        {"check_interval_minutes": request.check_interval_minutes},
+                        changes,
                         expected_revision=state.revision,
                     )
                 )

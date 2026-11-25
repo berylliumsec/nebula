@@ -76,4 +76,47 @@ describe("ButlerCheckIntervalSettings", () => {
     await user.click(screen.getByRole("button", {name: "Reload"}));
     await waitFor(() => expect(interval).toHaveValue(10));
   });
+
+  it("saves the Butler chat that receives check summaries and confirms Core readback", async () => {
+    const user = userEvent.setup();
+    const options = [
+      {project_id: "project-a", project_name: "Alpha", session_id: "butler-a", title: "Alpha Butler"},
+      {project_id: "project-b", project_name: "Beta", session_id: "butler-b", title: "Beta Butler"},
+    ];
+    const target = {
+      configured: null,
+      effective: {source: "global_anchor", project_id: "project-a", session_id: "butler-a", title: "Alpha Butler", url: "/projects/project-a/workbench?view=chat&session=butler-a"},
+      unavailable: [],
+      last_fallback: {case_id: "case-1", fallbacks: [{source: "configured", project_id: "project-c", reason: "chat is archived"}], at: "2026-11-25T10:00:00Z"},
+      pending: 0,
+      options,
+    };
+    const initial = {check_interval_minutes: 5, revision: 3, last_check_at: null, next_check_at: null, summary_target: target};
+    const updated = {
+      ...initial,
+      revision: 4,
+      summary_target: {
+        ...target,
+        configured: {project_id: "project-b", session_id: "butler-b"},
+        effective: {source: "configured", project_id: "project-b", session_id: "butler-b", title: "Beta Butler", url: "/projects/project-b/workbench?view=chat&session=butler-b"},
+      },
+    };
+    const request = vi.fn()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce(updated)
+      .mockResolvedValueOnce(updated);
+    render(<ButlerCheckIntervalSettings api={{request} as unknown as ApiClient} />);
+    const select = await screen.findByRole("combobox", {name: "Post check summaries to"});
+    await waitFor(() => expect(select).toBeEnabled());
+    expect(screen.getByRole("link", {name: "Alpha Butler"})).toHaveAttribute("href", "/projects/project-a/workbench?view=chat&session=butler-a");
+    expect(screen.getByText(/chat is archived/)).toBeVisible();
+    expect(screen.getByRole("button", {name: "Save summary chat"})).toBeDisabled();
+    await user.selectOptions(select, "project-b/butler-b");
+    await user.click(screen.getByRole("button", {name: "Save summary chat"}));
+    await waitFor(() => expect(request).toHaveBeenNthCalledWith(2, "butler/check-interval", {
+      method: "PUT", body: JSON.stringify({summary_target: {project_id: "project-b", session_id: "butler-b"}, expected_revision: 3}),
+    }));
+    expect(await screen.findByText("Saved. Check summaries post to Beta Butler in Beta.")).toBeVisible();
+    expect(screen.getByRole("link", {name: "Beta Butler"})).toBeVisible();
+  });
 });

@@ -402,6 +402,14 @@ async def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_
             "revision": 0,
             "last_check_at": None,
             "next_check_at": None,
+            "summary_target": {
+                "configured": None,
+                "effective": None,
+                "unavailable": [],
+                "last_fallback": None,
+                "pending": 0,
+                "options": [],
+            },
         }
         assert (
             await client.put(

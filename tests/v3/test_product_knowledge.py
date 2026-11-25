@@ -388,6 +388,18 @@ def test_product_search_finds_nebula_wide_butler_instructions(monkeypatch):
     )
 
 
+def test_product_search_explains_where_butler_check_summaries_post(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Why does my main Butler chat show check summaries, and how do I choose "
+        "which chat receives them?"
+    )
+    assert any(
+        "Post check summaries" in str(item["text"]) and "No change" in str(item["text"])
+        for item in matches
+    )
+
+
 def test_product_search_finds_direct_butler_editor_navigation(monkeypatch):
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     matches = search_product_knowledge(
