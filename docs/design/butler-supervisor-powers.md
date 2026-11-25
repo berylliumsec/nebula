@@ -73,7 +73,7 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` | A harness profile for the independent reviewer, such as a Claude harness on the host's existing login. Each review is one turn in a fresh session with no tools, no MCP server and no Core gateway. |
 | `NEBULA_BUTLER_REVIEW_MODEL` | The reviewer model. Default: `claude-opus-5-5`. It must differ from the reviewed goal's model. |
 | `NEBULA_BUTLER_REVIEW_CEILING_POLICY` | A file appended to the reviewer instructions, such as an impact-ceiling policy. |
-| `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Directories the reviewer may read evidence bytes from. |
+| `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Extra directories the reviewer may read evidence bytes from. The goal's own project workspace is always an evidence root, so this is optional. |
 | `NEBULA_BUTLER_HYGIENE_PROJECT_IDS` | Projects the hygiene tick covers. |
 | `NEBULA_BUTLER_HYGIENE_UNLIMITED_BUDGETS` | `1` nulls the token, time and step budgets of live goals in those projects. |
 | `NEBULA_BUTLER_HYGIENE_DEFAULT_STAGE` | The stage given to a newly created Work item. Default: `triage`. |
@@ -153,6 +153,10 @@ Butler event stream.
 
 1. Butler calls `nebula.supervisor.independent_review` with the goal's session
    and its evidence paths. Evidence cited in the held proposal is added automatically.
+   A relative path resolves in the goal's project workspace, the same paths the
+   workspace tools return. An absolute path must be inside that workspace or
+   under `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`. Core resolves symbolic links
+   before it checks the root.
 2. Core checks two things. The reviewer model must differ from the goal's model.
    The reviewer profile must be enabled, allowlisted (on a harness: offer the
    model after **Check**), and permit sensitive data.
@@ -162,7 +166,8 @@ Butler event stream.
    event ends the review with an error. It contains:
    - the completion criteria;
    - the proposal;
-   - the evidence bytes, read only from the evidence roots, bounded and redacted;
+   - the evidence bytes, read only from the project workspace and the evidence
+     roots, bounded and redacted;
    - the reviewer instructions, including the ceiling policy and the MUST-DO prompt.
 
    Butler's conversation and notes are not included.
@@ -175,6 +180,13 @@ Butler event stream.
    - ACCEPT_WITH_RESIDUALS completes the goal and starts a follow-up goal with
      null budgets and `completion_requires_review`, or, with `on_residuals=feed`,
      feeds the residuals back to the goal instead.
+
+If Core refuses the review, Butler gets the exact rule as
+`error_code` `independent_review.<rule>`, for example
+`independent_review.evidence_outside_roots` or
+`independent_review.reviewer_not_independent`. The refusal also gives the
+remedy. The text comes from Core and never repeats a cited path or the
+reviewer's output.
 
 ## Enabling (operator steps)
 
@@ -204,7 +216,12 @@ Butler event stream.
   which records its provenance: provider or harness profile, model, review id
   and packet digest.
 - Goal-written supervisor or reviewer sign-off lines are refused in completion
-  proposals and redacted from review packets.
+  proposals and redacted from review packets. A line is a sign-off claim when it
+  states a verdict or sign-off value, says an authority approved it, or copies
+  Core's review header. A request or a pending state is not a claim, for
+  example "review requested", "awaiting independent review", "sign-off:
+  pending" or "must be approved by the supervisor". Butler's own Work check-ins
+  get the same check: Butler cannot produce a reviewer record either.
 - A goal may request closure at most `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY`
   times per rolling day.
 - A completed goal that a review rejects is reopened in place.
