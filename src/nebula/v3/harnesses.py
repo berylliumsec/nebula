@@ -13522,7 +13522,25 @@ class HarnessRuntimeService:
             await self._settle_provider_subagents(turn_id)
             capacity_recovered = False
             try:
-                capacity_recovered = await self._auto_recover_goal_capacity(turn_id)
+                # A routed goal stopped by a usage or rate limit continues on
+                # its route's fallback runtime (goal_runtime_routing).
+                from .goal_runtime_routing import run_goal_turn_on_fallback
+
+                capacity_recovered = await run_goal_turn_on_fallback(self, turn_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.goal.runtime_fallback_failed",
+                    "A rate-limited goal turn could not move to its fallback runtime.",
+                    exc,
+                    stage="goal-runtime-routing",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
+            try:
+                capacity_recovered = (
+                    capacity_recovered
+                    or await self._auto_recover_goal_capacity(turn_id)
+                )
             except Exception as exc:
                 record_caught_exception(
                     "harnesses",
