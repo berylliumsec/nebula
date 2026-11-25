@@ -82,7 +82,7 @@ def observer_reads() -> Iterator[None]:
 
     Only Butler read tools enter this, and only on the worker that owns
     ``BUTLER_HOME_PROJECT``; ``ExecutionSQLScope._execute`` refuses it on any
-    other worker. Inside it, plain SELECTs carry no project criteria and take no
+    other worker, except inside ``global_check_reads``. Inside it, plain SELECTs carry no project criteria and take no
     lock in the projects they read. Row-locking SELECTs and every INSERT,
     UPDATE and DELETE keep the owned-project predicate, so Butler can neither
     lock nor change another project's rows: actions on another project go to
@@ -95,6 +95,34 @@ def observer_reads() -> Iterator[None]:
         yield
     finally:
         _observer_reads.reset(token)
+
+
+_global_check_reads: ContextVar[bool] = ContextVar(
+    "execution_global_check_reads", default=False
+)
+
+
+@contextmanager
+def global_check_reads() -> Iterator[None]:
+    """Observer reads for one Nebula-wide scheduled Butler check's own tools.
+
+    The check runs on the worker of the Act project that hosts it, which
+    otherwise sees only that project, so Butler could neither list nor read
+    the other Act projects its mandate covers. Only ``ButlerGlobalActions``
+    enters this, for reads made while its case is investigating, and the
+    roster in that case's prompt. The same rules as ``observer_reads`` apply:
+    plain SELECTs see every project's committed rows, while row locks and
+    every write keep the owned-project predicate. Changes to another project
+    travel to that project's own worker as ``butler.action/v1`` commands,
+    which check that project's Butler authority when they run.
+    """
+
+    token = _global_check_reads.set(True)
+    try:
+        with observer_reads():
+            yield
+    finally:
+        _global_check_reads.reset(token)
 
 
 class CommandWrites:
@@ -405,7 +433,11 @@ class ExecutionSQLScope:
             raise LeaseLost("execution task lost its project fencing token")
         projects = (context.project_id,) if context is not None else tuple(owned)
         observing = _observer_reads.get()
-        if observing and projects != (BUTLER_HOME_PROJECT,):
+        if (
+            observing
+            and projects != (BUTLER_HOME_PROJECT,)
+            and not _global_check_reads.get()
+        ):
             raise CoordinationConflict(
                 "observer reads belong only to the Butler home worker"
             )

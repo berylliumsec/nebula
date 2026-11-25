@@ -12,6 +12,12 @@ Three rules keep this safe:
 
 * Only the worker holding the home project's lease may submit or read these
   commands, and only for actions in the closed set of Butler work changes.
+  The one exception is a Nebula-wide scheduled check (``initiator:
+  "background"``): the worker of the Act project hosting it may send its
+  changes to other projects while the host reads that case as investigating
+  in the sender's project. The target then checks its own Butler authority:
+  it runs the change only under current Act authority at the revision Butler
+  read, with Work enabled and no hold.
 * The host submits only to a project whose every possible worker declares
   ``butler.action/v1``. An older worker would mark the unknown command
   uncertain, and an uncertain head blocks that project's control lane,
@@ -29,11 +35,12 @@ import json
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from pydantic import Field
+from pydantic import Field, model_validator
 from sqlalchemy import select
 
 from .database import (
     DeploymentHostRow,
+    EntityRow,
     ProjectHandoffRow,
     ProjectOwnershipRow,
     RuntimeCommandRow,
@@ -47,7 +54,13 @@ from .deployment_protocol import (
     ReleaseManifest,
 )
 from .diagnostics import record_caught_exception
-from .domain import Engagement, EngagementStatus, NebulaModel
+from .domain import (
+    ButlerAuthorityPolicy,
+    ButlerRecoveryCase,
+    Engagement,
+    EngagementStatus,
+    NebulaModel,
+)
 from .runtime_coordination import (
     ClaimedCommand,
     CoordinationConflict,
@@ -55,6 +68,7 @@ from .runtime_coordination import (
     ProjectLease,
 )
 from .shared_memory_rpc import MemoryAuthority
+from .stored_entities import decode_stored
 
 # A release that declares this can run the command and its handler.
 BUTLER_ACTION_FEATURE = BUTLER_ACTION_COMMAND
@@ -82,12 +96,25 @@ def butler_work_changes() -> frozenset[str]:
 class ButlerAction(NebulaModel):
     action: str = Field(min_length=1, max_length=200)
     arguments: dict[str, Any] = Field(default_factory=dict)
-    # Butler acting because the operator asked in a Butler thread. Butler's
-    # own scheduled changes arrive later and will carry "background", which
-    # the target checks against its Butler authority.
-    initiator: Literal["operator"] = "operator"
+    # "operator": Butler acting because the operator asked in a Butler
+    # thread. "background": a Nebula-wide scheduled check's own change, which
+    # the target checks against its Butler authority at authority_revision.
+    initiator: Literal["operator", "background"] = "operator"
     home_session_id: str | None = Field(default=None, max_length=200)
     home_turn_id: str | None = Field(default=None, max_length=200)
+    case_id: str | None = Field(default=None, min_length=1, max_length=200)
+    authority_revision: int | None = Field(default=None, ge=1, strict=True)
+
+    @model_validator(mode="after")
+    def background_names_its_case(self) -> "ButlerAction":
+        background = self.initiator == "background"
+        if background != (self.case_id is not None) or background != (
+            self.authority_revision is not None
+        ):
+            raise ValueError(
+                "a background Butler change names its case and authority revision"
+            )
+        return self
 
 
 class ButlerActionCommand(ButlerAction):
@@ -106,6 +133,11 @@ class ButlerResultRequest(NebulaModel):
     lease: MemoryAuthority
     target_project: str = Field(min_length=1, max_length=200)
     command_id: str = Field(min_length=1, max_length=200)
+    # Set when a Nebula-wide check's host worker reads its own case's change.
+    case_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+GLOBAL_CHECK_SIGNAL = "butler.global_periodic_check"
 
 
 def action_key(turn_id: str | None, action: str, arguments: dict[str, Any]) -> str:
@@ -163,19 +195,46 @@ async def butler_actions_supported(session, project_id: str, *, now_ms: int) -> 
 def register_butler_actions(rpc, runtime_id: str, coordination) -> None:
     """Let only Butler's home worker submit and read its own action commands."""
 
-    async def _home(session, raw: MemoryAuthority, target: str) -> ProjectLease:
+    async def _home(
+        session,
+        raw: MemoryAuthority,
+        target: str,
+        case_id: str | None = None,
+        *,
+        investigating: bool = True,
+    ) -> ProjectLease:
         lease = ProjectLease(**raw.model_dump())
-        if lease.runtime_id != runtime_id or lease.project_id != BUTLER_HOME_PROJECT:
+        if lease.runtime_id != runtime_id:
+            raise ValueError("Butler actions require the sender's own grant")
+        if case_id is None and lease.project_id != BUTLER_HOME_PROJECT:
             raise ValueError("Butler actions require the Butler home grant")
         if target in RESERVED_PROJECT_IDS:
             raise ValueError("Butler actions target an operator project")
-        owned = await session.get(ProjectOwnershipRow, BUTLER_HOME_PROJECT)
+        owned = await session.get(ProjectOwnershipRow, lease.project_id)
         if (
             owned is None
             or owned.runtime_id != lease.runtime_id
             or owned.fencing_token != lease.fencing_token
         ):
-            raise ValueError("Butler's home grant is stale")
+            raise ValueError("Butler's grant is stale")
+        if case_id is not None:
+            # A Nebula-wide check's host worker sends only its own case's
+            # changes, and only to other projects (its own it changes itself).
+            row = await session.get(EntityRow, case_id)
+            case = (
+                decode_stored(ButlerRecoveryCase, row.payload)
+                if row is not None and row.kind == ButlerRecoveryCase.entity_kind
+                else None
+            )
+            if (
+                case is None
+                or target == lease.project_id
+                or lease.project_id in RESERVED_PROJECT_IDS
+                or case.engagement_id != lease.project_id
+                or case.signal != GLOBAL_CHECK_SIGNAL
+                or (investigating and case.status != "investigating")
+            ):
+                raise ValueError("Butler's scheduled check cannot send this change")
         return lease
 
     async def submit(payload):
@@ -184,7 +243,12 @@ def register_butler_actions(rpc, runtime_id: str, coordination) -> None:
             if request.action.action not in butler_work_changes():
                 raise ValueError("Butler can send only its listed work changes")
             async with coordination.database.session() as session:
-                await _home(session, request.lease, request.target_project)
+                await _home(
+                    session,
+                    request.lease,
+                    request.target_project,
+                    request.action.case_id,
+                )
                 # A resend (lost response, retried tool call) finds the first
                 # command. Its expiry was stamped then, so re-submitting would
                 # change the payload and be refused as a different request.
@@ -244,7 +308,13 @@ def register_butler_actions(rpc, runtime_id: str, coordination) -> None:
         try:
             request = ButlerResultRequest.model_validate(payload)
             async with coordination.database.session() as session:
-                await _home(session, request.lease, request.target_project)
+                await _home(
+                    session,
+                    request.lease,
+                    request.target_project,
+                    request.case_id,
+                    investigating=False,
+                )
                 row = await session.scalar(
                     select(RuntimeCommandRow).where(
                         RuntimeCommandRow.id == request.command_id,
@@ -253,7 +323,7 @@ def register_butler_actions(rpc, runtime_id: str, coordination) -> None:
                         RuntimeCommandRow.name == BUTLER_ACTION_COMMAND,
                     )
                 )
-            if row is None:
+            if row is None or (row.payload or {}).get("case_id") != request.case_id:
                 raise ValueError("unknown Butler action")
             return {"state": row.state, "result": row.result}
         except ValueError:
@@ -286,7 +356,13 @@ class RemoteButlerActions:
                 lease=authority,
                 target_project=target_project,
                 idempotency_key=action_key(
-                    action.home_turn_id, action.action, action.arguments
+                    # A scheduled check may send one change to several
+                    # projects; each target gets its own command.
+                    action.home_turn_id
+                    if action.initiator == "operator"
+                    else f"{action.case_id}\0{target_project}",
+                    action.action,
+                    action.arguments,
                 ),
                 action=action,
             ).model_dump(mode="json"),
@@ -301,6 +377,7 @@ class RemoteButlerActions:
                     lease=authority,
                     target_project=target_project,
                     command_id=command_id,
+                    case_id=action.case_id,
                 ).model_dump(mode="json"),
             )
             state = outcome.get("state")
@@ -315,6 +392,32 @@ class RemoteButlerActions:
                 # unless it expires first, and a later read reports it.
                 return {"state": "accepted", "command_id": command_id, "result": {}}
             await asyncio.sleep(self.poll_seconds)
+
+
+async def _check_background_authority(
+    store, project: Engagement, request: ButlerActionCommand
+) -> None:
+    """A scheduled check's change runs only under this project's current Act."""
+
+    from .control_assistant_work import HOLD_OPERATIONS
+    from .project_hold_gate import active_hold, held_detail
+
+    policy = await store.find_entity(ButlerAuthorityPolicy, "engagement_id", project.id)
+    authority = policy.authority if policy is not None else "watch"
+    if authority != "act":
+        raise ValueError(
+            f"Butler has {authority.capitalize()} authority here; a scheduled "
+            "check changes a project only under Act authority."
+        )
+    if policy is None or policy.revision != request.authority_revision:
+        raise ValueError("Butler authority here changed; read the project again.")
+    if not project.work_enabled:
+        raise ValueError("Work is turned off in this project.")
+    if request.action in HOLD_OPERATIONS:
+        raise ValueError("only the operator's Butler can hold or release work")
+    hold = await active_hold(store, project.id)
+    if hold is not None:
+        raise ValueError(held_detail(hold))
 
 
 async def run_butler_action(
@@ -340,6 +443,8 @@ async def run_butler_action(
         project = await work.store.get(Engagement, lease.project_id)
         if project.status == EngagementStatus.ARCHIVED:
             raise ValueError("Restore the project before Butler changes it")
+        if request.initiator == "background":
+            await _check_background_authority(work.store, project, request)
         from .control_assistant_work import dispatch_work_tool
 
         applied = await dispatch_work_tool(
