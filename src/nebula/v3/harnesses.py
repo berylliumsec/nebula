@@ -1028,6 +1028,12 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
     )
 
 
+def _without_native_shell(
+    capabilities: HarnessNativeCapabilities,
+) -> HarnessNativeCapabilities:
+    return capabilities.model_copy(update={"shell": False})
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -1043,6 +1049,11 @@ def _session_native_capabilities(
     )
     if session.metadata.get("core_guarded_tools"):
         return HarnessNativeCapabilities()
+    if session.metadata.get("control_assistant") is True:
+        # Butler (and its Butler-mode children) never get the vendor's native
+        # shell: the Core OS user may hold host privileges. Butler reaches
+        # projects through Core's gateway, where every action is checked.
+        capabilities = _without_native_shell(capabilities)
     if _session_execution_mode(session) == "host":
         return capabilities
     # Only host sessions run in the linked project workspace, so a session that
@@ -2280,8 +2291,104 @@ def _scrubbed_claude_environment(
     minimal = _minimal_environment()
     scrubbed = {key: "" for key in os.environ if key not in minimal}
     scrubbed.update(minimal)
+    # Where the operator signed the CLI in for the Core user. The CLI reads
+    # an empty CLAUDE_CONFIG_DIR as a path relative to its cwd, so blanking
+    # it would hide an existing login; it is a location, not a credential.
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if config_dir:
+        scrubbed["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        scrubbed.pop("CLAUDE_CONFIG_DIR", None)
     scrubbed.update(extra or {})
     return scrubbed
+
+
+def _claude_login_location() -> str:
+    """Where the Core user's Claude CLI keeps its login, for operator messages."""
+
+    try:
+        import pwd
+
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        # diagnostic-expected: an unnamed uid is reported by number.
+        user = str(os.getuid())
+    home = os.environ.get("HOME") or str(Path.home())
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return f"OS user {user!r}, HOME {home!r}, " + (
+        f"CLAUDE_CONFIG_DIR {config_dir!r}"
+        if config_dir
+        else f"login stored under {str(Path(home) / '.claude')!r}"
+    )
+
+
+def _claude_not_logged_in_detail() -> str:
+    return (
+        "Claude CLI is not logged in for the account that runs Nebula Core ("
+        + _claude_login_location()
+        + "). As that OS user, with the same HOME, run `claude auth login`, "
+        "then run Check and Test turn again."
+    )[:1_000]
+
+
+def _claude_cli_path(sdk: Any, profile: HarnessProfile) -> str | None:
+    """The CLI the SDK would start: the override, the bundled CLI, then PATH."""
+
+    if profile.executable:
+        return profile.executable
+    module_file = getattr(sdk, "__file__", None)
+    if isinstance(module_file, str):
+        bundled = Path(module_file).parent / "_bundled" / "claude"
+        if bundled.is_file():
+            return str(bundled)
+    if sdk is claude_agent_sdk:
+        import shutil
+
+        return shutil.which("claude")
+    return None
+
+
+async def _claude_cli_logged_in(cli: str) -> bool | None:
+    """``claude auth status --json`` under the environment turns use.
+
+    True or False when the CLI reports ``loggedIn``; None when it cannot say
+    (an older CLI without the command, or an unexpected answer), so Check
+    neither passes nor fails on it.
+    """
+
+    environment = {
+        **{key: value for key, value in os.environ.items() if key != "CLAUDECODE"},
+        **_scrubbed_claude_environment(),
+    }
+    with tempfile.TemporaryDirectory(prefix="nebula-claude-auth-") as cwd:
+        process = await asyncio.create_subprocess_exec(
+            cli,
+            "auth",
+            "status",
+            "--json",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=cwd,
+            env=environment,
+        )
+        try:
+            async with asyncio.timeout(20):
+                stdout, _ = await process.communicate()
+        except TimeoutError:
+            # diagnostic-expected: an unresponsive status read leaves login unknown.
+            with suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+            return None
+    try:
+        status = json.loads(stdout.decode("utf-8", "replace")[:64_000] or "null")
+    except json.JSONDecodeError:
+        # diagnostic-expected: a CLI without --json status leaves login unknown.
+        return None
+    if isinstance(status, dict) and isinstance(status.get("loggedIn"), bool):
+        return status["loggedIn"]
+    return None
 
 
 def _resolve_secret(store: CredentialStore, reference: str) -> str:
@@ -9019,10 +9126,18 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 raise HarnessConfigurationError(
                     "Claude CLI override must be an existing absolute executable"
                 )
+            logged_in = (
+                await self._cli_logged_in(sdk, profile)
+                if profile.auth_mode == HarnessAuthMode.EXISTING_SESSION
+                else None
+            )
+            if logged_in is False:
+                raise HarnessConfigurationError(_claude_not_logged_in_detail())
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
                 kind=self.kind,
+                authentication_state="verified" if logged_in else "unverified",
                 harness_version=str(version) if version else None,
                 capabilities=HarnessCapabilities(
                     sessions=True,
@@ -9075,6 +9190,24 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 capabilities=HarnessCapabilities(checked_at=utc_now()),
                 detail=_safe_error(exc),
             )
+
+    async def _cli_logged_in(self, sdk: Any, profile: HarnessProfile) -> bool | None:
+        """Whether the existing CLI login is usable; None when unknown."""
+
+        cli = _claude_cli_path(sdk, profile)
+        if cli is None:
+            return None
+        try:
+            return await _claude_cli_logged_in(cli)
+        except OSError as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.claude.auth_status_unavailable",
+                "The Claude CLI login status could not be read.",
+                exc,
+                stage="probe",
+            )
+            return None
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         try:
@@ -10845,6 +10978,9 @@ class HarnessRuntimeService:
             if tools_enabled
             else HarnessNativeCapabilities()
         )
+        if control_assistant:
+            # Host mode grants every session a native shell; Butler's never is.
+            native_capabilities = _without_native_shell(native_capabilities)
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
             **({"core_plan_isolated": True} if core_plan_isolated else {}),
