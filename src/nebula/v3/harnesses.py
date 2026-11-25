@@ -36,6 +36,12 @@ from .diagnostics import (
     record_diagnostic,
 )
 from .diagnostic_guidance import guidance_for, reason_code_for
+from .model_refusal import (
+    REASON_CODE as REFUSAL_REASON_CODE,
+    harness_pause_reason,
+    refusal_from_text,
+    settle_harness_model_refusal,
+)
 from .harness_commands import (
     compatibility_commands,
     normalize_commands,
@@ -1457,6 +1463,9 @@ def _harness_goal_retryable_failure(error: BaseException) -> bool:
     """
 
     if _HARNESS_QUOTA_TEXT.search(str(error)):
+        return False
+    if getattr(error, "reason_code", None) == REFUSAL_REASON_CODE:
+        # A model refusal waits for the operator (model_refusal).
         return False
     if isinstance(error, (HarnessUnresponsiveError, HarnessTransportClosedError)):
         return True
@@ -6865,6 +6874,11 @@ def _claude_turn_failure(message: Any) -> HarnessTurnFailedError:
         if isinstance(api_status, int)
         else None
     )
+    # A refusal ("API Error: <model> can't help with this ... Details:
+    # [<category>]") is the model's decision, never a status to retry or a
+    # usage limit to route around: the goal pauses for the operator.
+    if refusal_from_text(text) is not None or status["terminal_reason"] == "refusal":
+        reason_code = REFUSAL_REASON_CODE
     # The CLI reports its own sign-in failures (an expired OAuth login that
     # cannot refresh, a missing login) without an HTTP status.
     if reason_code is None and _CLAUDE_SIGN_IN_FAILURE.search(text):
@@ -13573,12 +13587,28 @@ class HarnessRuntimeService:
             self._chat_turn_tasks.pop(turn_id, None)
             await self._settle_provider_subagents(turn_id)
             capacity_recovered = False
+            refused = False
+            try:
+                # A model refusal pauses its goal for the operator: no
+                # fallback runtime, capacity retry or continuation.
+                refused = await settle_harness_model_refusal(self.store, turn_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.goal.model_refusal_failed",
+                    "A refused goal turn could not be recorded; it is not continued.",
+                    exc,
+                    stage="goal-model-refusal",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
             try:
                 # A routed goal stopped by a usage or rate limit continues on
                 # its route's fallback runtime (goal_runtime_routing).
                 from .goal_runtime_routing import run_goal_turn_on_fallback
 
-                capacity_recovered = await run_goal_turn_on_fallback(self, turn_id)
+                capacity_recovered = not refused and await run_goal_turn_on_fallback(
+                    self, turn_id
+                )
             except Exception as exc:
                 record_caught_exception(
                     "harnesses",
@@ -13589,9 +13619,8 @@ class HarnessRuntimeService:
                     metadata={"entity_type": "harness_turn", "entity_id": turn_id},
                 )
             try:
-                capacity_recovered = (
-                    capacity_recovered
-                    or await self._auto_recover_goal_capacity(turn_id)
+                capacity_recovered = capacity_recovered or (
+                    not refused and await self._auto_recover_goal_capacity(turn_id)
                 )
             except Exception as exc:
                 record_caught_exception(
@@ -22467,7 +22496,8 @@ class HarnessRuntimeService:
                         paused_at=now,
                         active_since=None,
                         elapsed_seconds=goal.active_elapsed_seconds(now),
-                        blocked_reason=settled.error
+                        blocked_reason=harness_pause_reason(settled, owner)
+                        or settled.error
                         or "The harness turn ended before its response was accepted.",
                     )
                 (
