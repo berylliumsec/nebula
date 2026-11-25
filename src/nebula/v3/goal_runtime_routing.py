@@ -1239,6 +1239,10 @@ def is_rate_limit_failure(turn: HarnessTurn) -> bool:
 
     diagnostic = turn.metadata.get("diagnostic")
     diagnostic = diagnostic if isinstance(diagnostic, dict) else {}
+    if diagnostic.get("reason_code") == "model_refusal":
+        # A refusal is the model's decision, not a limit: it waits for the
+        # operator and never moves to the fallback runtime (model_refusal).
+        return False
     if diagnostic.get("reason_code") in _RATE_LIMIT_REASONS:
         return True
     info = diagnostic.get("vendor_error_info")

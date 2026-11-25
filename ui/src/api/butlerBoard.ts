@@ -40,7 +40,7 @@ export interface ButlerBoardItem {
   /** One line from Core: what the chat is doing or waiting for. */
   now?: string;
   attention?: { kind: "approval" | "question" | "recovery" | "proposal"; actionId?: string; summary: string; requestedAt?: string };
-  goal?: { objective: string; status: string; currentStep: number; planLength: number; revision?: number };
+  goal?: { objective: string; status: string; currentStep: number; planLength: number; revision?: number; modelRefusal?: BoardModelRefusal };
   /** "butler" when Butler started this chat on its own authority. */
   startedBy?: "butler";
   /** "butler" when Butler proposed this chat; a draft until the operator starts it. */
@@ -54,6 +54,13 @@ export interface ButlerBoardItem {
   butlerCase?: { id: string; status: ButlerCaseStatus; sessionId?: string; updatedAt?: string };
   /** The project Work stage of the Work item assigned to this chat. */
   workStage?: ChatWorkStage;
+}
+
+/** Model refusals Core recorded on a goal; ``paused`` while one holds the goal for the operator's review. */
+export interface BoardModelRefusal {
+  paused: boolean;
+  count: number;
+  reason?: string;
 }
 
 export type ButlerBoardCounts = Record<ButlerBoardSection, number>;
@@ -143,7 +150,7 @@ interface WireItem {
   updated_at: string;
   now?: string | null;
   attention?: { kind: "approval" | "question" | "recovery" | "proposal"; action_id?: string | null; summary: string; requested_at?: string | null } | null;
-  goal?: { objective: string; status: string; current_step: number; plan_length: number; revision?: number | null } | null;
+  goal?: { objective: string; status: string; current_step: number; plan_length: number; revision?: number | null; model_refusal?: { paused: boolean; count: number; reason?: string | null } | null } | null;
   started_by?: string | null;
   proposed_by?: string | null;
   session_revision?: number | null;
@@ -262,6 +269,11 @@ function mapItem(item: WireItem): ButlerBoardItem {
       currentStep: item.goal.current_step,
       planLength: item.goal.plan_length,
       revision: item.goal.revision ?? undefined,
+      modelRefusal: item.goal.model_refusal ? {
+        paused: item.goal.model_refusal.paused,
+        count: item.goal.model_refusal.count,
+        reason: item.goal.model_refusal.reason ?? undefined,
+      } : undefined,
     } : undefined,
     startedBy: item.started_by === "butler" ? "butler" : undefined,
     proposedBy: item.proposed_by === "butler" ? "butler" : undefined,
@@ -419,6 +431,7 @@ export function boardStatusLabel(item: Pick<ButlerBoardItem, "section" | "state"
   if (item.section === "completed") return item.goal?.status === "cancelled" ? "Cancelled" : "Completed";
   if (item.attention?.kind === "proposal") return "Proposed";
   if (item.state === "waiting") return "Needs you";
+  if (item.goal?.modelRefusal?.paused) return "Model refusal";
   return item.goal?.status === "blocked" ? "Blocked" : item.goal?.status === "draft" ? "Proposed" : "Paused";
 }
 
@@ -607,7 +620,8 @@ export async function listResumableIdle(api: ApiClient, options: { q?: string; p
   for (let pages = 0; offset !== undefined && pages < 500; pages += 1) {
     const answer = await getButlerBoardIfChanged(api, { q: options.q, section: "idle", projectId: options.projectId, offset, limit: 200, stages: options.stages }, undefined, signal);
     if (!answer) break;
-    found.push(...answer.board.items.filter(isResumableIdle));
+    // A goal a model refusal paused needs its own review, never a bulk resume.
+    found.push(...answer.board.items.filter((item) => isResumableIdle(item) && !item.goal?.modelRefusal?.paused));
     offset = answer.board.nextOffset !== undefined && answer.board.nextOffset > offset ? answer.board.nextOffset : undefined;
   }
   const seen = new Set<string>();

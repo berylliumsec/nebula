@@ -89,6 +89,7 @@ OperatorAction = Literal[
     "attach_credential",
     "physical_check",
     "approve_account_change",
+    "review_model_refusal",
     "other",
 ]
 ACTIONS: tuple[str, ...] = (
@@ -98,6 +99,7 @@ ACTIONS: tuple[str, ...] = (
     "attach_credential",
     "physical_check",
     "approve_account_change",
+    "review_model_refusal",
     "other",
 )
 ACTION_LABEL: dict[str, str] = {
@@ -107,6 +109,9 @@ ACTION_LABEL: dict[str, str] = {
     "attach_credential": "Attach credential",
     "physical_check": "Physical check",
     "approve_account_change": "Approve account change",
+    # Raised by Core (model_refusal); resuming or ending the goal closes it,
+    # and closing it never resumes the goal.
+    "review_model_refusal": "Review model refusal",
     "other": "Operator action",
 }
 # Actions about a machine: they need an auto-check, which runs once before

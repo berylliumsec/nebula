@@ -68,6 +68,12 @@ describe("Butler board grouping", () => {
     expect(boardStatusLabel(item({ section: "completed", state: "idle", goal: { objective: "x", status: "completed", currentStep: 0, planLength: 0 } }))).toBe("Completed");
   });
 
+  it("names a goal a model refusal paused, and only while it is paused", () => {
+    const refused = { objective: "x", status: "paused", currentStep: 0, planLength: 1 };
+    expect(boardStatusLabel(item({ section: "idle", state: "idle", goal: { ...refused, modelRefusal: { paused: true, count: 2 } } }))).toBe("Model refusal");
+    expect(boardStatusLabel(item({ section: "idle", state: "idle", goal: { ...refused, modelRefusal: { paused: false, count: 2 } } }))).toBe("Paused");
+  });
+
   it("starts Completed collapsed and remembers toggled sections", () => {
     expect(boardSectionOpen({}, "p1", "active")).toBe(true);
     expect(boardSectionOpen({}, "p1", "idle")).toBe(true);
@@ -117,6 +123,7 @@ describe("Butler board reads", () => {
           session_id: "s2", title: "Other", project: { id: "p1", name: "Research" }, section: "active", state: "working",
           backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:01:00Z",
           butler_case: { id: "case-2", status: "unknown-status" },
+          goal: { objective: "Validate", status: "paused", current_step: 0, plan_length: 1, model_refusal: { paused: true, count: 1, reason: "Model refusal (category-a) on Model X in turn t2: needs operator review" } },
         }],
       },
     });
@@ -133,6 +140,8 @@ describe("Butler board reads", () => {
       butlerCase: { id: "case-1", status: "needs_attention", sessionId: "case-chat" },
       workStage: { key: "validation", label: "Validation", itemId: "item-1", itemStatus: "blocked" },
     });
+    expect(answer?.board.items[0].goal?.modelRefusal).toBeUndefined();
+    expect(answer?.board.items[1].goal?.modelRefusal).toEqual({ paused: true, count: 1, reason: "Model refusal (category-a) on Model X in turn t2: needs operator review" });
     expect(answer?.board.items[1].workStage).toBeUndefined();
     // A status this UI does not know shows no stage rather than a wrong one.
     expect(answer?.board.items[1].butlerCase).toBeUndefined();
@@ -161,8 +170,9 @@ describe("resuming idle goals", () => {
     const wire = (id: string, status: string) => ({ session_id: id, title: id, project: { id: "p1", name: "R" }, section: "idle", state: "idle", backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:00:00Z", goal: { objective: "x", status, current_step: 0, plan_length: 1, revision: 2 } });
     const requestIfChanged = vi.fn()
       .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("a", "paused"), wire("b", "draft")], next_offset: 200, truncated: false } })
-      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("c", "blocked"), wire("a", "paused")], next_offset: null, truncated: false } });
+      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("c", "blocked"), wire("a", "paused"), { ...wire("refused", "paused"), goal: { ...wire("refused", "paused").goal, model_refusal: { paused: true, count: 1 } } }], next_offset: null, truncated: false } });
     const found = await listResumableIdle({ requestIfChanged } as unknown as ApiClient, { q: "fuzz", projectId: "p1" });
+    // A goal a model refusal paused waits for its own review.
     expect(found.map((entry) => entry.sessionId)).toEqual(["a", "c"]);
     expect(requestIfChanged.mock.calls.map(([path]) => path)).toEqual([
       "butler/board?q=fuzz&section=idle&project_id=p1&limit=200",

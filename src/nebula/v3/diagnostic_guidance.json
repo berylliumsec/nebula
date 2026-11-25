@@ -200,6 +200,15 @@
       "verification": "Confirm the prior operation is terminal before starting a replacement.",
       "retryable": true
     },
+    "model_refusal": {
+      "title": "Model refused the request",
+      "cause": "The selected model or its provider declined to continue this request (a refusal, content filter, or guardrail).",
+      "impact": "The turn did not complete. A goal that owned it is paused for operator review.",
+      "confirmed_safe_state": "Nebula did not retry, reroute, rephrase, or continue the refused request on any runtime.",
+      "steps": ["Open the goal chat and review the refused turn and its category.", "Decide whether to resume the goal, change its runtime or instructions, or end it.", "Resuming or ending the goal closes its refusal review request."],
+      "verification": "The goal shows the operator's decision and its refusal review request is closed.",
+      "retryable": false
+    },
     "unknown_internal_fault": {
       "title": "Unclassified internal fault",
       "cause": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",

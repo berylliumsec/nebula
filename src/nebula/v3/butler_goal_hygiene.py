@@ -38,6 +38,7 @@ from .domain import (
     WorkItem,
     utc_now,
 )
+from .model_refusal import PAUSE_PREFIX as MODEL_REFUSAL_PAUSE_PREFIX
 from .project_hold_gate import HOLD_MARKER, active_hold
 from .recovery_markers import OPERATOR_RECOVERY_PAUSE
 from .storage import NebulaStore, NotFoundError, revise_latest
@@ -125,6 +126,8 @@ _NEVER_PREFIXES = (
     "Paused while project recovery is held.",
     # domain.py:3663
     GOAL_COMPLETION_REVIEW_REASON,
+    # model_refusal.py - a model refusal waits for the operator's review
+    MODEL_REFUSAL_PAUSE_PREFIX,
 )
 
 # Free-text fallback for BLOCKED goals (an agent's goal.block reason) and for

@@ -1969,6 +1969,12 @@ def goals_router(
             and (await service.get(session_id)).awaiting_completion_review
         )
         updated = await service.write(session_id, body)
+        if body.action in {"resume", "cancel", "complete"}:
+            # The operator decided on a refused goal: close its review request
+            # (closing it never resumes the goal).
+            from .model_refusal import close_model_refusal_request
+
+            await close_model_refusal_request(store, session_id, action=body.action)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
                 GOAL_START_INSTRUCTION

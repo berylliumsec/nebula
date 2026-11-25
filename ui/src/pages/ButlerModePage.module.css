@@ -1108,6 +1108,19 @@ a.sheetRow { text-decoration: none; }
 /* Butler's case about this goal: a stage label under the card's status line. */
 .cardStage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; align-self: flex-start; }
 
+/* A goal a model refusal paused waits for the operator's review. */
+.refusalBadge {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border: 1px solid var(--red);
+  border-radius: 9px;
+  color: var(--red);
+  font-size: var(--type-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.refusalBadge:not([data-paused]) { border-color: var(--border); color: var(--muted); font-weight: normal; }
+
 .operatorActions {
   display: flex;
   flex-direction: column;

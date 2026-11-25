@@ -80,6 +80,25 @@ beforeEach(() => {
 
 const mount = () => render(<MemoryRouter initialEntries={["/butler"]}><ButlerModePage /></MemoryRouter>);
 
+it("shows a goal a model refusal paused with its own badge and count", async () => {
+  const refused = wire("Refused triage", research, "idle", "idle", "paused", "Model refusal (2): needs operator review");
+  const reason = "Model refusal (category-a) on Model X in turn t1: needs operator review";
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
+    return { value: { ...poll, items: [...poll.items, { ...refused, goal: { ...refused.goal, model_refusal: { paused: true, count: 2, reason } } }] }, etag: '"r"' };
+  });
+  mount();
+  const board = screen.getByRole("region", { name: "Status board" });
+  const card = await within(board).findByRole("article", { name: "Refused triage: Model refusal, Idle" });
+  const badge = within(card).getByText("Model refusal · 2");
+  expect(badge).toHaveAttribute("data-paused", "true");
+  expect(badge).toHaveAttribute("title", reason);
+  expect(within(card).getByText("Model refusal (2): needs operator review")).toBeVisible();
+  // Other paused goals carry no refusal badge.
+  const paused = within(board).getByRole("article", { name: "Paused triage: Paused, Idle" });
+  expect(within(paused).queryByText(/Model refusal/)).toBeNull();
+});
+
 it("groups goal chats by project into Active, Idle and a collapsed Completed", async () => {
   mount();
   const board = screen.getByRole("region", { name: "Status board" });

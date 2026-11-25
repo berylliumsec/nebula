@@ -47,6 +47,9 @@ from .chat_turn_headers import (
 from .conditional_reads import conditional, content_etag, json_native, native_etag
 from .database import EntityRow
 from .diagnostics import record_caught_exception
+from .model_refusal import GOAL_METADATA_KEY as REFUSAL_KEY
+from .model_refusal import board_view as refusal_board_view
+from .model_refusal import refusal_count
 from .domain import (
     GOAL_COMPLETION_REVIEW_REASON,
     Approval,
@@ -158,6 +161,8 @@ class BoardGoal:
     plan_length: int
     revision: int
     blocked_reason: str | None = None
+    # Model refusals recorded on the goal (model_refusal).
+    model_refusals: int = 0
 
     @classmethod
     def of(cls, goal: ChatGoal | BoardGoal) -> BoardGoal:
@@ -170,6 +175,7 @@ class BoardGoal:
             plan_length=len(goal.plan),
             revision=goal.revision,
             blocked_reason=goal.blocked_reason,
+            model_refusals=refusal_count(goal.metadata),
         )
 
 
@@ -180,6 +186,10 @@ def _is_proposal(session: ChatSession) -> bool:
 def _goal_status_line(goal: BoardGoal) -> str | None:
     """What an idle or completed goal chat's card says when nothing needs the operator."""
 
+    refusal = refusal_board_view(goal.status, goal.blocked_reason, goal.model_refusals)
+    if refusal is not None and refusal["paused"]:
+        # A model refusal waits for the operator's review (model_refusal).
+        return f"Model refusal ({refusal['count']}): needs operator review"
     if goal.status == ChatGoalStatus.PAUSED:
         return "Paused"
     if goal.status == ChatGoalStatus.BLOCKED:
@@ -296,6 +306,7 @@ class _GoalChats:
                 goal.revision,
                 goal.payload["blocked_reason"].as_string(),
                 self.project.payload["name"].as_string(),
+                goal.payload["metadata"][REFUSAL_KEY]["count"].as_integer(),
             )
             .where(self.status.in_(SECTION_STATUSES[section]))
             .order_by(*order)
@@ -425,6 +436,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                             plan_length=int(plan_length or 0),
                             revision=int(revision),
                             blocked_reason=blocked_reason,
+                            model_refusals=int(model_refusals or 0),
                         ),
                         str(project or ""),
                     )
@@ -437,6 +449,7 @@ def butler_board_router(store: NebulaStore) -> APIRouter:
                         revision,
                         blocked_reason,
                         project,
+                        model_refusals,
                     ) in await database.execute(statement)
                 ]
             session_ids = {
@@ -894,6 +907,18 @@ async def _item(
                 "current_step": goal.current_step,
                 "plan_length": goal.plan_length,
                 "revision": goal.revision,
+                # Only once the goal recorded a model refusal; ``paused``
+                # while a refusal holds it for the operator's review.
+                **(
+                    {"model_refusal": refusal}
+                    if (
+                        refusal := refusal_board_view(
+                            goal.status, goal.blocked_reason, goal.model_refusals
+                        )
+                    )
+                    is not None
+                    else {}
+                ),
             }
             if goal
             else None

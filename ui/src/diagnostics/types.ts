@@ -43,6 +43,7 @@ export type DiagnosticReasonCode =
   | "stale_state"
   | "invalid_input"
   | "cancelled"
+  | "model_refusal"
   | "unknown_internal_fault";
 
 export interface DiagnosticSettings {

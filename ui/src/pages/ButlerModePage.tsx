@@ -1266,6 +1266,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
   const held = Boolean(item.hold);
   const resumable = isResumableIdle(item);
   const butlerStage = item.butlerCase ? butlerCaseStage(item.butlerCase.status) : undefined;
+  const refusal = item.goal?.modelRefusal;
   return <article className={styles.card} data-section={held ? "held" : item.section} data-state={item.state} data-expanded={expanded ? "true" : "false"} data-selected={selected ? "true" : undefined} data-priority={high ? "high" : undefined} aria-label={`${item.title}: ${held ? "Held" : boardStatusLabel(item)}, ${held ? "Held" : SECTION_LABEL[item.section]}${high ? ", high priority" : ""}${item.workStage ? `, ${chatStageName(item.workStage)}` : ""}${butlerStage ? `, Butler ${butlerStage.label.toLowerCase()}` : ""}`}>
     <div className={styles.cardRow}>
     {selectable && <label className={styles.cardSelect} title={selected ? "Deselect" : resumable ? "Select to resume" : "Select to hold"}>
@@ -1275,6 +1276,7 @@ function BoardCard({ item, clock, expanded, approval, deciding, note, onToggle, 
       <span className={styles.cardHead}><i className={styles.sectionDot} data-section={held ? "held" : item.section} data-goal={item.goal?.status} aria-hidden="true" />{high && <ChevronUp className={styles.priorityMark} size={14} aria-hidden="true" />}<span className={styles.cardTitle}>{item.title}</span>{elapsed && <span className={styles.muted}>{elapsed}</span>}</span>
       {runtime && <span className={styles.cardMeta}>{runtime}</span>}
       {item.now && <span className={styles.cardNow} data-state={item.state}>{item.now}</span>}
+      {refusal && <span className={styles.refusalBadge} data-paused={refusal.paused ? "true" : undefined} title={refusal.reason ?? "Model refusals recorded on this goal"}>{refusal.paused ? "Model refusal" : "Model refusals"} · {refusal.count}</span>}
       {(item.workStage || butlerStage) && <span className={styles.cardStage}>{item.workStage && <WorkStageLabel stage={item.workStage} />}{butlerStage && <ButlerStageLabel stage={butlerStage} />}</span>}
       {goal && !expanded && <span className={styles.cardMeta}>{goal}</span>}
       {held && item.hold && <span className={styles.cardMeta}>On hold · {item.hold.reason}</span>}
