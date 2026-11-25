@@ -33,4 +33,3 @@
 .tabBar { position: fixed; z-index: 90; left: 0; right: 0; bottom: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); border-top: 1px solid var(--border); background: var(--surface-overlay); }
 .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 56px; color: var(--muted); font-size: .72rem; text-decoration: none; }
 .tab[aria-current="page"] { color: var(--text); font-weight: 600; }
-.docked { position: static; z-index: auto; flex: none; }

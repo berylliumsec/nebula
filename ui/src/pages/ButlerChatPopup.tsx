@@ -22,7 +22,8 @@ export function ButlerChatPopup({ api, sessionId, title, live, onClose, onOpenFu
   /** The chat is running: new messages may arrive. */
   live: boolean;
   onClose: () => void;
-  onOpenFull: () => void;
+  /** Absent where there is no workbench to open (the iPhone app). */
+  onOpenFull?: () => void;
 }) {
   const [messages, setMessages] = useState<PersistedChatMessage[]>();
   const [error, setError] = useState("");
@@ -123,7 +124,7 @@ export function ButlerChatPopup({ api, sessionId, title, live, onClose, onOpenFu
       <header className={styles.head}>
         <h2>{title}</h2>
         {live && <span className={styles.live}><i aria-hidden="true" /> Running</span>}
-        <button type="button" className={styles.link} onClick={onOpenFull}>Open in workbench <ExternalLink size={13} aria-hidden="true" /></button>
+        {onOpenFull && <button type="button" className={styles.link} onClick={onOpenFull}>Open in workbench <ExternalLink size={13} aria-hidden="true" /></button>}
         <button ref={closeButton} type="button" className={styles.close} aria-label="Close chat" title="Close (Esc)" onClick={onClose}><X size={16} aria-hidden="true" /></button>
       </header>
       <div ref={scroller} className={styles.transcript} role="log" aria-label={`${title} transcript`} tabIndex={0} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48; }}>

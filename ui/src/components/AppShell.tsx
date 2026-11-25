@@ -28,7 +28,6 @@ import { useNavigationChords } from "../state/useNavigationChords";
 import { GuideProvider } from "../guides/GuideProvider";
 import { useGuideAction } from "../guides/guideActions";
 import { isNebulaShell } from "../hooks/useCompactLayout";
-import { ShellTabBar } from "./ShellProjects";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", harnesses: "Harnesses", library: "Library", providerCatalog: "Provider setup",
@@ -40,7 +39,6 @@ const resourceLabels: Record<string, string> = {
 export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
-  const shellButlerRoute = isNebulaShell() && /^\/projects\/[^/]+\/butler\/?$/.test(location.pathname);
   const { resolvedTheme } = useTheme();
   const {
     approvals,
@@ -289,7 +287,7 @@ export function AppShell() {
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
             <GuideProvider>
-            {isNebulaShell() ? <NebulaControlAssistant docked={shellButlerRoute} dockFooter={<ShellTabBar docked />} onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
+            {isNebulaShell() ? <NebulaControlAssistant onOpenSetting={openSetting} onNavigate={navigate} onCloseSetting={() => setSettingLens(undefined)} onSavedSetting={showSavedSetting}>
             <div className="app-shell assistant-only-shell workbench-route">
               <a className="skip-link" href="#main-content">Skip to content</a>
               <main id="main-content" className="main-content" tabIndex={-1}>
