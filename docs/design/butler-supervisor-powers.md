@@ -34,6 +34,13 @@ All of these are reached through Butler's existing gateway
 | `nebula.supervisor.repo_restore` | Restores exact paths from a known-good commit and commits only those paths. The repository's hooks run, and nothing is pushed. |
 | `nebula.supervisor.independent_review` | Core runs a fresh closure review on a reviewer model that differs from the goal's own model, then records and applies the verdict. |
 | `nebula.supervisor.hygiene_tick` | Runs the deterministic goal hygiene: null budgets, resume after transient pauses, and staged Work items. |
+| `nebula.supervisor.must_do_resolve` | Closes one review must-do with a verified artifact: a commit `git cat-file` confirms, or a file under the evidence roots. Butler cannot waive. |
+| `nebula.supervisor.recover_stuck_turn` | Lists goal turns with no progress past the threshold, and cancels then resumes one as a single action. |
+| `nebula.supervisor.post_goal_note` | Posts a supervisor note with a release condition, optionally restarting the goal's turn so the note takes effect at once. |
+| `nebula.supervisor.probe` | Runs one fixed, read-only probe on an allowlisted host, or `verify_blocker` to test a goal's claimed blocker. |
+| `nebula.supervisor.tmp_cleanup` | Finds idle full-repository exports under the cleanup roots; deletes only after a dry run. |
+| `nebula.supervisor.log_writer_status` | Reads the health of Core's file log writer. |
+| `nebula.supervisor.request_operator_action`, `list_operator_actions`, `close_operator_action` | Raise, list and close typed requests for things only the operator can do. |
 
 **Where the tools are available:**
 - Interactive project Butler.
@@ -68,6 +75,17 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_HYGIENE_PROJECT_IDS` | Projects the hygiene tick covers. |
 | `NEBULA_BUTLER_HYGIENE_UNLIMITED_BUDGETS` | `1` nulls the token, time and step budgets of live goals in those projects. |
 | `NEBULA_BUTLER_HYGIENE_DEFAULT_STAGE` | The stage given to a newly created Work item. Default: `triage`. |
+| `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY` | Closure requests a goal may make per rolling day. Default: 3. |
+| `NEBULA_BUTLER_REVIEW_EVIDENCE_REPOS` | Repositories in which a must-do commit artifact is verified. Default: the forensics repositories. |
+| `NEBULA_BUTLER_STUCK_TURN_MINUTES` | Minutes without progress before a goal turn counts as stuck. Default 12, clamped to 10–60. |
+| `NEBULA_BUTLER_STUCK_TURN_AUTO` | `1` lets the periodic check cancel and resume stuck turns (at most 3 per goal per hour). |
+| `NEBULA_BUTLER_NOTE_RELEASE_ROOTS` | Extra roots an `until_path_exists` release condition may name. |
+| `NEBULA_FABRICATION_GUARD_REPOS` | JSON map of project id (or `*`) to repositories in which cited commit hashes must resolve. |
+| `NEBULA_FABRICATION_GUARD_MODE` | `off`, `flag` (default) or `reject` for agent Work check-ins citing unknown hashes or forged sign-offs. |
+| `NEBULA_LOG_HEARTBEAT_SECONDS` | Log-writer heartbeat interval. Default 300; `0` turns it off. |
+| `NEBULA_BUTLER_SUPERVISOR_LEASE_STATE_COMMAND`, `…_LEASE_STATE_HOST` | Read-only command, and host, for the `lease_state` probe. |
+| `NEBULA_BUTLER_SUPERVISOR_HEALTH_PATHS` | Paths `host_health` checks. Default `/`. |
+| `NEBULA_BUTLER_SUPERVISOR_CLEANUP_ROOTS`, `…_CLEANUP_HOST`, `…_CLEANUP_MIN_BYTES`, `…_CLEANUP_IDLE_MINUTES` | Where `tmp_cleanup` may look, the size that marks a repository export (default 2 GiB) and the idle limit (default 20 minutes). Without roots it refuses. |
 
 The check interval is unchanged and already configurable: `GET` and `PUT
 /api/v1/butler/check-interval`, from 1 to 1440 minutes.
@@ -164,3 +182,47 @@ Butler event stream.
 7. Deploy through the normal deployer.
 8. Turn on `NEBULA_BUTLER_SUPERVISOR_ENABLED=1`, first with Butler at Watch or
    Steer authority (shadow), then Act.
+
+## Completion gating
+
+- Every review verdict other than ACCEPT (NOT_READY, REJECT,
+  ACCEPT_WITH_RESIDUALS) carries must-dos, stored on the goal. Butler's
+  `complete` and the goal's own `goal.complete` are refused while any is open.
+- Butler cannot approve completion of a goal it steered (goal actions, goal
+  rewrites, Butler notes). Approval must come from Core's independent review,
+  which records its provenance: provider, model, review id and packet digest.
+- Goal-written supervisor or reviewer sign-off lines are refused in completion
+  proposals and redacted from review packets.
+- A goal may request closure at most `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY`
+  times per rolling day.
+- A completed goal that a review rejects is reopened in place.
+- Operator routes: `POST /api/v1/chat/sessions/{id}/goal/reopen` and
+  `POST /api/v1/chat/sessions/{id}/goal/must-dos/{item_id}/waive`.
+
+## Notes with release conditions
+
+A Butler note that stops or gates work must carry a `release_condition`:
+`until_time`, `until_path_exists`, `until_work_item`, `until_goal_status` or
+`until_note_superseded`. Core re-evaluates conditions whenever it assembles a
+goal turn, and retires satisfied notes so they stop outranking later guidance.
+
+## Operator action requests
+
+Butler raises a request for something only the operator can do as a
+`Needs you:` Work item with a typed record and an auto-check. It must give
+verification evidence first, a request whose check already passes is refused,
+and an open request for the same action and device is returned instead of a
+duplicate. The periodic check closes requests whose check passes and resumes
+the waiting goal. Open requests appear at the top of the Butler board.
+
+## Running Butler on Claude
+
+1. Settings → Agent harnesses → **Add Claude**: API-key credential, default
+   model `claude-opus-5-5`, sensitive data and tool-result sharing allowed,
+   native Shell off. Run **Check** and **Test turn**.
+2. Settings → Model providers → **Add provider** (Anthropic), allowlist only
+   `claude-opus-5-5`, then **Reverify tool calling**.
+3. Reserve Butler with `POST /api/v1/chat/control-assistant/session` and
+   `backend: "harness"`, `harness_profile_id`, `model: "claude-opus-5-5"`,
+   `subagent_provider_id`, `subagent_model: "claude-opus-5-5"`. An existing
+   Butler chat is switched with `PATCH /api/v1/chat-sessions/{id}/assistant-config`.
