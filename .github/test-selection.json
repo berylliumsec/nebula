@@ -1,28 +1,34 @@
 {
-  "change_digest": "52ead93273a95968d74410499810b38b7fcb06438209aa4f3e1564e9665fda6c",
-  "reviewed_by": "Claude: Butler independent review denial and sign-off guard precision",
-  "reason": "Production root cause: a harness-backed Butler at Act called nebula.supervisor.independent_review with project-relative evidence paths; the review reached _read_evidence, which raised GuardrailViolation(not_configured) because NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS was unset, and even with roots set the relative paths would have resolved against Core's process cwd (evidence_outside_roots). The PermissionError surfaced only as a bare permission_denied. Fix (butler_independent_review): the goal's own project workspace is always an evidence root, relative paths resolve there (realpath before the root check, so .. and symlink escapes are refused), configured roots remain extra absolute roots, the workspace resolver is injected by the execution kernel (native_workspace: engagement workspace_path, else the managed workspace) and its failure is recorded and falls back to configured roots; the tool handler converts GuardrailViolation and ReviewUnavailable into a GuidedToolError with error_code independent_review.<rule>, a Core-authored problem/remedy (never the cited path or reviewer output) and before_execution for pre-reviewer refusals. Second fix (butler_review_gating.detect_forged_signoff): the case-insensitive 'INDEPENDENT CLOSURE REVIEW' header pattern matched ordinary prose naming the review, and an authority+approval pair with a pending marker was re-flagged by any approval word or colon; detection is now per clause, the header pattern matches only Core's uppercase header or its '(model):' shape, 'sign-off: pending'-style values and irrealis contexts ('must be approved by', 'do not record ... accepted until') are not claims, while stated verdicts/completed approvals still are. Butler's own check-ins stay guarded (Butler cannot produce a reviewer record). Docs: butler-supervisor-powers review flow, evidence-roots row, refusal codes and sign-off rule; product knowledge rebuilt (no change: that doc is not a knowledge source). Python selects the new suite, the suites of the edited modules and their consumers (supervisor powers, review gating, fabrication guard, goal runtime routing, harness parity) and the product-knowledge digest and supervisor-powers rows. Review follow-up: _PENDING_VALUE counts none/no/n/a only as the whole value (pending/requested/awaiting/not yet/to be may lead), _IRREALIS looks back at most three plain words, never across punctuation, and no longer treats bare 'no' as irrealis; semicolons no longer split clauses; a bare completed approval word outside an irrealis context is a strong claim (eight reviewer strings are must-flag tests, false-positive cases kept). _read_evidence checks the path lexically, then opens it component by component with O_NOFOLLOW via workspace._open_directory_chain and O_NOFOLLOW|O_NONBLOCK on the leaf, requires a regular file (fstat), keeps at most MAX_FILE_BYTES+1 bytes and hashes the whole file in 1 MiB chunks from the same descriptor; links, folders and special files are refused as evidence_not_regular_file. Tests cover a simulated post-check symlink swap, symlinked file and folder, a sibling project's absolute path, and an oversized file.",
-  "exclusions": "execution_kernel gains one line wiring the existing native_workspace resolver into the reviewer; no kernel-construction test was added: building the full app in a test is not cheap (a minimal create_app probe did not finish within 120 s), so the wiring is checked by review and the resolver path is covered with an injected resolver in test_butler_review_denial. test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI, native or Playwright change. No live Core, harness or reviewer call. No full-suite approval.",
+  "change_digest": "f4ca86fecad5620103ecc7e1b547ee989bf70fb76b7dd391ecde9c0878f405eb",
+  "reviewed_by": "Claude: project runtime stop pause and resume",
+  "reason": "A deployment handoff evicts a project worker that does not finish within its grace; dead-owner reconciliation then interrupts its responses while Core keeps running. Those pauses claimed a Core restart. runtime_orphan_recovery now detects an unfinished release handoff of the exact dead source (ProjectHandoffRow source/fence, phase not verified, target_version differs) and records 'Project runtime stopped for a deployment handoff' or 'Project runtime stopped' as the cause, with recovery cause project_runtime_stop (chat.py _interrupt_orphaned_turn); chat_subagents adds that cause to the Core-resumed set so the promised automatic resume still applies. Unfinished harness turns of the dead owner are marked (recovery_markers.HARNESS_RUNTIME_STOP) so the new worker's harness startup (harnesses._settle_turn_after_restart) pauses the goal with 'Project runtime stopped [for a deployment handoff] during a harness goal turn; Core did not restart.' instead of 'Core restarted ...'; Butler goal hygiene classifies the new texts exactly as the old ones (transient). A failed automatic resume (chat._resume_stopped_turn) is now recorded as an operation failure and restates a paused goal's reason so it no longer promises an automatic resume. Python selects the new suite, the PostgreSQL dead-owner suite (test_runtime_orphan_recovery, which holds the new reconciliation tests), and the existing suites for the edited recovery, harness-goal, subagent and Butler hygiene paths. Review fixes: a failed automatic resume restates only a pause reason recovery owns (the interrupted turn's own text, an automatic-resume promise, or the recovery-wait text), so completion-review, Butler, model-refusal and hook pauses keep theirs; the outcome-unknown notes the model reads name a project runtime stop instead of a Core restart; and the harness runtime-stop mark is removed when startup settles the turn.",
+  "exclusions": "test_harnesses.py and test_chat.py are not selected: their changed-path tests pass, but test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog, ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread, test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns and ::test_recovered_turns_waiting_for_recovery_capacity_hold_no_provider_slot fail on unmodified main (verified on a HEAD export); all other tests in both files pass with this change. test_harness_stopped_turns.py::test_turns_ended_by_the_vendor_leave_no_unretrieved_task failed once under a long serial run (StopAsyncIteration timing) and passes on repeat and in its suite; it does not touch the changed code. The deployer scripts are unchanged. No UI, native or Playwright change; no frontend checks. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 210,
+    "python": 466,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_review_denial.py",
-    "tests/v3/test_butler_review_gating.py",
-    "tests/v3/test_checkin_fabrication_guard.py",
-    "tests/v3/test_butler_supervisor_powers.py",
-    "tests/v3/test_goal_runtime_routing.py",
-    "tests/v3/test_butler_harness_parity.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers"
+    "tests/v3/test_runtime_stop_pause_resume.py",
+    "tests/v3/test_runtime_orphan_recovery.py",
+    "tests/v3/test_butler_goal_hygiene.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_harness_chat_goals.py",
+    "tests/v3/test_harness_stopped_turns.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_callback_stall_watchdog.py",
+    "tests/v3/test_runtime_reconciliation.py",
+    "tests/v3/test_recovery_controls.py",
+    "tests/v3/test_runtime_auto_recovery.py",
+    "tests/v3/test_harness_goal_auto_retry.py",
+    "tests/v3/test_goal_provider_auto_retry.py",
+    "tests/v3/test_async_recovery.py"
   ],
   "frontend": [],
   "native": [],
