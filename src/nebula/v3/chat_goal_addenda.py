@@ -43,6 +43,7 @@ from .domain import (
     ChatGoalStatus,
     ChatTurn,
     GoalGuidanceChange,
+    GoalSupervisorNote,
     WorkItem,
     WorkUpdate,
     utc_now,
@@ -160,15 +161,45 @@ def guidance_change_fields(
     }
 
 
+# Release conditions on supervisor notes (``butler_note_release``) live in
+# the goal's metadata, keyed by note id. A note whose condition Core found
+# satisfied is marked retired there and is no longer delivered to the agent;
+# it stays on the goal for the operator's record.
+NOTE_RELEASES_KEY = "supervisor_note_releases"
+
+
+def retired_note_ids(goal: ChatGoal) -> set[str]:
+    """Ids of the goal's supervisor notes that Core retired."""
+
+    releases = goal.metadata.get(NOTE_RELEASES_KEY)
+    if not isinstance(releases, dict):
+        return set()
+    return {
+        str(note_id)
+        for note_id, entry in releases.items()
+        if isinstance(entry, dict) and entry.get("retired_at")
+    }
+
+
+def active_supervisor_notes(goal: ChatGoal) -> list[GoalSupervisorNote]:
+    """The goal's supervisor notes that are still delivered, oldest first."""
+
+    retired = retired_note_ids(goal)
+    if not retired:
+        return list(goal.supervisor_notes)
+    return [note for note in goal.supervisor_notes if note.id not in retired]
+
+
 def notes_progress(goal: ChatGoal) -> list[dict[str, Any]] | None:
     """The goal's supervisor notes for a turn's progress block, newest first
     and bounded; None when there are none."""
 
-    if not goal.supervisor_notes:
+    active = active_supervisor_notes(goal)
+    if not active:
         return None
     notes: list[dict[str, Any]] = []
     used = 0
-    for note in reversed(goal.supervisor_notes):
+    for note in reversed(active):
         if used + len(note.text) > PROGRESS_NOTES_CHARACTERS and notes:
             break
         used += len(note.text)
@@ -179,7 +210,7 @@ def notes_progress(goal: ChatGoal) -> list[dict[str, Any]] | None:
                 "text": note.text,
             }
         )
-    omitted = len(goal.supervisor_notes) - len(notes)
+    omitted = len(active) - len(notes)
     if omitted:
         notes.append(
             {
@@ -203,12 +234,13 @@ def goal_guidance_text(goal: ChatGoal) -> str:
             "Plan:\n"
             + "\n".join(f"{index}. {item}" for index, item in enumerate(goal.plan, 1))
         )
-    if goal.supervisor_notes:
+    active = active_supervisor_notes(goal)
+    if active:
         sections.append(
             "Supervisor notes (oldest first):\n"
             + "\n\n".join(
                 f"[{note.created_at.isoformat()} · {note.author}]\n{note.text}"
-                for note in goal.supervisor_notes
+                for note in active
             )
         )
     return "\n\n".join(sections)
@@ -266,13 +298,23 @@ async def guidance_addendum(
     missing = (
         not changes or changes[0].guidance_revision > heard + 1
     )  # older changes fell out of the bounded log
-    notes = {note.id: note.text for note in goal.supervisor_notes}
+    notes = {note.id: note.text for note in active_supervisor_notes(goal)}
+    retired = retired_note_ids(goal)
     lines = [
         f"{NOTE_ADDED}\n{notes[change.note_id]}"
         if change.note_id in notes
         else change.summary
         for change in changes
+        # A note retired since it was added is not delivered as new guidance;
+        # its retirement is its own later change.
+        if change.note_id is None or change.note_id not in retired
     ]
+    if not lines and not missing:
+        return GoalAddendum(
+            "guidance",
+            "A supervisor note added since your last step was already released.",
+            {GUIDANCE_MARKER: goal.guidance_revision},
+        )
     if missing:
         lines.insert(
             0,
@@ -674,6 +716,15 @@ class GoalAddenda:
 
 
 NOTE_ADDED = "Supervisor note added:"
+
+
+def describe_note_release(text: str, reason: str) -> str:
+    """The guidance change that tells a running turn a note no longer applies."""
+
+    return (
+        f"Supervisor note released ({_clip(reason, 300)}); it no longer applies:\n"
+        + _clip(text, 1_000)
+    )
 
 
 def describe_note(text: str, *, removed: bool = False) -> str:

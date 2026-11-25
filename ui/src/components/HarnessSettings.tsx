@@ -31,7 +31,7 @@ function harnessVendorLabel(kind: HarnessProfile["kind"]): string {
 
 function harnessRecovery(profile: HarnessProfile): string | undefined {
   if (profile.authenticationState === "failed") return profile.kind === "claude_agent_sdk"
-    ? profile.authMode === "existing_session" ? "Run claude on the Nebula host and use /login, then use Check." : "Replace the API key credential in Edit, then use Check."
+    ? profile.authMode === "existing_session" ? "On the Nebula host, as the OS user that runs Nebula Core (same HOME), run claude auth login, then use Check and Test turn." : "Replace the API key credential in Edit, then use Check."
     : `Sign in with ${profile.kind === "grok_acp" ? "grok" : "codex"} on the Nebula host, then use Check.`;
   switch (profile.lastTurnFailureReason) {
     case "quota_exhausted": return "Provider balance exhausted. Restore balance or wait for reset before another turn.";

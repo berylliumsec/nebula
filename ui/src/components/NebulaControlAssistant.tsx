@@ -724,7 +724,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const current = settingsRevision === undefined || !sessionId
         ? await api.getChatAssistantConfig(targetSessionId)
         : { revision: settingsRevision };
-      // Butler's children run on a provider model so they keep its Core tools.
+      // This panel picks a provider child for a harness Butler; a harness child
+      // (Butler mode, no native shell) is chosen through the assistant-config API.
       const subagents = selectedSettingsRuntime.kind === "provider"
         ? { allowSubagents: subagentsDraft, maxActiveSubagents: subagentsDraft ? subagentLimitDraft ?? null : null }
         : harnessSubagentDraft.enabled

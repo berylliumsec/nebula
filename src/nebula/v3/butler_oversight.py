@@ -53,7 +53,7 @@ from .domain import (
     ProviderProfile,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, ModelSafeConflict, NebulaStore, NotFoundError
 
 if TYPE_CHECKING:
     from .butler_authority import ButlerAuthorityService
@@ -534,8 +534,17 @@ async def _report_evidence(
         else:
             record = await _entity_in_transaction(transaction, Artifact, reference.id)
         if record is None or record.engagement_id != project_id:
-            raise ConflictError(
-                "report evidence is missing or belongs to another project"
+            # The agent chose this reference: name it so it can correct it.
+            # Whether it is absent or foreign is not disclosed.
+            raise ModelSafeConflict(
+                f"report evidence {reference.kind} {reference.id!r} is missing "
+                "or belongs to another project",
+                next_action=(
+                    f"Remove or replace the evidence_refs entry {reference.kind} "
+                    f"{reference.id!r} with the id of a {reference.kind} from "
+                    "this goal's project, then send the report again."
+                ),
+                field="evidence_refs",
             )
         resolved.append(
             ButlerEvidenceRef(

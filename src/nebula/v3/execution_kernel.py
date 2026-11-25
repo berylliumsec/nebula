@@ -1929,6 +1929,24 @@ def create_execution_kernel(
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
+    from .butler_independent_review import set_review_harness_runner
+    from .harness_diagnostics import run_harness_one_shot
+
+    async def review_on_harness(
+        profile: HarnessProfile, model: str, prompt: str
+    ) -> str:
+        # Butler's independent reviewer on a harness profile: one fresh,
+        # tool-free turn through the same adapters and memory controls.
+        return await run_harness_one_shot(
+            profile,
+            model,
+            prompt,
+            credentials=harness_runtime.credential_store,
+            adapter_factory=harness_runtime.adapter_factory,
+            open_connection=harness_runtime._open_memory_managed,
+        )
+
+    set_review_harness_runner(review_on_harness)
     runtime_usage = RuntimeUsageService(
         store, credentials, transport=runtime_usage_transport
     )

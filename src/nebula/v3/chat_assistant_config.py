@@ -265,12 +265,6 @@ async def validate_chat_assistant_selection(
         )
         for hook_id in selected["hook_ids"]:
             snapshot_native_hook(hook_id, catalog)
-    if (
-        selected["allow_subagents"]
-        and selected["subagent_harness_profile_id"]
-        and session.metadata.get("control_assistant") is True
-    ):
-        raise ValueError("Butler subagents need a provider model")
     if selected["allow_subagents"] and (
         backend == "harness"
         or selected["subagent_provider_id"]
@@ -308,8 +302,14 @@ async def update_chat_assistant_config(
     *,
     expected_revision: int,
     workspace_resolver: MaybeAsync[[str], Path] | None = None,
+    preserve_selection: bool = False,
 ) -> ChatSession:
-    """Validate every supplied choice, save atomically, and retain chat binding."""
+    """Validate every supplied choice, save atomically, and retain chat binding.
+
+    ``preserve_selection`` keeps the MCP, hook and subagent choices of this
+    selection when it moves a harness chat to a provider, which otherwise
+    resets them; goal runtime routing passes the goal's own selection.
+    """
 
     if (
         session.metadata.get("side_chat") is True
@@ -420,6 +420,7 @@ async def update_chat_assistant_config(
             metadata,
             switcher.binding(selected),
             expected_revision=expected_revision,
+            preserve_selection=preserve_selection,
         )
     return await store.update(
         ChatSession,

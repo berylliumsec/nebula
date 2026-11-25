@@ -1107,3 +1107,70 @@ a.sheetRow { text-decoration: none; }
 .selectionCount { color: var(--text); font-weight: var(--weight-medium); white-space: nowrap; }
 /* Butler's case about this goal: a stage label under the card's status line. */
 .cardStage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; align-self: flex-start; }
+
+/* A goal a model refusal paused waits for the operator's review. */
+.refusalBadge {
+  align-self: flex-start;
+  padding: 1px 8px;
+  border: 1px solid var(--red);
+  border-radius: 9px;
+  color: var(--red);
+  font-size: var(--type-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.refusalBadge:not([data-paused]) { border-color: var(--border); color: var(--muted); font-weight: normal; }
+
+.operatorActions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--orange);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.operatorActionsHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--type-body);
+}
+
+.operatorActionList { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+
+.operatorAction {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+}
+
+.operatorAction:first-child { border-top: 0; padding-top: 0; }
+
+.operatorActionTitle { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.operatorDevice { color: var(--muted-strong); font-size: var(--type-secondary); overflow-wrap: anywhere; }
+
+.operatorUrgency {
+  color: var(--muted-strong);
+  font-size: var(--type-meta);
+  text-transform: uppercase;
+}
+
+.operatorUrgency[data-urgency="blocking"] { color: var(--red); }
+.operatorUrgency[data-urgency="high"] { color: var(--orange); }
+
+.operatorActionMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.operatorActionMeta [data-check="passes"] { color: var(--text); }
+.operatorActionButtons { display: flex; gap: 8px; }

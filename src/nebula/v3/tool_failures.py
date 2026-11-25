@@ -15,7 +15,7 @@ from jsonschema.exceptions import ValidationError
 from .diagnostics import get_diagnostics, record_diagnostic
 from .mcp import McpProbeError
 from .redaction import redact_text, sanitize_display_text
-from .storage import ConflictError
+from .storage import ConflictError, ModelSafeConflict, RevisionConflict
 from .tool_results import ToolOutputQueryError
 from .tools import (
     BudgetExhausted,
@@ -261,6 +261,8 @@ def unavailable_tool_failure(
 def _invalid_field(error: BaseException, arguments: dict[str, Any]) -> str | None:
     if isinstance(error, GuidedToolError):
         return error.field
+    if isinstance(error, ModelSafeConflict):
+        return error.field
     cause = error if isinstance(error, ValidationError) else error.__cause__
     if isinstance(cause, ValidationError):
         if cause.absolute_path:
@@ -409,11 +411,25 @@ def tool_failure(
     elif query_error and "budget exhausted" in str(error):
         problem = "The bounded workspace search budget was exhausted."
         action = "Narrow the path or query, use a literal search, or reduce the requested page before calling again."
-    elif isinstance(error, ConflictError):
+    elif isinstance(error, ModelSafeConflict):
+        # Core authored this text from its own wording and the caller's own
+        # input, so it names the exact reference that must change.
+        problem = sanitize_display_text(redact_text(str(error)))[:500]
+        action = sanitize_display_text(redact_text(error.next_action))[:500]
+    elif isinstance(error, RevisionConflict):
         problem = (
             "The selected item or revision changed while this call was being handled."
         )
         action = "Read the current item and revision, verify whether this call had an effect, then prepare a new call from fresh state."
+    elif isinstance(error, ConflictError):
+        # Not a revision change: the call conflicts with what Core holds (a
+        # reference that does not match, a state that forbids it). Its text
+        # may name private records, so it is not shown.
+        problem = (
+            "The call conflicts with the current state of the item it names, "
+            "or one of its references does not match that item."
+        )
+        action = "Read the current item and the references this call names, verify whether this call had an effect, then prepare a new call from fresh state; retrying it unchanged fails again."
     elif missing:
         problem = "The requested resource is unavailable to this caller."
         action = (

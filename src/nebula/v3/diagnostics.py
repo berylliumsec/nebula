@@ -434,6 +434,7 @@ class DiagnosticManager:
         sensitive_detail_store: SensitiveDiagnosticStore | None = None,
         queue_capacity: int = MAX_QUEUE_RECORDS,
         watch_settings: bool = True,
+        heartbeat_seconds: float | None = None,
     ) -> None:
         self.data_dir = data_dir.expanduser().resolve()
         self.log_dir = (log_dir or self.data_dir / "logs").expanduser().resolve()
@@ -483,6 +484,8 @@ class DiagnosticManager:
         # disk holds the durable copy, so it is bounded rather than unbounded.
         self._memory_errors: deque[dict[str, Any]] = deque(maxlen=MAX_MEMORY_ERRORS)
         self._dropped_count = 0
+        # Queue-pressure notices an event-loop caller did not wait for.
+        self._loop_notice_waits_skipped = 0
         # Unreadable log lines are counted per file so the viewer can report a
         # torn write once per launch instead of once per read.
         self._unreadable_lines: dict[str, int] = {}
@@ -495,6 +498,8 @@ class DiagnosticManager:
         self._last_prune = 0.0
         self._writer_thread: threading.Thread | None = None
         self._watcher_thread: threading.Thread | None = None
+        self._writer_restarts = 0
+        self._health_monitor: Any = None
         try:
             self._application_version = build_metadata()["version"]
         except Exception:
@@ -518,12 +523,7 @@ class DiagnosticManager:
                 sys.stderr.flush()
         self._settings = self._load_settings(record_failure=False)
         self._configure_sensitive_detail_store()
-        self._writer_thread = threading.Thread(
-            target=self._writer_loop,
-            name="nebula-diagnostics-writer",
-            daemon=True,
-        )
-        self._writer_thread.start()
+        self._start_writer()
         self._validate_overrides()
         if watch_settings:
             self._watcher_thread = threading.Thread(
@@ -560,6 +560,92 @@ class DiagnosticManager:
                 stage="settings-load",
                 retryable=True,
             )
+        from .log_writer_health import start_log_writer_monitor
+
+        self._health_monitor = start_log_writer_monitor(
+            self, interval_seconds=heartbeat_seconds
+        )
+
+    def _start_writer(self) -> None:
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            name="nebula-diagnostics-writer",
+            daemon=True,
+        )
+        self._writer_thread.start()
+
+    @property
+    def health_monitor(self) -> Any:
+        """The log-writer health monitor, or ``None`` when heartbeats are off."""
+
+        return self._health_monitor
+
+    def writer_alive(self) -> bool:
+        thread = self._writer_thread
+        return thread is not None and thread.is_alive()
+
+    def ensure_writer(self) -> bool:
+        """Restart a writer thread that died; True when a restart happened."""
+
+        with self._condition:
+            if self._stop or self.writer_alive():
+                return False
+            self._writer_restarts += 1
+            self._start_writer()
+            return True
+
+    def failed_write_files(self) -> list[str]:
+        """Names (never paths) of sinks whose last write failed."""
+
+        with self._writer_lock:
+            return sorted(path.name for path in self._failed_write_paths)
+
+    def owned_log_files(self) -> list[Path]:
+        owned = set(FEATURE_FILES)
+        if self.desktop_parent:
+            owned -= DESKTOP_OWNED_FEATURES
+        files = [self.log_dir / FEATURE_FILES[feature] for feature in sorted(owned)]
+        if not self.desktop_parent:
+            files.append(self.log_dir / "errors.log")
+        return files
+
+    def recover_sinks(self) -> dict[str, Any]:
+        """Reopen every failed or missing sink and clear a recovered degraded flag.
+
+        Each record already opens its file afresh, so recovery means: restart a
+        dead writer, recreate deleted log files, force the failed-path probe
+        now instead of on its timer, and drop the sticky ``degraded`` state
+        once every sink accepts a write again.
+        """
+
+        restarted = self.ensure_writer()
+        recreated = 0
+        with self._writer_lock:
+            for path in self.owned_log_files():
+                if not path.exists():
+                    try:
+                        self._append(path, b"\n")
+                    except OSError as exc:
+                        # diagnostic-expected: the path joins the failed set,
+                        # which the health monitor reports and keeps probing.
+                        self._failed_write_paths.add(path)
+                        self._record_failure(
+                            "A diagnostics log file could not be recreated.", exc
+                        )
+                    else:
+                        recreated += 1
+            self._probe_failed_write_paths(force=True)
+            failed = sorted(path.name for path in self._failed_write_paths)
+        cleared = False
+        if not failed and self._degraded and os.access(self.log_dir, os.W_OK):
+            self._degraded = False
+            cleared = True
+        return {
+            "restarted_writer": restarted,
+            "recreated_files": recreated,
+            "failed_files": failed,
+            "cleared_degraded": cleared,
+        }
 
     @property
     def settings(self) -> DiagnosticSettings:
@@ -962,6 +1048,7 @@ class DiagnosticManager:
                 sensitive_available = capture.available
                 sensitive_expires = capture.expires_at
         wait_for: threading.Event | None = None
+        own_record = normalized_level in {"error", "critical"}
         with self._condition:
             record = self._build_record(
                 normalized_level,
@@ -1019,7 +1106,18 @@ class DiagnosticManager:
         # asyncio event loop: disk latency there would stall every request and
         # websocket for as long as the writer needs, so the writer thread
         # acknowledges those on its own and its sink handling reports failures.
-        if wait_for is not None and normalized_level == "error" and _on_event_loop():
+        # A queue-pressure notice is never the caller's own record: whatever
+        # the caller's level, an event-loop caller must not wait for it (the
+        # queue is full precisely because the writer is slow), so the notice
+        # is left to the writer and the skipped wait is counted.
+        if (
+            wait_for is not None
+            and (normalized_level == "error" or not own_record)
+            and _on_event_loop()
+        ):
+            if not own_record:
+                with self._condition:
+                    self._loop_notice_waits_skipped += 1
             return error_id
         if wait_for is not None and not wait_for.wait(timeout=10):
             self._mark_degraded(
@@ -1107,7 +1205,13 @@ class DiagnosticManager:
                     self._in_flight -= len(batch)
                     self._condition.notify_all()
             with self._writer_lock:
-                self._probe_failed_write_paths()
+                try:
+                    self._probe_failed_write_paths()
+                except BaseException as exc:
+                    # A probe failure must not end the only writer thread.
+                    self._mark_degraded(
+                        "A diagnostics recovery probe failed unexpectedly.", exc
+                    )
 
     def _write_pending(self, pending: _PendingRecord) -> None:
         feature = str(pending.record["feature"])
@@ -1174,7 +1278,7 @@ class DiagnosticManager:
         except UnicodeError:
             # diagnostic-expected: pending lines are rebuilt as safe JSON below.
             encoded_pending = ""
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError, ValueError):
             # diagnostic-expected: stderr is the final emergency sink.
             if is_error and self.desktop_parent and encoded_pending:
                 sys.stderr.write(ERROR_MIRROR_PREFIX + encoded_pending + "\n")
@@ -1221,7 +1325,7 @@ class DiagnosticManager:
             )
         self._memory_errors.append(failure)
         encoded_failure = json.dumps(failure, sort_keys=True, separators=(",", ":"))
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(OSError, ValueError):
             # diagnostic-expected: stderr is the final emergency sink.
             prefix = (
                 ERROR_MIRROR_PREFIX
@@ -1439,6 +1543,8 @@ class DiagnosticManager:
     def close(self) -> None:
         if self._closed:
             return
+        if self._health_monitor is not None:
+            self._health_monitor.stop()
         self.record(
             "info",
             "diagnostics",
@@ -1485,6 +1591,7 @@ class DiagnosticManager:
             "disk_usage_bytes": self._disk_usage(),
             "last_rotation": self._last_rotation,
             "dropped_record_count": self._dropped_count,
+            "loop_notice_waits_skipped": self._loop_notice_waits_skipped,
             "unreadable_record_count": sum(self._unreadable_lines.values()),
             "queued_record_count": len(self._queue) + self._in_flight,
             "last_failure": self._last_failure,

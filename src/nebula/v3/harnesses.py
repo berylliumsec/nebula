@@ -36,6 +36,12 @@ from .diagnostics import (
     record_diagnostic,
 )
 from .diagnostic_guidance import guidance_for, reason_code_for
+from .model_refusal import (
+    REASON_CODE as REFUSAL_REASON_CODE,
+    harness_pause_reason,
+    refusal_from_text,
+    settle_harness_model_refusal,
+)
 from .harness_commands import (
     compatibility_commands,
     normalize_commands,
@@ -81,7 +87,7 @@ import claude_agent_sdk
 from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 from packaging.version import InvalidVersion, Version
-from pydantic import Field, StringConstraints, field_validator
+from pydantic import Field, StringConstraints, ValidationInfo, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -283,6 +289,11 @@ HarnessOutputStream = Literal[
     "patch",
 ]
 CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
+# Models a Claude profile offers beside its own default. The SDK has no model
+# catalog call, and Settings and Butler accept only advertised models, so the
+# current exact Claude id is listed here: without it a new profile could pick
+# only the moving ``sonnet``/``opus`` aliases.
+CLAUDE_ADVERTISED_MODELS = ("claude-opus-5-5", "sonnet", "opus")
 CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
@@ -1023,6 +1034,12 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
     )
 
 
+def _without_native_shell(
+    capabilities: HarnessNativeCapabilities,
+) -> HarnessNativeCapabilities:
+    return capabilities.model_copy(update={"shell": False})
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -1038,6 +1055,11 @@ def _session_native_capabilities(
     )
     if session.metadata.get("core_guarded_tools"):
         return HarnessNativeCapabilities()
+    if session.metadata.get("control_assistant") is True:
+        # Butler (and its Butler-mode children) never get the vendor's native
+        # shell: the Core OS user may hold host privileges. Butler reaches
+        # projects through Core's gateway, where every action is checked.
+        capabilities = _without_native_shell(capabilities)
     if _session_execution_mode(session) == "host":
         return capabilities
     # Only host sessions run in the linked project workspace, so a session that
@@ -1442,6 +1464,9 @@ def _harness_goal_retryable_failure(error: BaseException) -> bool:
 
     if _HARNESS_QUOTA_TEXT.search(str(error)):
         return False
+    if getattr(error, "reason_code", None) == REFUSAL_REASON_CODE:
+        # A model refusal waits for the operator (model_refusal).
+        return False
     if isinstance(error, (HarnessUnresponsiveError, HarnessTransportClosedError)):
         return True
     if isinstance(error, HarnessProviderError):
@@ -1567,6 +1592,38 @@ class ExternalHarnessSession(NebulaModel):
     internal_session_id: str | None = Field(default=None, max_length=200)
 
 
+_SETTLED_TOOL_CALL_STATUSES = frozenset(
+    {
+        ToolCallStatus.COMPLETE,
+        ToolCallStatus.FAILED,
+        ToolCallStatus.DENIED,
+        ToolCallStatus.CANCELLED,
+    }
+)
+
+
+# Display-only HarnessEvent text fields and their model bounds. Adapters fill
+# them from vendor data (tool names, task descriptions, shell commands), whose
+# length Nebula does not control; the full value belongs in ``payload``.
+HARNESS_EVENT_DISPLAY_BOUNDS: dict[str, int] = {
+    "title": 1_000,
+    "summary": 4_000,
+    "tool_name": 1_000,
+    "operator_detail": 2_048,
+    "impact": 2_048,
+    "mode": 100,
+}
+
+
+def bound_display_text(value: str, limit: int) -> str:
+    """Fit display text into ``limit`` characters, marking a cut with an ellipsis."""
+
+    clean = value.strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1].rstrip() + "…"
+
+
 class HarnessEvent(NebulaModel):
     schema_version: Literal[
         "nebula.harness-activity/v1", "nebula.harness-activity/v2"
@@ -1659,6 +1716,22 @@ class HarnessEvent(NebulaModel):
     mode: str | None = Field(default=None, max_length=100)
     plan: list[HarnessPlanEntry] = Field(default_factory=list, max_length=256)
     goal: HarnessGoalSnapshot | None = None
+
+    @field_validator(*HARNESS_EVENT_DISPLAY_BOUNDS, mode="before")
+    @classmethod
+    def _bound_display_text(cls, value: Any, info: ValidationInfo) -> Any:
+        """Truncate over-long display text instead of failing the turn.
+
+        A vendor value (for example a Claude background task whose description
+        is a multi-kilobyte shell command) must never make the event itself
+        invalid: an invalid activity event fails the turn and pauses its goal.
+        Runs on construction and on (validated) assignment alike.
+        """
+
+        limit = HARNESS_EVENT_DISPLAY_BOUNDS.get(info.field_name or "")
+        if limit is not None and isinstance(value, str) and len(value) > limit:
+            return bound_display_text(value, limit)
+        return value
 
 
 class HarnessActivityEventList(NebulaModel):
@@ -2275,8 +2348,104 @@ def _scrubbed_claude_environment(
     minimal = _minimal_environment()
     scrubbed = {key: "" for key in os.environ if key not in minimal}
     scrubbed.update(minimal)
+    # Where the operator signed the CLI in for the Core user. The CLI reads
+    # an empty CLAUDE_CONFIG_DIR as a path relative to its cwd, so blanking
+    # it would hide an existing login; it is a location, not a credential.
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    if config_dir:
+        scrubbed["CLAUDE_CONFIG_DIR"] = config_dir
+    else:
+        scrubbed.pop("CLAUDE_CONFIG_DIR", None)
     scrubbed.update(extra or {})
     return scrubbed
+
+
+def _claude_login_location() -> str:
+    """Where the Core user's Claude CLI keeps its login, for operator messages."""
+
+    try:
+        import pwd
+
+        user = pwd.getpwuid(os.getuid()).pw_name
+    except (ImportError, KeyError):
+        # diagnostic-expected: an unnamed uid is reported by number.
+        user = str(os.getuid())
+    home = os.environ.get("HOME") or str(Path.home())
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "").strip()
+    return f"OS user {user!r}, HOME {home!r}, " + (
+        f"CLAUDE_CONFIG_DIR {config_dir!r}"
+        if config_dir
+        else f"login stored under {str(Path(home) / '.claude')!r}"
+    )
+
+
+def _claude_not_logged_in_detail() -> str:
+    return (
+        "Claude CLI is not logged in for the account that runs Nebula Core ("
+        + _claude_login_location()
+        + "). As that OS user, with the same HOME, run `claude auth login`, "
+        "then run Check and Test turn again."
+    )[:1_000]
+
+
+def _claude_cli_path(sdk: Any, profile: HarnessProfile) -> str | None:
+    """The CLI the SDK would start: the override, the bundled CLI, then PATH."""
+
+    if profile.executable:
+        return profile.executable
+    module_file = getattr(sdk, "__file__", None)
+    if isinstance(module_file, str):
+        bundled = Path(module_file).parent / "_bundled" / "claude"
+        if bundled.is_file():
+            return str(bundled)
+    if sdk is claude_agent_sdk:
+        import shutil
+
+        return shutil.which("claude")
+    return None
+
+
+async def _claude_cli_logged_in(cli: str) -> bool | None:
+    """``claude auth status --json`` under the environment turns use.
+
+    True or False when the CLI reports ``loggedIn``; None when it cannot say
+    (an older CLI without the command, or an unexpected answer), so Check
+    neither passes nor fails on it.
+    """
+
+    environment = {
+        **{key: value for key, value in os.environ.items() if key != "CLAUDECODE"},
+        **_scrubbed_claude_environment(),
+    }
+    with tempfile.TemporaryDirectory(prefix="nebula-claude-auth-") as cwd:
+        process = await asyncio.create_subprocess_exec(
+            cli,
+            "auth",
+            "status",
+            "--json",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=cwd,
+            env=environment,
+        )
+        try:
+            async with asyncio.timeout(20):
+                stdout, _ = await process.communicate()
+        except TimeoutError:
+            # diagnostic-expected: an unresponsive status read leaves login unknown.
+            with suppress(ProcessLookupError):
+                process.kill()
+            await process.wait()
+            return None
+    try:
+        status = json.loads(stdout.decode("utf-8", "replace")[:64_000] or "null")
+    except json.JSONDecodeError:
+        # diagnostic-expected: a CLI without --json status leaves login unknown.
+        return None
+    if isinstance(status, dict) and isinstance(status.get("loggedIn"), bool):
+        return status["loggedIn"]
+    return None
 
 
 def _resolve_secret(store: CredentialStore, reference: str) -> str:
@@ -6591,6 +6760,10 @@ def _claude_task_event(message: Any, class_name: str) -> HarnessEvent:
         payload=_bounded(
             {
                 "task_id": task_id,
+                # The title is display-bounded; keep the full description
+                # (a background shell task's command) in the payload.
+                "description": getattr(message, "description", None),
+                "summary": getattr(message, "summary", None),
                 "task_type": getattr(message, "task_type", None),
                 "last_tool_name": getattr(message, "last_tool_name", None),
                 "output_file": getattr(message, "output_file", None),
@@ -6701,6 +6874,11 @@ def _claude_turn_failure(message: Any) -> HarnessTurnFailedError:
         if isinstance(api_status, int)
         else None
     )
+    # A refusal ("API Error: <model> can't help with this ... Details:
+    # [<category>]") is the model's decision, never a status to retry or a
+    # usage limit to route around: the goal pauses for the operator.
+    if refusal_from_text(text) is not None or status["terminal_reason"] == "refusal":
+        reason_code = REFUSAL_REASON_CODE
     # The CLI reports its own sign-in failures (an expired OAuth login that
     # cannot refresh, a missing login) without an HTTP status.
     if reason_code is None and _CLAUDE_SIGN_IN_FAILURE.search(text):
@@ -9014,10 +9192,18 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 raise HarnessConfigurationError(
                     "Claude CLI override must be an existing absolute executable"
                 )
+            logged_in = (
+                await self._cli_logged_in(sdk, profile)
+                if profile.auth_mode == HarnessAuthMode.EXISTING_SESSION
+                else None
+            )
+            if logged_in is False:
+                raise HarnessConfigurationError(_claude_not_logged_in_detail())
             return HarnessHealth(
                 profile_id=profile.id,
                 healthy=True,
                 kind=self.kind,
+                authentication_state="verified" if logged_in else "unverified",
                 harness_version=str(version) if version else None,
                 capabilities=HarnessCapabilities(
                     sessions=True,
@@ -9043,8 +9229,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                                     if profile.default_model
                                     else []
                                 ),
-                                "sonnet",
-                                "opus",
+                                *CLAUDE_ADVERTISED_MODELS,
                             ]
                         )
                     ),
@@ -9071,6 +9256,24 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 capabilities=HarnessCapabilities(checked_at=utc_now()),
                 detail=_safe_error(exc),
             )
+
+    async def _cli_logged_in(self, sdk: Any, profile: HarnessProfile) -> bool | None:
+        """Whether the existing CLI login is usable; None when unknown."""
+
+        cli = _claude_cli_path(sdk, profile)
+        if cli is None:
+            return None
+        try:
+            return await _claude_cli_logged_in(cli)
+        except OSError as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.claude.auth_status_unavailable",
+                "The Claude CLI login status could not be read.",
+                exc,
+                stage="probe",
+            )
+            return None
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         try:
@@ -10841,6 +11044,9 @@ class HarnessRuntimeService:
             if tools_enabled
             else HarnessNativeCapabilities()
         )
+        if control_assistant:
+            # Host mode grants every session a native shell; Butler's never is.
+            native_capabilities = _without_native_shell(native_capabilities)
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
             **({"core_plan_isolated": True} if core_plan_isolated else {}),
@@ -12769,11 +12975,15 @@ class HarnessRuntimeService:
                 if goal.token_budget is not None
                 else None,
             }
+            from .butler_note_release import retire_released_notes
             from .chat_goal_addenda import notes_progress
 
             # Supervisor notes change while the goal runs, so they ride with
-            # the turn's progress, not the standing context.
-            supervisor_notes = notes_progress(goal)
+            # the turn's progress, not the standing context. A note whose
+            # release condition now holds is retired first (never raises).
+            supervisor_notes = notes_progress(
+                await retire_released_notes(self.store, goal)
+            )
             if supervisor_notes is not None:
                 goal_progress["supervisor_notes"] = supervisor_notes
             standing_context += (
@@ -13377,8 +13587,41 @@ class HarnessRuntimeService:
             self._chat_turn_tasks.pop(turn_id, None)
             await self._settle_provider_subagents(turn_id)
             capacity_recovered = False
+            refused = False
             try:
-                capacity_recovered = await self._auto_recover_goal_capacity(turn_id)
+                # A model refusal pauses its goal for the operator: no
+                # fallback runtime, capacity retry or continuation.
+                refused = await settle_harness_model_refusal(self.store, turn_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.goal.model_refusal_failed",
+                    "A refused goal turn could not be recorded; it is not continued.",
+                    exc,
+                    stage="goal-model-refusal",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
+            try:
+                # A routed goal stopped by a usage or rate limit continues on
+                # its route's fallback runtime (goal_runtime_routing).
+                from .goal_runtime_routing import run_goal_turn_on_fallback
+
+                capacity_recovered = not refused and await run_goal_turn_on_fallback(
+                    self, turn_id
+                )
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.goal.runtime_fallback_failed",
+                    "A rate-limited goal turn could not move to its fallback runtime.",
+                    exc,
+                    stage="goal-runtime-routing",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
+            try:
+                capacity_recovered = capacity_recovered or (
+                    not refused and await self._auto_recover_goal_capacity(turn_id)
+                )
             except Exception as exc:
                 record_caught_exception(
                     "harnesses",
@@ -15888,12 +16131,31 @@ class HarnessRuntimeService:
             from .chat_assistant_config import chat_assistant_config
 
             chat = await self.store.get(ChatSession, original.chat_session_id or "")
+            # A retry is the chat's next turn: it runs on the chat's CURRENT
+            # runtime, never the failed turn's, which the operator may have
+            # switched away from since. Apply a pending switch first, like
+            # every other dispatch; retrying on the old harness would rebind
+            # the chat to it and silently undo the switch.
+            switcher = self.store.runtime_switch_service
+            if switcher is not None:
+                settled = await switcher.settle(chat.id)
+                if settled is None:
+                    raise HarnessStateError(
+                        "this chat has a runtime switch waiting; retry after it "
+                        "is applied or reviewed"
+                    )
+                chat = settled
+            if chat.backend != ChatBackend.HARNESS or not chat.harness_profile_id:
+                raise HarnessStateError(
+                    "this chat now runs on a provider model; send the request "
+                    "again instead of retrying the harness turn"
+                )
             original_chat_turn = await self.store.get(
                 ChatTurn, original.chat_turn_id or ""
             )
             blocked_plan = await self.plans.for_turn(original_chat_turn.id)
-            retry_profile_id = profile.id
-            retry_model = session.model
+            retry_profile_id = chat.harness_profile_id
+            retry_model = chat.model
             if blocked_plan is not None and blocked_plan.phase == "blocked":
                 saved = await chat_assistant_config(self.store, chat)
                 if saved["backend"] == ChatBackend.HARNESS.value:
@@ -16356,23 +16618,22 @@ class HarnessRuntimeService:
             call = await self.store.get(ToolCall, call_id)
         except NotFoundError:  # diagnostic-expected: no call was reserved yet
             return
-        if call.status in {
-            ToolCallStatus.COMPLETE,
-            ToolCallStatus.FAILED,
-            ToolCallStatus.DENIED,
-            ToolCallStatus.CANCELLED,
-        }:
+        if call.status in _SETTLED_TOOL_CALL_STATUSES:
             return
         (
-            await self.store.update(
+            await revise_latest(
+                self.store,
                 ToolCall,
                 call.id,
-                {
-                    "status": ToolCallStatus.CANCELLED,
-                    "error": reason,
-                    "completed_at": utc_now(),
-                },
-                expected_revision=call.revision,
+                lambda latest: (
+                    None
+                    if latest.status in _SETTLED_TOOL_CALL_STATUSES
+                    else {
+                        "status": ToolCallStatus.CANCELLED,
+                        "error": reason,
+                        "completed_at": utc_now(),
+                    }
+                ),
             )
         )
 
@@ -18782,7 +19043,7 @@ class HarnessRuntimeService:
                 check_in_data = WorkCheckIn.model_validate(
                     {key: value for key, value in arguments.items() if key != "item_id"}
                 )
-                update = await self.work.check_in(
+                update, guard = await self.work.check_in_guarded(
                     target_id,
                     item_id,
                     check_in_data,
@@ -18794,6 +19055,9 @@ class HarnessRuntimeService:
                     allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
+                if guard is not None:
+                    # The agent sees which cited hashes did not resolve.
+                    result["fabrication_guard"] = guard.as_dict()
                 (await self._note_goal_check_in(turn))
         except Exception as exc:
             (await self._finish_gateway_call(call.id, error=exc))
@@ -20734,23 +20998,34 @@ class HarnessRuntimeService:
             asyncio.get_running_loop().create_future()
         )
         if policy == McpApprovalMode.ALLOW:
+            # The adapter's tool_use event can start this row (PROPOSED ->
+            # RUNNING) while it is attached above; never move it back.
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     ToolCall,
                     call.id,
-                    {"status": ToolCallStatus.APPROVED},
-                    expected_revision=call.revision,
+                    lambda latest: (
+                        {"status": ToolCallStatus.APPROVED}
+                        if latest.status
+                        in {ToolCallStatus.PROPOSED, ToolCallStatus.WAITING_APPROVAL}
+                        else None
+                    ),
                 )
             )
             future.set_result(HarnessPermissionDecision(allowed=True, reason=rationale))
             return PermissionTicket(None, call.id, future)
         if policy == McpApprovalMode.DENY:
             (
-                await self.store.update(
+                await revise_latest(
+                    self.store,
                     ToolCall,
                     call.id,
-                    {"status": ToolCallStatus.DENIED, "error": rationale},
-                    expected_revision=call.revision,
+                    lambda latest: (
+                        None
+                        if latest.status in _SETTLED_TOOL_CALL_STATUSES
+                        else {"status": ToolCallStatus.DENIED, "error": rationale}
+                    ),
                 )
             )
             future.set_result(
@@ -21378,31 +21653,32 @@ class HarnessRuntimeService:
                 )
             )
         elif event.type == "tool_started" and call.status == ToolCallStatus.APPROVED:
-            call = await self.store.update(
+            # The permission handler writes the same row concurrently: plan
+            # the start on the newest revision, never on the listed one.
+            call = await revise_latest(
+                self.store,
                 ToolCall,
                 call.id,
-                {"status": ToolCallStatus.RUNNING, "started_at": utc_now()},
-                expected_revision=call.revision,
+                lambda latest: (
+                    {"status": ToolCallStatus.RUNNING, "started_at": utc_now()}
+                    if latest.status == ToolCallStatus.APPROVED
+                    else None
+                ),
             )
         if event.type == "tool_completed":
             failed = bool(event.payload.get("error"))
-            call = await self.store.get(ToolCall, call.id)
-            call = await self.store.update(
-                ToolCall,
-                call.id,
-                {
-                    "status": ToolCallStatus.FAILED
-                    if failed
-                    else ToolCallStatus.COMPLETE,
-                    "result": _bounded(
-                        event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT
-                    ),
-                    "error": _safe_error(Exception(str(event.payload.get("error"))))
-                    if failed
-                    else None,
-                    "completed_at": utc_now(),
-                },
-                expected_revision=call.revision,
+            settled = {
+                "status": ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE,
+                "result": _bounded(
+                    event.payload.get("result"), limit=MAX_TOOL_RESULT_TEXT
+                ),
+                "error": _safe_error(Exception(str(event.payload.get("error"))))
+                if failed
+                else None,
+                "completed_at": utc_now(),
+            }
+            call = await revise_latest(
+                self.store, ToolCall, call.id, lambda _latest: settled
             )
         return event.model_copy(
             update={"tool_call_id": call.id, "server_id": server.id}
@@ -21492,22 +21768,29 @@ class HarnessRuntimeService:
             ToolCallStatus.PROPOSED,
             ToolCallStatus.APPROVED,
         }:
-            call = await self.store.update(
-                ToolCall,
-                call.id,
-                {
+            # The permission handler reserves this row and then settles it
+            # (approved or denied) while the vendor's tool_use events are
+            # recorded here. Plan the start on the newest revision, and only
+            # while the row may still start, instead of writing over the
+            # revision listed above.
+            def start(latest: ToolCall) -> dict[str, Any] | None:
+                if latest.status not in {
+                    ToolCallStatus.PROPOSED,
+                    ToolCallStatus.APPROVED,
+                }:
+                    return None
+                return {
                     "status": ToolCallStatus.RUNNING,
-                    "started_at": call.started_at or utc_now(),
+                    "started_at": latest.started_at or utc_now(),
                     "metadata": {
-                        **call.metadata,
+                        **latest.metadata,
                         "vendor_item_id": item_id
-                        or call.metadata.get("vendor_item_id"),
+                        or latest.metadata.get("vendor_item_id"),
                     },
-                },
-                expected_revision=call.revision,
-            )
+                }
+
+            call = await revise_latest(self.store, ToolCall, call.id, start)
         if event.type == "tool_completed":
-            call = await self.store.get(ToolCall, call.id)
             raw_error = event.payload.get("error")
             status = str(event.payload.get("status") or "").lower()
             failed = bool(raw_error) or status in {"failed", "error", "declined"}
@@ -21554,22 +21837,19 @@ class HarnessRuntimeService:
                     exc,
                     stage="artifact-persistence",
                 )
+            settled = {
+                "status": (
+                    ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
+                ),
+                "result": safe_result,
+                "error": _safe_error(Exception(str(raw_error))) if failed else None,
+                "completed_at": utc_now(),
+                "result_artifact_id": artifact_id,
+            }
+            # Saving the artifact awaits; plan on the revision current now.
             (
-                await self.store.update(
-                    ToolCall,
-                    call.id,
-                    {
-                        "status": (
-                            ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE
-                        ),
-                        "result": safe_result,
-                        "error": _safe_error(Exception(str(raw_error)))
-                        if failed
-                        else None,
-                        "completed_at": utc_now(),
-                        "result_artifact_id": artifact_id,
-                    },
-                    expected_revision=call.revision,
+                await revise_latest(
+                    self.store, ToolCall, call.id, lambda _latest: settled
                 )
             )
             if artifact_id:
@@ -22216,7 +22496,8 @@ class HarnessRuntimeService:
                         paused_at=now,
                         active_since=None,
                         elapsed_seconds=goal.active_elapsed_seconds(now),
-                        blocked_reason=settled.error
+                        blocked_reason=harness_pause_reason(settled, owner)
+                        or settled.error
                         or "The harness turn ended before its response was accepted.",
                     )
                 (

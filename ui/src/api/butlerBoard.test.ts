@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
+import { ALL_PROJECTS, NO_STAGE_FILTER, parseStageFilter, stageFilterActive, stageFilterOptions, stageFilterSummary, toggleStageFilter, boardElapsed, holdBoardChats, isHoldable, isResumableIdle, listResumableIdle, resumeIdleGoals, boardSectionOpen, boardStatusLabel, getButlerBoardIfChanged, groupButlerBoard, listButlerThreadsIfChanged, operatorActionCheckLabel, resolveOperatorAction, OPERATOR_ACTION_CANCEL_SUMMARY, OPERATOR_ACTION_DONE_SUMMARY, parseBoardSectionState, toggleBoardSection, type ButlerBoardItem } from "./butlerBoard";
 import type { ApiClient } from "./client";
 
 function item(overrides: Partial<ButlerBoardItem>): ButlerBoardItem {
@@ -68,6 +68,12 @@ describe("Butler board grouping", () => {
     expect(boardStatusLabel(item({ section: "completed", state: "idle", goal: { objective: "x", status: "completed", currentStep: 0, planLength: 0 } }))).toBe("Completed");
   });
 
+  it("names a goal a model refusal paused, and only while it is paused", () => {
+    const refused = { objective: "x", status: "paused", currentStep: 0, planLength: 1 };
+    expect(boardStatusLabel(item({ section: "idle", state: "idle", goal: { ...refused, modelRefusal: { paused: true, count: 2 } } }))).toBe("Model refusal");
+    expect(boardStatusLabel(item({ section: "idle", state: "idle", goal: { ...refused, modelRefusal: { paused: false, count: 2 } } }))).toBe("Paused");
+  });
+
   it("starts Completed collapsed and remembers toggled sections", () => {
     expect(boardSectionOpen({}, "p1", "active")).toBe(true);
     expect(boardSectionOpen({}, "p1", "idle")).toBe(true);
@@ -117,6 +123,7 @@ describe("Butler board reads", () => {
           session_id: "s2", title: "Other", project: { id: "p1", name: "Research" }, section: "active", state: "working",
           backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:01:00Z",
           butler_case: { id: "case-2", status: "unknown-status" },
+          goal: { objective: "Validate", status: "paused", current_step: 0, plan_length: 1, model_refusal: { paused: true, count: 1, reason: "Model refusal (category-a) on Model X in turn t2: needs operator review" } },
         }],
       },
     });
@@ -133,6 +140,8 @@ describe("Butler board reads", () => {
       butlerCase: { id: "case-1", status: "needs_attention", sessionId: "case-chat" },
       workStage: { key: "validation", label: "Validation", itemId: "item-1", itemStatus: "blocked" },
     });
+    expect(answer?.board.items[0].goal?.modelRefusal).toBeUndefined();
+    expect(answer?.board.items[1].goal?.modelRefusal).toEqual({ paused: true, count: 1, reason: "Model refusal (category-a) on Model X in turn t2: needs operator review" });
     expect(answer?.board.items[1].workStage).toBeUndefined();
     // A status this UI does not know shows no stage rather than a wrong one.
     expect(answer?.board.items[1].butlerCase).toBeUndefined();
@@ -161,8 +170,9 @@ describe("resuming idle goals", () => {
     const wire = (id: string, status: string) => ({ session_id: id, title: id, project: { id: "p1", name: "R" }, section: "idle", state: "idle", backend: "provider", is_subagent: false, updated_at: "2026-11-20T10:00:00Z", goal: { objective: "x", status, current_step: 0, plan_length: 1, revision: 2 } });
     const requestIfChanged = vi.fn()
       .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("a", "paused"), wire("b", "draft")], next_offset: 200, truncated: false } })
-      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("c", "blocked"), wire("a", "paused")], next_offset: null, truncated: false } });
+      .mockResolvedValueOnce({ value: { counts: { active: 0, idle: 3, completed: 0 }, projects: [], items: [wire("c", "blocked"), wire("a", "paused"), { ...wire("refused", "paused"), goal: { ...wire("refused", "paused").goal, model_refusal: { paused: true, count: 1 } } }], next_offset: null, truncated: false } });
     const found = await listResumableIdle({ requestIfChanged } as unknown as ApiClient, { q: "fuzz", projectId: "p1" });
+    // A goal a model refusal paused waits for its own review.
     expect(found.map((entry) => entry.sessionId)).toEqual(["a", "c"]);
     expect(requestIfChanged.mock.calls.map(([path]) => path)).toEqual([
       "butler/board?q=fuzz&section=idle&project_id=p1&limit=200",
@@ -275,5 +285,57 @@ describe("Butler board stage filter", () => {
       { label: "Shipping", name: "Shipping", count: 0, selected: true },
       { label: null, name: "No stage", count: 5, selected: false },
     ]);
+  });
+});
+
+describe("operator action requests", () => {
+  const wire = (overrides: Record<string, unknown>) => ({
+    id: "w1", project: { id: "p1", name: "Research" }, title: "Needs you: Restart host on lab-host-1", typed: true,
+    action: "restart_host", action_label: "Restart host", device_or_host: "lab-host-1", reason: "Hung after an update",
+    urgency: "normal", status: "open", goal: null, evidence: ["ssh timed out"], check: { kind: "tcp_reachable", params: { port: 22 } },
+    last_check: null, created_at: "2026-11-20T10:00:00Z", ...overrides,
+  });
+
+  it("maps the poll's requests most urgent first and tolerates an older Core", async () => {
+    const requestIfChanged = vi.fn().mockResolvedValue({
+      etag: '"o"',
+      value: {
+        counts: { active: 0, idle: 0, completed: 0 }, items: [], truncated: false,
+        operator_actions: [
+          wire({ id: "normal" }),
+          wire({ id: "blocking", urgency: "blocking", goal: { session_id: "s1", title: "Lab run", status: "blocked" }, last_check: { passed: false, detail: "refused", checked_at: "2026-11-20T10:05:00Z" } }),
+          wire({ id: "odd", urgency: "someday", status: "weird", check: null, typed: false }),
+        ],
+      },
+    });
+    const answer = await getButlerBoardIfChanged({ requestIfChanged } as unknown as ApiClient, {}, undefined);
+    const requests = answer!.board.operatorActions;
+    expect(requests.map((request) => request.id)).toEqual(["blocking", "normal", "odd"]);
+    expect(requests[0]).toMatchObject({ deviceOrHost: "lab-host-1", actionLabel: "Restart host", goal: { sessionId: "s1", title: "Lab run", status: "blocked" }, lastCheck: { passed: false, detail: "refused" } });
+    expect(requests[2]).toMatchObject({ urgency: "normal", status: "open", check: undefined, typed: false });
+
+    const older = vi.fn().mockResolvedValue({ value: { counts: { active: 0, idle: 0, completed: 0 }, items: [], truncated: false } });
+    expect((await getButlerBoardIfChanged({ requestIfChanged: older } as unknown as ApiClient, {}, undefined))?.board.operatorActions).toEqual([]);
+  });
+
+  it("says what the auto-check shows", () => {
+    const check = { kind: "tcp_reachable", params: {} };
+    expect(operatorActionCheckLabel({})).toBe("No auto-check: mark it done when finished");
+    expect(operatorActionCheckLabel({ check })).toBe("Auto-check tcp_reachable: not run yet");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: false, detail: "refused", checkedAt: "t" } })).toBe("Auto-check tcp_reachable: not yet (refused)");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: null, detail: "", checkedAt: "t" } })).toBe("Auto-check tcp_reachable: unknown");
+    expect(operatorActionCheckLabel({ check, lastCheck: { passed: true, detail: "open", checkedAt: "t" } })).toBe("Auto-check tcp_reachable passes (open); closing");
+  });
+
+  it("marks done or cancels through a Work check-in that closes the item", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const api = { request } as unknown as ApiClient;
+    await resolveOperatorAction(api, { id: "w 1", project: { id: "p/1", name: "Research" } }, "done");
+    await resolveOperatorAction(api, { id: "w2", project: { id: "p1", name: "Research" } }, "cancelled");
+    expect(request.mock.calls[0][0]).toBe("engagements/p%2F1/work/w%201/updates");
+    expect(JSON.parse(request.mock.calls[0][1].body)).toEqual({ summary: OPERATOR_ACTION_DONE_SUMMARY, status: "done", request_id: "board-operator-action:w 1" });
+    expect(JSON.parse(request.mock.calls[1][1].body)).toMatchObject({ summary: OPERATOR_ACTION_CANCEL_SUMMARY, status: "done" });
+    // Core reads a check-in starting with this text as a cancel.
+    expect(OPERATOR_ACTION_CANCEL_SUMMARY.startsWith("Operator cancelled this request")).toBe(true);
   });
 });

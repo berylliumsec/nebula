@@ -5567,15 +5567,21 @@ def _claude_rejects_sampling(model: str) -> bool:
 
 
 def rejects_forced_tool_choice(model: str) -> bool:
-    """Fable 5.1, Mythos 5.1 and Mythos Preview reject ``any`` and ``tool``.
+    """Models that reject ``tool_choice`` ``any`` and ``tool`` with HTTP 400.
 
+    Fable 5.1+, Mythos 5.1+ and Mythos Preview, and Opus 5.5+ and Sonnet 5.5+.
     Adapters send ``auto`` instead; the caller still validates the call.
     """
 
     claude = _claude_model(model)
-    if claude is None or claude[0] not in {"fable", "mythos"}:
+    if claude is None:
         return False
-    return claude[1] is None or claude[1] >= (5, 1)
+    family, version = claude
+    if family in {"fable", "mythos"}:
+        return version is None or version >= (5, 1)
+    if family in {"opus", "sonnet"}:
+        return version is not None and version >= (5, 5)
+    return False
 
 
 def _claude_thinks_by_default(model: str) -> bool:
@@ -5591,10 +5597,18 @@ def _claude_thinks_by_default(model: str) -> bool:
 
 
 def _claude_always_thinks(model: str) -> bool:
-    """Fable and Mythos think on every request and 400 an explicit disable."""
+    """Models that think on every request and 400 ``thinking: disabled``.
+
+    Fable and Mythos, and Opus 5.5+ and Sonnet 5.5+ (at every effort level).
+    """
 
     claude = _claude_model(model)
-    return claude is not None and claude[0] in {"fable", "mythos"}
+    if claude is None:
+        return False
+    family, version = claude
+    if family in {"fable", "mythos"}:
+        return True
+    return family in {"opus", "sonnet"} and version is not None and version >= (5, 5)
 
 
 # Nebula's levels as Claude effort levels; ``none`` has no effort equivalent.
@@ -5665,8 +5679,8 @@ def _claude_reasoning(
     Sent at the top level to Anthropic and inside Bedrock's
     ``additionalModelRequestFields``. Per the Claude API reference:
 
-    - ``none`` disables thinking, except on Fable and Mythos, which always
-      think; they get the lowest effort instead.
+    - ``none`` disables thinking, except on models that always think
+      (Fable, Mythos, Opus 5.5+, Sonnet 5.5+); they get the lowest effort.
     - Other levels set ``output_config.effort`` where the model takes it,
       and turn on adaptive thinking (4.6 and later, with readable
       summaries) or a thinking budget (earlier models; never
@@ -5686,7 +5700,7 @@ def _claude_reasoning(
         return {"thinking": {"type": "disabled"}} if effort == "none" else {}
     family, version = claude
     if effort == "none":
-        if family in {"fable", "mythos"}:
+        if _claude_always_thinks(model):
             return {"output_config": {"effort": "low"}}
         return {"thinking": {"type": "disabled"}}
     fields: dict[str, Any] = {}

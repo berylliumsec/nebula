@@ -31,6 +31,7 @@ REASON_CODES = frozenset(
         "stale_state",
         "invalid_input",
         "cancelled",
+        "model_refusal",
         "unknown_internal_fault",
     }
 )
@@ -150,6 +151,13 @@ def reason_code_for(
         return supplied
     if event_code in REASON_CODES:
         return event_code
+    if exception is not None and any(
+        # A provider refusal, content filter or guardrail (providers.py); by
+        # name, since providers imports this module's callers.
+        kind.__name__ == "ProviderRefusalError"
+        for kind in type(exception).__mro__
+    ):
+        return "model_refusal"
     name = type(exception).__name__.lower() if exception is not None else ""
     code = " ".join(
         filter(None, (event_code, name, str(exception)[:300] if exception else None))

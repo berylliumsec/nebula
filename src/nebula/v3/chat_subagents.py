@@ -67,6 +67,7 @@ from typing import (
 )
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .chat_snapshot_parts import resolve_request_snapshot
 from .environments import enabled_snapshot_ssh_ids
@@ -2180,12 +2181,14 @@ class SubagentService:
                 rule="subagents.runtime_model",
             )
         # Butler delegates its own Core work, so its children run in Butler
-        # mode. Only a provider turn carries Butler's Core tools.
+        # mode with Butler's Core tools (#1140). A harness child is a Butler
+        # control-assistant harness session: its Core tools come through the
+        # gateway, it never has the vendor's native shell, and Butler's own
+        # project gives it no workspace or command runtime.
         butler_child = parent_session.metadata.get("control_assistant") is True
         if butler_child and harness_id:
-            raise ToolNotPermitted(
-                "Butler subagents run on a provider model so they keep Butler's Core tools",
-                rule="subagents.runtime_model",
+            tools_enabled = (
+                tools_enabled and parent_session.engagement_id != BUTLER_HOME_PROJECT
             )
         if harness_id:
             (
@@ -2268,6 +2271,7 @@ class SubagentService:
                     mcp_server_ids=mcp_server_ids,
                     reasoning_effort=effort,
                     tools_enabled=tools_enabled,
+                    control_assistant=butler_child,
                 )
             )
             if harness_id and self.harness_runtime is not None
@@ -2365,6 +2369,7 @@ class SubagentService:
                     ssh_environment_ids=(
                         await self._ssh_environment_ids(record, parent_turn)
                     ),
+                    control_assistant=butler_child,
                 )
                 child_turn_id = child_turn.id
                 record = await self.store.update(
@@ -4564,6 +4569,34 @@ class SubagentService:
             return
         await self._deliver(record)
 
+    async def _parent_backend_now(self, record: ChatSubagent) -> ChatBackend:
+        """The runtime the parent conversation's next turn runs on.
+
+        ``record.parent_backend`` is only the parent's runtime when this
+        subagent started. Whether a report must be posted for a provider's
+        history or handed to a harness prompt, and whether a running parent
+        can be steered, depends on the conversation's runtime now, including
+        a switch already accepted and waiting for the chat to become idle.
+        """
+
+        try:
+            session = await self.store.get(ChatSession, record.parent_session_id)
+        except NotFoundError:  # diagnostic-expected: parent conversation deleted; its recorded runtime is all that is left
+            return record.parent_backend
+        pending = session.metadata.get("pending_runtime_switch")
+        binding = pending.get("binding") if isinstance(pending, dict) else None
+        if (
+            isinstance(binding, dict)
+            and isinstance(pending, dict)
+            and pending.get("status") != "needs_review"
+        ):
+            target = binding.get("backend")
+            if target in {backend.value for backend in ChatBackend} or isinstance(
+                target, ChatBackend
+            ):
+                return ChatBackend(target)
+        return session.backend
+
     async def _parent_turn(
         self, record: ChatSubagent, turn_id: str | None = None
     ) -> ChatTurn | None:
@@ -4593,7 +4626,8 @@ class SubagentService:
             await self.deliver_pending(record.parent_session_id)
         elif pending.status == ChatTurnStatus.WAITING_CALLBACK:
             await self._resume_waiting_turn(pending)
-        elif record.parent_backend == ChatBackend.HARNESS:
+        elif pending.backend == ChatBackend.HARNESS:
+            # Steer only a running harness turn, whatever ran at spawn time.
             await self._steer_harness(record.parent_session_id)
 
     async def wake_after_hold(self, engagement_id: str) -> None:
@@ -5034,12 +5068,18 @@ class SubagentService:
         message_id = str(uuid5(NAMESPACE_URL, key))
         # A provider parent reads the post from its history; a harness gets
         # the report in its next prompt instead.
-        reported = (
+        parent_backend = await self._parent_backend_now(record)
+        reported: dict[str, Any] = (
             {"reported_at": utc_now()}
-            if record.parent_backend == ChatBackend.PROVIDER
-            and record.reported_at is None
+            if record.reported_at is None and parent_backend == ChatBackend.PROVIDER
             else {}
         )
+        if parent_backend != record.parent_backend:
+            # The chat switched runtime since this child started. Record where
+            # its report goes now: ``_reported`` treats a posted result as read
+            # only for a provider parent, so a stale provider value would keep
+            # the report from a harness parent's next prompt.
+            reported["parent_backend"] = parent_backend
         (
             await self._append_to_parent(
                 record,
@@ -5097,7 +5137,7 @@ class SubagentService:
                 "status": ChatSubagentMessageStatus.DELIVERED,
                 "delivered_at": utc_now(),
             }
-            if record.parent_backend == ChatBackend.PROVIDER
+            if (await self._parent_backend_now(record)) == ChatBackend.PROVIDER
             else {}
         )
         (
@@ -5141,29 +5181,40 @@ class SubagentService:
             return
         if goal.status != ChatGoalStatus.RUNNING or goal.execution_claim_id is not None:
             return
-        if record.parent_backend == ChatBackend.HARNESS:
-            if self.harness_runtime is not None:
-                await self.harness_runtime.dispatch_running_goal(
-                    record.parent_session_id,
-                    "Subagent reports are ready. Review them and continue the active Nebula goal.",
-                )
-            return
         try:
+            # The goal continues on the conversation's CURRENT main runtime.
+            # ``record.parent_backend`` is the parent's runtime when the
+            # subagent started; the operator may have switched the chat since
+            # (provider -> harness or back). Settle a pending switch first,
+            # like every other goal dispatch, then route by what it selected.
+            session = await self.chat.runtime_switcher.settle(record.parent_session_id)
+            if session is None:
+                # A runtime switch is pending: the chat is busy (its running
+                # turn receives the reports) or the switch needs review. Every
+                # goal dispatch waits the same way.
+                return
+            if session.backend == ChatBackend.HARNESS:
+                if self.harness_runtime is not None:
+                    await self.harness_runtime.dispatch_running_goal(
+                        record.parent_session_id,
+                        "Subagent reports are ready. Review them and continue the active Nebula goal.",
+                    )
+                return
             # Like every turn Core starts for a goal, this one runs with what
             # the operator last chose: model, effort, tools, MCP servers, SSH
             # hosts, hooks, subagents and agent messaging. The conversation
-            # and its newest turn hold those choices; the child's copy of its
-            # first parent's request does not.
-            session = await self.store.get(ChatSession, record.parent_session_id)
+            # holds those choices; neither the child's copy of its first
+            # parent's request nor the parent turn's provider (which may be
+            # from before a runtime switch) does. Provider and model are taken
+            # together from the conversation, never mixed with a turn's.
             settings = await ChatScheduleService(self.store).turn_settings(session.id)
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
-                    provider_id=session.provider_profile_id
-                    or parent_turn.provider_profile_id,
+                    provider_id=session.provider_profile_id,
                     engagement_id=record.engagement_id,
                     session_id=record.parent_session_id,
                     goal_id=goal.id,
-                    model=session.model or parent_turn.model,
+                    model=session.model,
                     reasoning_effort=settings.reasoning_effort,
                     messages=[
                         ChatRequestMessage(

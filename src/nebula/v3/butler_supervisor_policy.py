@@ -55,6 +55,7 @@ OPERATOR_ONLY_ENV = "NEBULA_BUTLER_SUPERVISOR_OPERATOR_ONLY_PATTERNS"
 GATE_ROOTS_ENV = "NEBULA_BUTLER_SUPERVISOR_GATE_ROOTS"
 FORENSICS_REPOS_ENV = "NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS"
 REVIEW_PROVIDER_ENV = "NEBULA_BUTLER_REVIEW_PROVIDER_ID"
+REVIEW_HARNESS_ENV = "NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID"
 REVIEW_MODEL_ENV = "NEBULA_BUTLER_REVIEW_MODEL"
 CEILING_POLICY_ENV = "NEBULA_BUTLER_REVIEW_CEILING_POLICY"
 EVIDENCE_ROOTS_ENV = "NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS"
@@ -126,6 +127,9 @@ class SupervisorPolicy:
     hygiene_project_ids: tuple[str, ...]
     hygiene_unlimited_budgets: bool
     hygiene_default_stage: str
+    # The reviewer may run on a harness profile (for example Claude) instead
+    # of a provider profile; exactly one of the two is configured.
+    review_harness_profile_id: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     def require_enabled(self) -> None:
@@ -229,6 +233,7 @@ def load_policy(environ: dict[str, str] | None = None) -> SupervisorPolicy:
         gate_roots=_split_commas(env.get(GATE_ROOTS_ENV)),
         forensics_repos=_split_commas(env.get(FORENSICS_REPOS_ENV)),
         review_provider_id=env.get(REVIEW_PROVIDER_ENV) or None,
+        review_harness_profile_id=env.get(REVIEW_HARNESS_ENV) or None,
         review_model=env.get(REVIEW_MODEL_ENV) or DEFAULT_REVIEW_MODEL,
         ceiling_policy_path=env.get(CEILING_POLICY_ENV) or None,
         evidence_roots=_split_commas(env.get(EVIDENCE_ROOTS_ENV)),

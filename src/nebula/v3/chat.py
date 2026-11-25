@@ -282,6 +282,11 @@ from .workspace_provenance import (
 from .operator_help import CORPUS_ID, help_subject, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .index_calls import index_call
+from .model_refusal import (
+    pause_reason as refusal_pause_reason,
+    record_goal_model_refusal,
+    refusal_from_error,
+)
 from .providers import (
     ReasoningEffort,
     ModelMessage,
@@ -6456,10 +6461,17 @@ class ChatService:
                 # An armed retry leaves the goal running; the idle-goal
                 # reconciler starts its continuation after a short wait.
                 if not goal_retry_armed:
+                    refusal = None if stopped else refusal_from_error(runtime.error)
                     if stopped:
                         pause_reason = "Response stopped by the operator. Resume the goal when ready."
                     elif isinstance(runtime.error, CompletionHookBlocked):
                         pause_reason = _completion_hook_goal_pause_reason(runtime.error)
+                    elif refusal is not None:
+                        # A model refusal waits for the operator; nothing
+                        # retries, reroutes or continues it (model_refusal).
+                        pause_reason = refusal_pause_reason(
+                            refusal, model=turn.model, turn_id=turn.id
+                        )
                     else:
                         pause_reason = (
                             "Response failed before the goal finished. Review the "
@@ -6471,6 +6483,16 @@ class ChatService:
                             pause_reason,
                         )
                     )
+                    if refusal is not None:
+                        await record_goal_model_refusal(
+                            self.store,
+                            session_id=turn.session_id,
+                            chat_turn_id=turn.id,
+                            goal_id=turn.goal_id,
+                            refusal=refusal,
+                            runtime=f"provider:{turn.provider_profile_id or 'unknown'}",
+                            model=turn.model,
+                        )
             if turn is not None:
                 await self._close_provider_journal(turn.id, runtime)
             # Followers stop here and their callers read the turn and its goal
@@ -7369,7 +7391,13 @@ class ChatService:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
             instructions += _goal_instructions(goal)
-            goal_progress = _goal_progress_block(goal)
+            # Supervisor notes whose release condition now holds are retired
+            # before the turn hears them (butler_note_release).
+            from .butler_note_release import retire_released_notes
+
+            goal_progress = _goal_progress_block(
+                await retire_released_notes(self.store, goal)
+            )
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
             None if side_chat else (await self._project_instructions(engagement_id))

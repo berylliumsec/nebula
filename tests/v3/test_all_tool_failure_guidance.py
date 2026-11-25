@@ -259,6 +259,42 @@ def test_bounded_output_query_and_work_conflict_have_distinct_actions():
     assert "private concurrent item detail" not in json.dumps(work)
 
 
+def test_revision_and_state_conflicts_have_distinct_model_text():
+    from nebula.v3.storage import ModelSafeConflict, revision_conflict
+
+    spec = ToolSpec(
+        name="work_check_in",
+        description="Check in to an existing Work item using its latest state.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    revision = tool_failure(
+        spec, {}, revision_conflict("items", "item-1", 1, 2), phase="after_execution"
+    )
+    assert "revision changed" in revision["problem"]
+    assert "item-1" not in json.dumps(revision)
+    state = tool_failure(
+        spec, {}, ConflictError("private state detail"), phase="after_execution"
+    )
+    assert "revision changed" not in state["problem"]
+    assert "references" in state["next_action"]
+    assert "private state detail" not in json.dumps(state)
+    safe = tool_failure(
+        spec,
+        {"ref": "item-9"},
+        ModelSafeConflict(
+            "reference 'item-9' does not match",
+            next_action="Replace 'item-9' with a current item id.",
+            field="ref",
+        ),
+        phase="after_execution",
+    )
+    assert safe["problem"] == "reference 'item-9' does not match"
+    assert safe["next_action"] == "Replace 'item-9' with a current item id."
+    assert safe["invalid_input"] == "ref"
+
+
 async def test_mcp_plugin_keeps_core_cause_without_exposing_raw_exception(tmp_path):
     store, project, notebooks = await notebook_project(tmp_path)
     profile = await NotebookMcpTools(store, notebooks).register_profile(project.id)

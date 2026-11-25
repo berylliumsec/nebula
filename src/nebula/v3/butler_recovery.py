@@ -157,7 +157,8 @@ _GLOBAL_INSTRUCTIONS = (
     "project under an Act project. "
     "When a paused or blocked main goal needs a separate recovery goal, use "
     "nebula.global.create_recovery_goal with the exact source goal ID. That "
-    "route requires Codex gpt-6-sol, max effort, and Daybreak Blue and links "
+    "route runs on Butler's own reserved harness and model (a Codex or provider "
+    "Butler uses Codex gpt-6-sol, max effort, and Daybreak Blue) and links "
     "the recovery result to this scheduled check. Save a concrete main-agent "
     "plan with the goal and pass relevant steps to any delegated subagents. Do not use create_goal for "
     "recovery work. The recovery goal must report an evidence-backed result and "
@@ -916,22 +917,12 @@ class ButlerRecoveryAgent:
                 "max_active": config["max_active_subagents"],
                 "reasoning_effort": config["subagent_reasoning_effort"],
             }
-            if child_setting["harness_profile_id"]:
-                # Butler's children run on a provider model (#1140); a harness
-                # child saved earlier would refuse every start and fail the check.
-                child_setting = None
-                record_diagnostic(
-                    "warning",
-                    "butler",
-                    "butler.recovery.harness_subagent_skipped",
-                    "Butler's saved subagent runtime is a harness; this background check runs without subagents. Choose a provider model for Butler's subagents.",
-                    outcome="degraded",
-                    stage="recovery",
-                    metadata={"entity_id": case.engagement_id, "kind": "project"},
-                )
         if child_setting is not None:
             child_profile: HarnessProfile | ProviderProfile
             if child_setting["harness_profile_id"]:
+                # A harness child runs in Butler mode as a control-assistant
+                # harness session (Core tools through the gateway, no native
+                # shell), so Butler's children keep its Core tools (#1140).
                 child_profile = await self.store.get(
                     HarnessProfile, child_setting["harness_profile_id"]
                 )
@@ -947,6 +938,21 @@ class ButlerRecoveryAgent:
             ):
                 raise ValueError(
                     "Butler's subagent runtime is not authorized for unattended tool results"
+                )
+            if isinstance(child_profile, HarnessProfile) and (
+                not child_profile.enabled
+                or child_setting["model"] not in child_profile.capabilities.models
+            ):
+                # Every start would be refused; check without delegation.
+                child_setting = None
+                record_diagnostic(
+                    "warning",
+                    "butler",
+                    "butler.recovery.harness_subagent_unavailable",
+                    "Butler's saved subagent harness is disabled or no longer offers its model; this background check runs without subagents.",
+                    outcome="degraded",
+                    stage="recovery",
+                    metadata={"entity_id": case.engagement_id, "kind": "project"},
                 )
         if backend == ChatBackend.HARNESS:
             _, turn, harness_turn = await self.harness_runtime.prepare_chat(
@@ -1381,8 +1387,86 @@ class ButlerRecoveryService:
                     )
                 )
         (await self._run_goal_hygiene())
+        (await self._run_stuck_turn_sweep())
+        (await self._run_operator_action_sweep())
         (await self._share_host_runtime(project_id))
         return True
+
+    async def _run_stuck_turn_sweep(self) -> None:
+        """Cancel and resume goal turns stuck without progress.
+
+        Off unless the supervisor policy is enabled and the operator sets
+        NEBULA_BUTLER_STUCK_TURN_AUTO=1; a failure is recorded and the check
+        still runs.
+        """
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            policy = load_policy()
+            work = getattr(self.agent, "work", None)
+            if not policy.enabled or work is None:
+                return
+            from .butler_stuck_turns import sweep_stuck_turns
+
+            result = await sweep_stuck_turns(self.store, work, policy=policy)
+            record_diagnostic(
+                "info",
+                "butler",
+                "butler.stuck_turns.sweep",
+                "Butler stuck-turn sweep ran before the global periodic check.",
+                outcome="completed",
+                stage="stuck-turns",
+                metadata={
+                    key: len(value) if isinstance(value, list) else value
+                    for key, value in result.items()
+                    if isinstance(value, (list, int, bool, str))
+                },
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.stuck_turns.failed",
+                "Butler stuck-turn sweep failed; the periodic check continues.",
+                exc,
+                stage="stuck-turns",
+            )
+
+    async def _run_operator_action_sweep(self) -> None:
+        """Close operator action requests whose auto-check passes and resume
+        the goals waiting on them. Off unless the supervisor policy is
+        enabled; a failure is recorded and the check still runs."""
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            work = getattr(self.agent, "work", None)
+            if not load_policy().enabled or work is None:
+                return
+            from .operator_action_requests import sweep_operator_actions
+
+            result = await sweep_operator_actions(self.store, work)
+            record_diagnostic(
+                "info",
+                "butler",
+                "butler.operator_actions.sweep",
+                "Butler operator action sweep ran before the global periodic check.",
+                outcome="completed",
+                stage="operator-actions",
+                metadata={
+                    key: len(value) if isinstance(value, list) else value
+                    for key, value in result.items()
+                    if isinstance(value, (list, int, bool, str))
+                },
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.operator_actions.failed",
+                "Butler operator action sweep failed; the periodic check continues.",
+                exc,
+                stage="operator-actions",
+            )
 
     async def _run_goal_hygiene(self) -> None:
         """Run deterministic goal hygiene before the check's Butler case exists.

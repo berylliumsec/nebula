@@ -493,11 +493,20 @@ def _goal(**metadata: Any) -> ChatGoal:
 
 def _record(goal: ChatGoal, **fields: Any) -> dict[str, Any]:
     return {
+        "id": "review-1",
         "source": "core_independent_review",
         "verdict": "ACCEPT",
         "proposal_digest": proposal_digest(goal),
         "reviewer_model": "claude-opus-5-5",
         "reviewer_session_id": None,
+        "approval_provenance": {
+            "source": "core_independent_review",
+            "provider_id": "anthropic-1",
+            "model": "claude-opus-5-5",
+            "review_id": "review-1",
+            "packet_sha256": "0" * 64,
+            "reviewed_at": "2026-01-01T00:00:00+00:00",
+        },
         **fields,
     }
 
@@ -726,7 +735,7 @@ async def test_residuals_launch_a_null_budget_follow_up_goal(tmp_path: Path) -> 
         },
         session_model="goal-model-1",
     )
-    result = await service.review("s1", [])
+    result = await service.review("s1", [], on_residuals="follow_up")
     create = next(args for kind, args in work.calls if kind == "create")
     assert create["token_budget"] is None and create["step_budget"] is None
     assert create["completion_requires_review"] is True

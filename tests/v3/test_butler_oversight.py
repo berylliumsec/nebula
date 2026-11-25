@@ -774,6 +774,48 @@ async def test_concurrent_agent_reports_deduplicate_machine_incident(tmp_path):
     ) == 1
 
 
+async def test_unresolved_report_evidence_names_the_reference_to_the_model(tmp_path):
+    """The model learns which evidence reference failed, not a revision race."""
+
+    from nebula.v3.butler_reporting_tools import report_specs
+    from nebula.v3.storage import ModelSafeConflict
+    from nebula.v3.tool_failures import tool_failure
+
+    _, store, goals = await _setup(tmp_path, projects=("alpha",))
+    goal = await _start(goals, "alpha")
+    turn = await _turn(store, goal, "turn-alpha")
+    arguments = {
+        "what_changed": "A test completed.",
+        "evidence_gained": ["The tool returned one observation."],
+        "criterion_advanced": "Check the candidate path.",
+        "next_step": "Review the result.",
+        "evidence_refs": [{"kind": "artifact", "id": "missing-artifact"}],
+    }
+    with pytest.raises(ModelSafeConflict) as caught:
+        (
+            await ingest_agent_report(
+                store,
+                turn_id=turn.id,
+                idempotency_key="missing-evidence",
+                body=GoalProgressReport.model_validate(arguments),
+                source="provider_tool",
+            )
+        )
+    failure = tool_failure(
+        report_specs()["report_progress"],
+        arguments,
+        caught.value,
+        phase="after_execution",
+    )
+    assert failure["category"] == "conflict"
+    assert failure["invalid_input"] == "evidence_refs"
+    assert "missing-artifact" in failure["problem"]
+    assert "artifact" in failure["problem"]
+    assert "revision changed" not in failure["problem"]
+    assert "missing-artifact" in failure["next_action"]
+    assert (await store.count_entities(ButlerAgentReport, engagement_id="alpha")) == 0
+
+
 async def test_report_identity_and_evidence_are_bound_to_core_project(tmp_path):
     _, store, goals = await _setup(tmp_path, projects=("alpha", "beta"))
     goal = await _start(goals, "alpha")

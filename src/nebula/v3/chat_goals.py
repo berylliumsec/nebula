@@ -10,7 +10,7 @@ from .recovery_markers import (
 from .async_utils import MaybeAsync, call_async
 
 from datetime import datetime
-from typing import Awaitable, Callable, Literal, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Literal, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .harnesses import HarnessRuntimeService
@@ -20,6 +20,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .chat_subagents import SUBAGENT_LIMIT_CEILING
+from .butler_review_gating import (
+    REOPEN_HISTORY_KEY,
+    MustDoError,
+    waive_must_do,
+)
 from .chat_agent_messages import resolve_agent_messaging_choice
 from .diagnostics import record_caught_exception
 from .chat_goal_addenda import (
@@ -126,6 +131,31 @@ class GoalWrite(BaseModel):
     completion_evidence: list[dict] = Field(default_factory=list, max_length=200)
 
 
+class GoalReopen(BaseModel):
+    """Reopen a completed goal in place after a review sent it back."""
+
+    expected_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+class GoalMustDoWaive(BaseModel):
+    """The operator's waiver of one open review must-do."""
+
+    expected_revision: int = Field(ge=1)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+
+REOPEN_HISTORY_LIMIT = 20
+
+
+class GoalRuntimeRoute(BaseModel):
+    """Operator route for stage-based goal runtime routing."""
+
+    route: str = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=500)
+    dry_run: bool = False
+
+
 class GoalUpdate(GoalCreate):
     expected_revision: int = Field(ge=1)
     # The plan entry now being worked on (0-based). Sent as null it clears the
@@ -146,6 +176,9 @@ class GoalNoteCreate(BaseModel):
 
     text: str = Field(min_length=1, max_length=GOAL_SUPERVISOR_NOTE_CHARACTERS)
     author: Literal["operator", "butler"] = "operator"
+    # Machine-checkable condition that retires the note (butler_note_release).
+    # Required for a Butler note that stops or gates work.
+    release_condition: dict[str, Any] | None = None
 
     @field_validator("text")
     @classmethod
@@ -1287,6 +1320,93 @@ class ChatGoalService:
                     raise
         raise ConflictError("goal kept changing; retry the request")
 
+    async def reopen(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        reason: str,
+        review_id: str | None = None,
+    ) -> ChatGoal:
+        """Reopen a completed goal in place, paused, ready to resume.
+
+        A review that sends back an already completed goal returns that same
+        goal to work rather than starting a follow-up goal. The goal leaves
+        COMPLETED for PAUSED with its completion moved into
+        ``metadata["reopened"]``; a resume then starts it again. Only a
+        completed goal at ``expected_revision`` can be reopened.
+        """
+
+        goal = await self.get(session_id)
+        if expected_revision != goal.revision:
+            raise ConflictError(
+                "goal changed on another device; reload before retrying"
+            )
+        if goal.status != ChatGoalStatus.COMPLETED:
+            raise ConflictError("only a completed goal can be reopened")
+        if goal.metadata.get("handoff_target_session_id"):
+            raise ConflictError(
+                "goal was handed off; continue in its linked provider chat"
+            )
+        now = utc_now()
+        entry = {
+            "at": now.isoformat(),
+            "reason": reason[:2_000],
+            "review_id": review_id,
+            "completed_at": goal.completed_at.isoformat()
+            if goal.completed_at
+            else None,
+            "completion_summary": goal.completion_summary,
+            "completion_evidence": goal.completion_evidence,
+        }
+        history = [*(goal.metadata.get(REOPEN_HISTORY_KEY) or []), entry][
+            -REOPEN_HISTORY_LIMIT:
+        ]
+        metadata = {
+            key: value
+            for key, value in goal.metadata.items()
+            if key != GOAL_COMPLETION_PROPOSAL_KEY
+        }
+        metadata[REOPEN_HISTORY_KEY] = history
+        return await self.store.update(
+            ChatGoal,
+            goal.id,
+            {
+                "status": ChatGoalStatus.PAUSED,
+                "paused_at": now,
+                "completed_at": None,
+                "completion_summary": None,
+                "completion_evidence": [],
+                "blocked_reason": reason[:2_000],
+                "active_since": None,
+                "metadata": metadata,
+            },
+            expected_revision=goal.revision,
+        )
+
+    async def waive_must_do(
+        self, session_id: str, item_id: str, body: GoalMustDoWaive
+    ) -> ChatGoal:
+        """The operator waives one open review must-do."""
+
+        goal = await self.get(session_id)
+        if body.expected_revision != goal.revision:
+            raise ConflictError(
+                "goal changed on another device; reload before retrying"
+            )
+        try:
+            metadata = waive_must_do(
+                goal.metadata, item_id, waived_by="operator", reason=body.reason
+            )
+        except MustDoError as error:
+            raise HTTPException(422, str(error)) from error
+        return await self.store.update(
+            ChatGoal,
+            goal.id,
+            {"metadata": metadata},
+            expected_revision=goal.revision,
+        )
+
     async def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
         goal = await self.get(session_id)
         (
@@ -1456,6 +1576,20 @@ class ChatGoalService:
         """Append one supervisor note. A full list refuses the note rather
         than dropping older guidance the operator may still rely on."""
 
+        from .butler_note_release import (
+            attach_release_condition,
+            require_release_for_gating,
+            validate_release_condition,
+        )
+
+        require_release_for_gating(body.text, body.author, body.release_condition)
+        condition = (
+            await validate_release_condition(
+                self.store, await self.get(session_id), body.release_condition
+            )
+            if body.release_condition
+            else None
+        )
         note_id = str(uuid4())
 
         def append(
@@ -1472,7 +1606,18 @@ class ChatGoalService:
             )
             return [*goal.supervisor_notes, note], describe_note(body.text), note_id
 
-        return await self._revise_notes(session_id, append, author=body.author)
+        result = await self._revise_notes(session_id, append, author=body.author)
+        if condition is None:
+            return result
+        try:
+            goal = await attach_release_condition(
+                self.store, result.goal.id, note_id, condition, author=body.author
+            )
+        except BaseException:
+            # A gating note must never stay without its release condition.
+            await self.remove_note(session_id, note_id, author=body.author)
+            raise
+        return result.model_copy(update={"goal": goal})
 
     async def remove_note(
         self, session_id: str, note_id: str, *, author: str = "operator"
@@ -1824,6 +1969,12 @@ def goals_router(
             and (await service.get(session_id)).awaiting_completion_review
         )
         updated = await service.write(session_id, body)
+        if body.action in {"resume", "cancel", "complete"}:
+            # The operator decided on a refused goal: close its review request
+            # (closing it never resumes the goal).
+            from .model_refusal import close_model_refusal_request
+
+            await close_model_refusal_request(store, session_id, action=body.action)
         if goal_dispatcher is not None and body.action in {"start", "resume"}:
             instruction = (
                 GOAL_START_INSTRUCTION
@@ -1835,6 +1986,46 @@ def goals_router(
             await goal_dispatcher(session_id, instruction)
             return await service.read(session_id)
         return updated
+
+    @router.post("/chat/sessions/{session_id}/goal/reopen", response_model=ChatGoal)
+    async def reopen_goal(session_id: str, body: GoalReopen) -> ChatGoal:
+        return await service.reopen(
+            session_id, expected_revision=body.expected_revision, reason=body.reason
+        )
+
+    @router.post(
+        "/chat/sessions/{session_id}/goal/must-dos/{item_id}/waive",
+        response_model=ChatGoal,
+    )
+    async def waive_goal_must_do(
+        session_id: str, item_id: str, body: GoalMustDoWaive
+    ) -> ChatGoal:
+        # Operator route only: no Butler tool calls it, and Butler's
+        # must_do_resolve takes an artifact, never a waiver.
+        return await service.waive_must_do(session_id, item_id, body)
+
+    @router.get("/chat/sessions/{session_id}/goal/runtime-route")
+    async def read_goal_runtime_route(session_id: str) -> dict[str, Any]:
+        from .goal_runtime_routing import routing_status
+
+        return await routing_status(store, session_id)
+
+    @router.post("/chat/sessions/{session_id}/goal/runtime-route")
+    async def route_goal_runtime(
+        session_id: str, body: GoalRuntimeRoute
+    ) -> dict[str, Any]:
+        # The operator's explicit route: a route name, auto or release. The
+        # switch is the Assistant settings writer's, audited on the chat.
+        from .goal_runtime_routing import route_goal_runtime as route_goal
+
+        return await route_goal(
+            store,
+            session_id,
+            route=body.route,
+            reason=body.reason,
+            actor="operator",
+            dry_run=body.dry_run,
+        )
 
     @router.get(
         "/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal]

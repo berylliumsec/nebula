@@ -34,6 +34,14 @@ All of these are reached through Butler's existing gateway
 | `nebula.supervisor.repo_restore` | Restores exact paths from a known-good commit and commits only those paths. The repository's hooks run, and nothing is pushed. |
 | `nebula.supervisor.independent_review` | Core runs a fresh closure review on a reviewer model that differs from the goal's own model, then records and applies the verdict. |
 | `nebula.supervisor.hygiene_tick` | Runs the deterministic goal hygiene: null budgets, resume after transient pauses, and staged Work items. |
+| `nebula.supervisor.must_do_resolve` | Closes one review must-do with a verified artifact: a commit `git cat-file` confirms, or a file under the evidence roots. Butler cannot waive. |
+| `nebula.supervisor.recover_stuck_turn` | Lists goal turns with no progress past the threshold, and cancels then resumes one as a single action. |
+| `nebula.supervisor.post_goal_note` | Posts a supervisor note with a release condition, optionally restarting the goal's turn so the note takes effect at once. |
+| `nebula.supervisor.probe` | Runs one fixed, read-only probe on an allowlisted host, or `verify_blocker` to test a goal's claimed blocker. |
+| `nebula.supervisor.tmp_cleanup` | Finds idle full-repository exports under the cleanup roots; deletes only after a dry run. |
+| `nebula.supervisor.log_writer_status` | Reads the health of Core's file log writer. |
+| `nebula.supervisor.request_operator_action`, `list_operator_actions`, `close_operator_action` | Raise, list and close typed requests for things only the operator can do. |
+| `nebula.supervisor.route_goal_runtime` | Routes one goal's runtime under the operator's stage-based routing policy: a route name, `auto` or `release`, with `dry_run`. See [Stage-based runtime routing](#stage-based-runtime-routing). |
 
 **Where the tools are available:**
 - Interactive project Butler.
@@ -61,13 +69,25 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT`, `…_PREPARE_SCRIPT` | The repository publish scripts. |
 | `NEBULA_BUTLER_SUPERVISOR_GATE_ROOTS` | Git checkouts whose committed scripts may run as gates. |
 | `NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS` | Repositories that `repo_audit` and `repo_restore` may read and write. |
-| `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | The provider profile for the independent reviewer. Use an Anthropic profile. |
+| `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | A provider profile for the independent reviewer. Set this or the harness variable below, not both. |
+| `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` | A harness profile for the independent reviewer, such as a Claude harness on the host's existing login. Each review is one turn in a fresh session with no tools, no MCP server and no Core gateway. |
 | `NEBULA_BUTLER_REVIEW_MODEL` | The reviewer model. Default: `claude-opus-5-5`. It must differ from the reviewed goal's model. |
 | `NEBULA_BUTLER_REVIEW_CEILING_POLICY` | A file appended to the reviewer instructions, such as an impact-ceiling policy. |
 | `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Directories the reviewer may read evidence bytes from. |
 | `NEBULA_BUTLER_HYGIENE_PROJECT_IDS` | Projects the hygiene tick covers. |
 | `NEBULA_BUTLER_HYGIENE_UNLIMITED_BUDGETS` | `1` nulls the token, time and step budgets of live goals in those projects. |
 | `NEBULA_BUTLER_HYGIENE_DEFAULT_STAGE` | The stage given to a newly created Work item. Default: `triage`. |
+| `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY` | Closure requests a goal may make per rolling day. Default: 3. |
+| `NEBULA_BUTLER_REVIEW_EVIDENCE_REPOS` | Repositories in which a must-do commit artifact is verified. Default: the forensics repositories. |
+| `NEBULA_BUTLER_STUCK_TURN_MINUTES` | Minutes without progress before a goal turn counts as stuck. Default 12, clamped to 10–60. |
+| `NEBULA_BUTLER_STUCK_TURN_AUTO` | `1` lets the periodic check cancel and resume stuck turns (at most 3 per goal per hour). |
+| `NEBULA_BUTLER_NOTE_RELEASE_ROOTS` | Extra roots an `until_path_exists` release condition may name. |
+| `NEBULA_FABRICATION_GUARD_REPOS` | JSON map of project id (or `*`) to repositories in which cited commit hashes must resolve. |
+| `NEBULA_FABRICATION_GUARD_MODE` | `off`, `flag` (default) or `reject` for agent Work check-ins citing unknown hashes or forged sign-offs. |
+| `NEBULA_LOG_HEARTBEAT_SECONDS` | Log-writer heartbeat interval. Default 300; `0` turns it off. |
+| `NEBULA_BUTLER_SUPERVISOR_LEASE_STATE_COMMAND`, `…_LEASE_STATE_HOST` | Read-only command, and host, for the `lease_state` probe. |
+| `NEBULA_BUTLER_SUPERVISOR_HEALTH_PATHS` | Paths `host_health` checks. Default `/`. |
+| `NEBULA_BUTLER_SUPERVISOR_CLEANUP_ROOTS`, `…_CLEANUP_HOST`, `…_CLEANUP_MIN_BYTES`, `…_CLEANUP_IDLE_MINUTES` | Where `tmp_cleanup` may look, the size that marks a repository export (default 2 GiB) and the idle limit (default 20 minutes). Without roots it refuses. |
 
 The check interval is unchanged and already configurable: `GET` and `PUT
 /api/v1/butler/check-interval`, from 1 to 1440 minutes.
@@ -134,8 +154,12 @@ Butler event stream.
 1. Butler calls `nebula.supervisor.independent_review` with the goal's session
    and its evidence paths. Evidence cited in the held proposal is added automatically.
 2. Core checks two things. The reviewer model must differ from the goal's model.
-   The reviewer profile must be enabled, allowlisted, and permit sensitive data.
-3. Core sends one tool-free request. It contains:
+   The reviewer profile must be enabled, allowlisted (on a harness: offer the
+   model after **Check**), and permit sensitive data.
+3. Core sends one tool-free request. On a harness profile this is one turn in
+   a new session: an empty scratch directory, every native capability off, no
+   MCP server or Core gateway, every permission request denied, and any tool
+   event ends the review with an error. It contains:
    - the completion criteria;
    - the proposal;
    - the evidence bytes, read only from the evidence roots, bounded and redacted;
@@ -143,7 +167,8 @@ Butler event stream.
 
    Butler's conversation and notes are not included.
 4. The verdict (ACCEPT, ACCEPT_WITH_RESIDUALS or REJECT) is recorded in goal
-   metadata, together with the packet digest and the reviewer identity.
+   metadata, together with the packet digest and the reviewer identity: the
+   provider id or the harness profile id, the model and the review id.
 5. The verdict is applied:
    - ACCEPT completes the goal.
    - REJECT adds the must-dos as a supervisor note and resumes the goal.
@@ -153,14 +178,133 @@ Butler event stream.
 
 ## Enabling (operator steps)
 
-1. Create an Anthropic provider profile allowing `claude-opus-5-5`.
-2. Attach its API key through the browser credential handoff.
-3. Verify the profile's tools.
+1. Create the reviewer runtime: a Claude harness on the host's existing login
+   (see "Running Butler on Claude"), or an Anthropic provider profile allowing
+   `claude-opus-5-5`.
+2. For a provider profile only: attach its API key through the browser
+   credential handoff.
+3. Verify it: **Check** and **Test turn** for a harness, tool verification for
+   a provider.
 4. Optionally, select it as Butler's model with `POST /api/v1/chat/control-assistant/session`.
 5. Set the environment variables above, starting with the host allowlist,
-   private strings, review provider and evidence roots, and leaving
+   private strings, reviewer runtime and evidence roots, and leaving
    `…_ALLOW_SUDO` off.
 6. Set `completion_requires_review=true` on the goals that need independent review.
 7. Deploy through the normal deployer.
 8. Turn on `NEBULA_BUTLER_SUPERVISOR_ENABLED=1`, first with Butler at Watch or
    Steer authority (shadow), then Act.
+
+## Completion gating
+
+- Every review verdict other than ACCEPT (NOT_READY, REJECT,
+  ACCEPT_WITH_RESIDUALS) carries must-dos, stored on the goal. Butler's
+  `complete` and the goal's own `goal.complete` are refused while any is open.
+- Butler cannot approve completion of a goal it steered (goal actions, goal
+  rewrites, Butler notes). Approval must come from Core's independent review,
+  which records its provenance: provider or harness profile, model, review id
+  and packet digest.
+- Goal-written supervisor or reviewer sign-off lines are refused in completion
+  proposals and redacted from review packets.
+- A goal may request closure at most `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY`
+  times per rolling day.
+- A completed goal that a review rejects is reopened in place.
+- Operator routes: `POST /api/v1/chat/sessions/{id}/goal/reopen` and
+  `POST /api/v1/chat/sessions/{id}/goal/must-dos/{item_id}/waive`.
+
+## Notes with release conditions
+
+A Butler note that stops or gates work must carry a `release_condition`:
+`until_time`, `until_path_exists`, `until_work_item`, `until_goal_status` or
+`until_note_superseded`. Core re-evaluates conditions whenever it assembles a
+goal turn, and retires satisfied notes so they stop outranking later guidance.
+
+## Operator action requests
+
+Butler raises a request for something only the operator can do as a
+`Needs you:` Work item with a typed record and an auto-check. It must give
+verification evidence first, a request whose check already passes is refused,
+and an open request for the same action and device is returned instead of a
+duplicate. The periodic check closes requests whose check passes and resumes
+the waiting goal. Open requests appear at the top of the Butler board.
+
+## Running Butler on Claude
+
+Butler, its subagents and the independent reviewer can all run on the Claude
+harness with the host's existing Claude CLI login. No Anthropic API key or
+provider profile is needed.
+
+1. **Sign the CLI in as the Core user.** Core starts the Claude CLI (the copy
+   bundled with the Claude Agent SDK, or the profile's CLI override) as a child
+   process of Core. It runs as the same OS user, with Core's `HOME`. On Linux the
+   login is stored in `$HOME/.claude/.credentials.json`, or in
+   `$CLAUDE_CONFIG_DIR` if Core's service environment sets it. For a systemd
+   user unit, the Core user is the unit's owner; in the container image, it is
+   the image's `nebula` user. The harness profile cannot set a different
+   account folder for Claude. On the Nebula host, as that user and with the
+   same `HOME` (for example `sudo -iu <core-user>`), run `claude auth login`,
+   then `claude auth status`. Turns blank `ANTHROPIC_API_KEY` and every other
+   ambient variable except a small allowlist, so only the stored login is used.
+2. Settings → Agent harnesses → **Add Claude**. Set **Authentication** to
+   *Existing session*, default model `claude-opus-5-5`, and allow sensitive data
+   and tool-result sharing. Leave native **Shell** off. Butler sessions never
+   get the native shell even if the profile enables it, because the Core user
+   may hold host privileges. Bash stays disallowed and the sandbox keeps its
+   network restrictions.
+3. Run **Check**. It runs `claude auth status` the way turns run the CLI. If
+   the CLI is not signed in, Check fails and names the OS user, `HOME` and
+   login location to fix. Then run **Test turn**. A sign-in failure there
+   gives the same explanation.
+4. Reserve Butler:
+
+   ```json
+   POST /api/v1/chat/control-assistant/session
+   {
+     "engagement_id": "<project id>",
+     "backend": "harness",
+     "harness_profile_id": "<Claude harness id>",
+     "model": "claude-opus-5-5",
+     "subagent_harness_profile_id": "<Claude harness id>",
+     "subagent_model": "claude-opus-5-5",
+     "max_active_subagents": 3,
+     "allow_cloud_tool_results": true
+   }
+   ```
+
+   `subagent_harness_profile_id` and `subagent_provider_id` are mutually
+   exclusive, and each needs `subagent_model`. Butler's children run in Butler
+   mode, with Butler's Core tools through the gateway, as control-assistant
+   harness sessions with no native shell. Background checks honor the saved
+   choice. An existing Butler chat is switched with
+   `PATCH /api/v1/chat-sessions/{id}/assistant-config`
+   (`subagent_harness_profile_id`, `subagent_model`, `allow_subagents: true`).
+5. To run the independent reviewer on Claude while goals stay on another model,
+   set `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` to the Claude harness id. Leave
+   `NEBULA_BUTLER_REVIEW_PROVIDER_ID` unset; setting both makes reviews refuse.
+   The reviewer model (default `claude-opus-5-5`) must still differ from the
+   goal's model.
+
+## Stage-based runtime routing
+
+A research goal's main agent can run on a harness profile (for example the
+Claude login above) while its Work stage is a validation-class stage, with its
+subagents on a provider model. Bulk stages stay fully on the provider. The
+operator sets the routes in `NEBULA_GOAL_RUNTIME_ROUTING` (JSON) and turns them
+on with `NEBULA_GOAL_RUNTIME_ROUTING_ENABLED`, which is off by default.
+
+- Routing changes only goals it owns. A goal whose current or pending settings
+  already match its route is recorded as in policy and is not switched again.
+  A goal whose runtime differs, for example from a manual choice, is recorded
+  as out of policy and left alone until an operator or Butler route action
+  (`POST /api/v1/chat/sessions/{id}/goal/runtime-route`,
+  `nebula.supervisor.route_goal_runtime`).
+- A switch is the Assistant settings writer's audited change, and it keeps the
+  goal's MCP servers. It is evaluated at the turn boundary before the goal's
+  next turn and never while a turn runs. Core refuses a harness profile
+  without a verified Check/Test turn.
+- A harness turn that stops at a usage or rate limit runs on the route's
+  fallback runtime. The harness is tried again after a cooldown.
+- The independent reviewer must differ from the goal's current main model and,
+  after routing, from the model family of every main model the goal ran on.
+
+The config shape, turn-boundary rule, fallback and rollout plan are in
+[goal-runtime-routing.md](goal-runtime-routing.md).

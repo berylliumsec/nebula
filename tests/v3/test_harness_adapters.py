@@ -40,6 +40,7 @@ from nebula.v3.harnesses import (
     GrokAcpAdapter,
     GrokAcpConnection,
     HarnessConfigurationError,
+    HarnessEvent,
     HarnessProviderError,
     HarnessSkillInvocation,
     HarnessPermissionDecision,
@@ -1380,7 +1381,7 @@ async def test_grok_connection_keeps_final_answer_before_session_metadata():
                             "sessionUpdate": "agent_message_chunk",
                             "content": {
                                 "type": "text",
-                                "text": "The sibling is apple_security_rnd.",
+                                "text": "The sibling is sibling_repo.",
                             },
                         }
                     },
@@ -1411,10 +1412,10 @@ async def test_grok_connection_keeps_final_answer_before_session_metadata():
         ]
 
         completed = next(event for event in events if event.type == "completed")
-        assert completed.message == "The sibling is apple_security_rnd."
+        assert completed.message == "The sibling is sibling_repo."
         assert any(
             event.type == "message_delta"
-            and event.delta == "The sibling is apple_security_rnd."
+            and event.delta == "The sibling is sibling_repo."
             for event in events
         )
         assert not any(event.stream == "commentary" for event in events)
@@ -1458,7 +1459,12 @@ async def test_claude_probe_offers_stable_model_aliases(monkeypatch):
     health = await ClaudeAgentSdkAdapter().probe(profile, CredentialStore())
 
     assert health.healthy is True
-    assert health.capabilities.models == ["custom-alias", "sonnet", "opus"]
+    assert health.capabilities.models == [
+        "custom-alias",
+        "claude-opus-5-5",
+        "sonnet",
+        "opus",
+    ]
 
 
 async def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
@@ -2880,6 +2886,109 @@ async def test_claude_turn_does_not_scan_workspace(tmp_path, monkeypatch):
         assert not any(event.item_id == "workspace-changes" for event in events)
 
     (await scenario())
+
+
+class TaskStartedMessage:
+    def __init__(self, task_id: str, tool_use_id: str, description: str) -> None:
+        self.task_id = task_id
+        self.tool_use_id = tool_use_id
+        self.description = description
+        self.task_type = "local_bash"
+
+
+class TaskNotificationMessage:
+    def __init__(self, task_id: str, tool_use_id: str, summary: str) -> None:
+        self.task_id = task_id
+        self.tool_use_id = tool_use_id
+        self.status = "completed"
+        self.summary = summary
+        self.output_file = None
+
+
+async def test_claude_long_bash_command_bounds_titles_and_keeps_the_command(
+    tmp_path,
+):
+    """A >1000-char command must not make HarnessEvent invalid (goal pause)."""
+
+    command = "printf '%s\\n' " + " ".join(
+        f"generic-argument-{index:04d}" for index in range(400)
+    )
+    assert len(command) > 4_000
+
+    class LongCommandClient(FakeClaudeClient):
+        async def receive_response(self) -> AsyncIterator[Any]:
+            yield AssistantMessage(
+                [
+                    ToolUseBlock(
+                        "tool-bash",
+                        "Bash",
+                        {"command": command, "run_in_background": True},
+                    )
+                ]
+            )
+            # Claude reports a background shell as a task described by its command.
+            yield TaskStartedMessage("task-bash", "tool-bash", command)
+            yield UserMessage([ToolResultBlock("tool-bash", "started")])
+            yield TaskNotificationMessage("task-bash", "tool-bash", command)
+            yield ResultMessage()
+
+    async def no_permission(_request):
+        raise AssertionError("permission was not expected")
+
+    async def scenario() -> None:
+        connection = ClaudeAgentSdkConnection(
+            LongCommandClient(options=FakeClaudeOptions()),
+            permission_handler=no_permission,
+            sdk=SimpleNamespace(),
+            external_session_id=None,
+            workspace=tmp_path,
+        )
+        events = [event async for event in connection.run_turn("run", model="test")]
+        assert events[-1].type == "completed"
+        started = next(event for event in events if event.type == "tool_started")
+        assert started.payload["arguments"]["command"] == command
+        tasks = [event for event in events if event.item_id == "task-bash"]
+        assert len(tasks) == 2
+        for task in tasks:
+            assert task.title is not None
+            assert len(task.title) == 1_000
+            assert task.title.endswith("…")
+            assert command.startswith(task.title[:-1])
+        assert tasks[0].payload["description"] == command
+        assert len(tasks[1].summary or "") == 4_000
+        assert tasks[1].payload["summary"] == command
+        # The bounded event still serializes and revalidates.
+        assert (
+            HarnessEvent.model_validate(tasks[0].model_dump()).title == tasks[0].title
+        )
+
+    (await scenario())
+
+
+def test_harness_event_bounds_every_display_field_centrally():
+    long_text = "x" * 9_000
+    event = HarnessEvent(
+        type="notice",
+        title=long_text,
+        summary=long_text,
+        tool_name=long_text,
+        operator_detail=long_text,
+        impact=long_text,
+        mode=long_text,
+        payload={"command": long_text},
+    )
+    assert len(event.title or "") == 1_000
+    assert len(event.summary or "") == 4_000
+    assert len(event.tool_name or "") == 1_000
+    assert len(event.operator_detail or "") == 2_048
+    assert len(event.impact or "") == 2_048
+    assert len(event.mode or "") == 100
+    assert event.payload["command"] == long_text
+    # Assignment is validated too (validate_assignment) and is bounded the same way.
+    event.title = long_text
+    assert len(event.title) == 1_000 and event.title.endswith("…")
+    short = HarnessEvent(type="notice", title="  Short  ")
+    assert short.title == "Short"
 
 
 async def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(

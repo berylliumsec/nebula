@@ -156,7 +156,7 @@ class RuntimeSwitchService:
         }
 
     @staticmethod
-    def normalize_metadata(session, metadata, binding):
+    def normalize_metadata(session, metadata, binding, *, preserve_selection=False):
         metadata = dict(metadata)
         metadata.pop("pending_runtime_switch", None)
         backend = binding["backend"]
@@ -169,6 +169,23 @@ class RuntimeSwitchService:
             "model": binding["model"],
         }
         if (
+            session.backend == ChatBackend.HARNESS
+            and binding["backend"] == ChatBackend.PROVIDER
+            and preserve_selection
+        ):
+            # A routed selection names its MCP, hook and subagent choices;
+            # only the harness-only options do not carry over.
+            reset = {
+                "harness_reasoning_effort": None,
+                "harness_service_tier": None,
+                "harness_mode": None,
+                "harness_cyber_access_program": None,
+            }
+            metadata["assistant_config"] = {
+                **metadata.get("assistant_config", {}),
+                **reset,
+            }
+        elif (
             session.backend == ChatBackend.HARNESS
             and binding["backend"] == ChatBackend.PROVIDER
         ):
@@ -288,6 +305,7 @@ class RuntimeSwitchService:
         confirmation_token=None,
         max_output_tokens=None,
         confirmation_revision=None,
+        preserve_selection=False,
     ) -> ChatSession:
         from .chat import ChatConfigurationError, ChatRuntimeSwitchPreflightRequest
 
@@ -307,7 +325,9 @@ class RuntimeSwitchService:
         )
 
         binding = {**binding, "backend": ChatBackend(binding["backend"])}
-        metadata = self.normalize_metadata(session, metadata, binding)
+        metadata = self.normalize_metadata(
+            session, metadata, binding, preserve_selection=preserve_selection
+        )
         selected_session = session.model_copy(update={**binding, "metadata": metadata})
         selected = await chat_assistant_config(self.store, selected_session)
         dependencies = await self.selection_dependencies(session, selected)
@@ -384,6 +404,7 @@ class RuntimeSwitchService:
                     "confirmation_revision": expected_revision,
                     "activation_revision": expected_revision + 1,
                     "max_output_tokens": max_output_tokens,
+                    **({"preserve_selection": True} if preserve_selection else {}),
                 }
                 changes = {
                     "metadata": {**current.metadata, "pending_runtime_switch": desired}
@@ -426,6 +447,31 @@ class RuntimeSwitchService:
             self._pending.discard(session.id)
         return saved
 
+    async def _route_goal(self, session_id: str) -> None:
+        """Goal runtime routing at the boundary before a goal's next turn.
+
+        Every goal dispatch and continuation settles here first, so the stage
+        read now is the one the next turn runs under. It never switches a
+        busy chat and does nothing while routing is off.
+        """
+
+        from .diagnostics import record_caught_exception
+        from .goal_runtime_routing import evaluate_goal_runtime_route
+
+        try:
+            await evaluate_goal_runtime_route(self.store, session_id)
+        except NotFoundError:  # diagnostic-expected: settle reports the missing chat.
+            return
+        except Exception as exc:
+            # Routing never blocks a turn: the goal keeps its runtime.
+            record_caught_exception(
+                "chat",
+                "chat.goal.runtime_routing_failed",
+                "Goal runtime routing could not be evaluated; the goal keeps its runtime.",
+                exc,
+                stage="goal-runtime-routing",
+            )
+
     async def _review(self, session, pending, reason):
         pending = {**pending, "status": "needs_review", "reason": reason}
         try:
@@ -446,6 +492,7 @@ class RuntimeSwitchService:
     ) -> ChatSession | None:
         from .chat import ChatConfigurationError
 
+        await self._route_goal(session_id)
         try:
             session = await self.store.get(ChatSession, session_id)
         except NotFoundError:  # diagnostic-expected: deleting a conversation also discards its pending switch.
@@ -515,6 +562,7 @@ class RuntimeSwitchService:
                 confirmation_revision=pending.get("confirmation_revision")
                 if session.revision == pending.get("activation_revision")
                 else None,
+                preserve_selection=pending.get("preserve_selection") is True,
             )
             return None if saved.metadata.get("pending_runtime_switch") else saved
         except ConflictError:  # diagnostic-expected: another turn or runtime selection won the revision claim.

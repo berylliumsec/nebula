@@ -17,9 +17,14 @@ if TYPE_CHECKING:
 from jsonschema import Draft202012Validator, ValidationError
 
 from .butler_instructions import read_butler_instructions
+from .butler_sessions import DEFAULT_RUNTIME_FOCUS, focus_runtime_id
+from .chat_assistant_config import chat_assistant_config
 from .harnesses import HarnessConfigurationError
+from .storage import NotFoundError
 from .domain import (
     ButlerAuthorityPolicy,
+    ButlerFocusRuntime,
+    ChatBackend,
     ButlerRecoveryCase,
     ChatGoal,
     ChatGoalStatus,
@@ -432,6 +437,128 @@ class ButlerGlobalActions:
             return {**started, "created": True, "started": True}
         return {**created, "created": True}
 
+    async def _butler_runtime(
+        self,
+    ) -> tuple[
+        ChatSession | None, ChatBackend | None, str | None, str | None, str | None
+    ]:
+        """Butler's reserved runtime: its newest main chat, else its shared default.
+
+        Returns the chat (if any), backend, profile id, model and harness
+        reasoning effort. All ``None`` when nothing is configured.
+        """
+
+        case = await self._case()
+        butler_sessions = [
+            session
+            async for session in self.store.iter_readable_entities(
+                ChatSession, engagement_id=case.engagement_id
+            )
+            if session.metadata.get("control_assistant") is True
+            and not session.metadata.get("archived_at")
+            and not session.parent_session_id
+        ]
+        if butler_sessions:
+            session = max(butler_sessions, key=lambda item: item.created_at)
+            try:
+                config = await chat_assistant_config(
+                    self.store, session, butler_default=False
+                )
+            except NotFoundError:
+                # diagnostic-expected: a chat whose harness binding is gone
+                # names no runtime; the shared default (or Codex) applies.
+                config = None
+            if config is not None:
+                profile_id, model = config["profile_id"], config["model"]
+                if isinstance(profile_id, str) and isinstance(model, str):
+                    harness = config["backend"] == ChatBackend.HARNESS.value
+                    return (
+                        session,
+                        ChatBackend(config["backend"]),
+                        profile_id,
+                        model,
+                        config["harness_reasoning_effort"] if harness else None,
+                    )
+        for focus in (case.engagement_id, DEFAULT_RUNTIME_FOCUS):
+            runtime = await self.store.find_entity(
+                ButlerFocusRuntime, "id", focus_runtime_id(focus)
+            )
+            if runtime is not None:
+                harness = runtime.backend == ChatBackend.HARNESS
+                return (
+                    None,
+                    runtime.backend,
+                    runtime.profile_id,
+                    runtime.model,
+                    runtime.harness_reasoning_effort if harness else None,
+                )
+        return None, None, None, None, None
+
+    async def _recovery_route(self, project_id: str) -> dict[str, Any]:
+        """The recovery goal's harness runtime.
+
+        A recovery goal runs on Butler's own reserved harness and model (for
+        example Claude on ``claude-opus-5-5``). A Codex Butler, a provider
+        Butler, or no Butler runtime at all keeps the Codex ``gpt-6-sol``
+        route with max effort and Daybreak Blue, ranked by measured capacity.
+        """
+
+        _, backend, profile_id, model, effort = await self._butler_runtime()
+        if backend == ChatBackend.HARNESS and profile_id and model:
+            profile = await self.store.get(HarnessProfile, profile_id)
+            if profile.kind != HarnessKind.CODEX_APP_SERVER:
+                if not profile.enabled or model not in profile.capabilities.models:
+                    raise ValueError(
+                        f"Butler's harness {profile.name!r} no longer offers {model!r}; "
+                        "choose an enabled harness model in Butler's Assistant settings"
+                    )
+                if not profile.privacy.local_only and not (
+                    profile.privacy.permits_sensitive_data
+                    and profile.privacy.auto_share_tool_results
+                ):
+                    raise ValueError(
+                        "Butler's harness is not authorized for unattended project "
+                        "tool results"
+                    )
+                try:
+                    await self.work.harness._validate_harness_privacy(
+                        project_id,
+                        profile,
+                        [],
+                        allow_remote_mcp=profile.privacy.auto_share_tool_results,
+                        uses_gateway_tools=True,
+                    )
+                except HarnessConfigurationError as error:
+                    raise ValueError(
+                        f"Butler's harness cannot work in this project: {error}"
+                    ) from error
+                option = next(
+                    (
+                        item
+                        for item in profile.capabilities.model_options
+                        if item.model == model
+                    ),
+                    None,
+                )
+                advertised = (
+                    {item.id for item in option.reasoning_efforts} if option else set()
+                )
+                return {
+                    "profile": profile,
+                    "model": model,
+                    "harness_reasoning_effort": (
+                        effort if effort and effort in advertised else None
+                    ),
+                    "harness_cyber_access_program": None,
+                }
+        profile = await self._recovery_harness(project_id)
+        return {
+            "profile": profile,
+            "model": "gpt-6-sol",
+            "harness_reasoning_effort": "max",
+            "harness_cyber_access_program": "daybreakBlue",
+        }
+
     async def _recovery_harness(self, project_id: str) -> HarnessProfile:
         """Select an authorized Codex route with measured usage or credits."""
 
@@ -577,7 +704,7 @@ class ButlerGlobalActions:
                     "source_goal_id": source.id,
                 }
             return result
-        profile = await self._recovery_harness(project_id)
+        route = await self._recovery_route(project_id)
         if not isinstance(arguments.get("plan"), list) or not arguments["plan"]:
             raise ValueError(
                 "Record the main recovery agent's plan before starting its goal"
@@ -597,10 +724,16 @@ class ButlerGlobalActions:
         goal_args.update(
             {
                 "backend": "harness",
-                "profile_id": profile.id,
-                "model": "gpt-6-sol",
-                "harness_reasoning_effort": "max",
-                "harness_cyber_access_program": "daybreakBlue",
+                "profile_id": route["profile"].id,
+                "model": route["model"],
+                **{
+                    key: route[key]
+                    for key in (
+                        "harness_reasoning_effort",
+                        "harness_cyber_access_program",
+                    )
+                    if route[key] is not None
+                },
                 "tools_enabled": True,
                 "planning_enabled": False,
                 "butler_recovery_case_id": case.id,
@@ -1062,7 +1195,7 @@ class ButlerGlobalActions:
             ),
             (
                 "nebula.global.create_recovery_goal",
-                "Create or find one recovery goal for a paused or blocked main goal. Core links its report to this scheduled check and requires an authorized Codex gpt-6-sol route with max effort and Daybreak Blue. Use this instead of create_goal for recovery work.",
+                "Create or find one recovery goal for a paused or blocked main goal. Core links its report to this scheduled check and runs it on Butler's own reserved harness and model; a Codex (or provider) Butler uses an authorized Codex gpt-6-sol route with max effort and Daybreak Blue. Use this instead of create_goal for recovery work.",
                 {
                     "type": "object",
                     "additionalProperties": False,

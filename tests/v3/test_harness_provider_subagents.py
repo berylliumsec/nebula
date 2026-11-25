@@ -1541,3 +1541,146 @@ async def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path)
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def test_reports_continue_the_goal_on_the_chats_current_harness_runtime(
+    tmp_path,
+):
+    """A chat switched from a provider to a harness (with provider subagents)
+    continues its goal on the harness when a report arrives. The subagent was
+    started by the provider turn before the switch, so its record still says
+    ``parent_backend=provider``; continuing on that provider with the harness's
+    model used to fail (model not allowed by provider) and pause the goal."""
+
+    from nebula.v3.domain import ChatGoal, ChatGoalStatus, ChatTurnStatus
+
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+
+        async def reply(connection: ScriptedConnection, prompt: str) -> str:
+            del connection, prompt
+            return "Ready."
+
+        adapter.script = reply
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Start.")
+        await (await runtime.start_chat_turn(turn.id))
+        parent_chat = await store.get(ChatSession, parent_chat.id)
+        assert parent_chat.backend == ChatBackend.HARNESS
+        assert parent_chat.provider_profile_id is None
+        goal = await store.create(
+            ChatGoal(
+                engagement_id=project.id,
+                session_id=parent_chat.id,
+                objective="Finish the synthetic objective.",
+                completion_criteria=["The synthetic criterion holds."],
+                status=ChatGoalStatus.RUNNING,
+            )
+        )
+        # The provider turn that started the subagent, before the switch.
+        provider_turn = await store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id=parent_chat.id,
+                goal_id=goal.id,
+                backend=ChatBackend.PROVIDER,
+                provider_profile_id="provider",
+                model="model-a",
+                status=ChatTurnStatus.COMPLETE,
+            )
+        )
+        record = await store.create(
+            ChatSubagent(
+                engagement_id=project.id,
+                parent_session_id=parent_chat.id,
+                parent_turn_id=provider_turn.id,
+                parent_backend=ChatBackend.PROVIDER,
+                child_session_id="child-session",
+                provider_profile_id="provider",
+                model="model-a",
+                name="Synthetic child",
+                task="Report one synthetic fact.",
+                status=ChatSubagentStatus.COMPLETED,
+                finished_at=provider_turn.created_at,
+                result="One synthetic fact.",
+            )
+        )
+        dispatched: list[tuple[str, str]] = []
+
+        async def dispatch(session_id: str, instruction: str, **_: object) -> None:
+            dispatched.append((session_id, instruction))
+
+        runtime.dispatch_running_goal = dispatch  # type: ignore[method-assign]
+        await chat.subagents._continue_goal(record)
+
+        assert dispatched and dispatched[0][0] == parent_chat.id
+        saved = await store.get(ChatGoal, goal.id)
+        assert saved.status == ChatGoalStatus.RUNNING, saved.blocked_reason
+        assert saved.blocked_reason is None
+        # No provider turn was started from the stale binding.
+        provider_turns = [
+            item
+            for item in await store.list_entities(ChatTurn, limit=100)
+            if item.session_id == parent_chat.id
+            and item.backend == ChatBackend.PROVIDER
+        ]
+        assert [item.id for item in provider_turns] == [provider_turn.id]
+        # The report is held for the harness's next prompt, not marked as read
+        # from a provider history the harness never sees.
+        assert (await chat.subagents._parent_backend_now(record)) == ChatBackend.HARNESS
+        await chat.subagents._post_result(record)
+        posted = await store.get(ChatSubagent, record.id)
+        assert posted.result_message_id is not None
+        assert posted.reported_at is None
+        assert posted.parent_backend == ChatBackend.HARNESS
+        assert not chat.subagents._reported(posted)
+        await chat.shutdown()
+
+    (await scenario())
+
+
+async def test_retry_of_a_harness_turn_follows_the_chats_current_runtime(tmp_path):
+    """A failed harness turn is not retried on the harness after the chat moved
+    to a provider: that rebound the chat to the old harness, undoing the switch."""
+
+    from nebula.v3.harnesses import HarnessStateError
+
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = await _setup(tmp_path)
+
+        async def reply(connection: ScriptedConnection, prompt: str) -> str:
+            del connection, prompt
+            return "Ready."
+
+        adapter.script = reply
+        parent_chat, _, turn = await _prepare(runtime, project, harness, "Start.")
+        await (await runtime.start_chat_turn(turn.id))
+        turn = await store.get(HarnessTurn, turn.id)
+        turn = await store.update(
+            HarnessTurn,
+            turn.id,
+            {"status": HarnessTurnStatus.FAILED},
+            expected_revision=turn.revision,
+        )
+        parent_chat = await store.get(ChatSession, parent_chat.id)
+        # The operator switched the chat to a provider model afterwards.
+        switched = await store.update(
+            ChatSession,
+            parent_chat.id,
+            {
+                "backend": ChatBackend.PROVIDER,
+                "provider_profile_id": "provider",
+                "harness_profile_id": None,
+                "harness_session_id": None,
+                "model": "model-a",
+            },
+            expected_revision=parent_chat.revision,
+        )
+        with pytest.raises(HarnessStateError, match="provider model"):
+            await runtime.retry_turn(turn.id)
+        after = await store.get(ChatSession, parent_chat.id)
+        assert after.backend == ChatBackend.PROVIDER
+        assert after.provider_profile_id == "provider"
+        assert after.revision == switched.revision
+        await chat.shutdown()
+
+    (await scenario())
