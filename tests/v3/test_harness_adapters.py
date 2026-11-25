@@ -1380,7 +1380,7 @@ async def test_grok_connection_keeps_final_answer_before_session_metadata():
                             "sessionUpdate": "agent_message_chunk",
                             "content": {
                                 "type": "text",
-                                "text": "The sibling is apple_security_rnd.",
+                                "text": "The sibling is sibling_repo.",
                             },
                         }
                     },
@@ -1411,10 +1411,10 @@ async def test_grok_connection_keeps_final_answer_before_session_metadata():
         ]
 
         completed = next(event for event in events if event.type == "completed")
-        assert completed.message == "The sibling is apple_security_rnd."
+        assert completed.message == "The sibling is sibling_repo."
         assert any(
             event.type == "message_delta"
-            and event.delta == "The sibling is apple_security_rnd."
+            and event.delta == "The sibling is sibling_repo."
             for event in events
         )
         assert not any(event.stream == "commentary" for event in events)
@@ -1458,7 +1458,12 @@ async def test_claude_probe_offers_stable_model_aliases(monkeypatch):
     health = await ClaudeAgentSdkAdapter().probe(profile, CredentialStore())
 
     assert health.healthy is True
-    assert health.capabilities.models == ["custom-alias", "sonnet", "opus"]
+    assert health.capabilities.models == [
+        "custom-alias",
+        "claude-opus-5-5",
+        "sonnet",
+        "opus",
+    ]
 
 
 async def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
