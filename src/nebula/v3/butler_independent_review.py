@@ -40,6 +40,7 @@ from .butler_supervisor_policy import (
     redact,
     write_audit,
 )
+from .diagnostics import record_caught_exception
 from .domain import (
     GOAL_COMPLETION_PROPOSAL_KEY,
     ChatGoal,
@@ -127,7 +128,17 @@ def _ceiling_policy(policy: SupervisorPolicy) -> str:
         return DEFAULT_CEILING_POLICY
     try:
         return Path(policy.ceiling_policy_path).read_text(encoding="utf-8")[:20_000]
-    except OSError:
+    except OSError as exc:
+        # The operator configured a policy file Core cannot read: record it so
+        # the misconfiguration is visible, and review with the generic rule.
+        record_caught_exception(
+            "butler",
+            "butler.independent_review.ceiling_policy_unreadable",
+            "Butler's configured ceiling policy file could not be read; the "
+            "independent review used the generic rule.",
+            exc,
+            stage="independent-review",
+        )
         return DEFAULT_CEILING_POLICY
 
 
