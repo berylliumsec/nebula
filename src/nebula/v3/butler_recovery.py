@@ -1759,12 +1759,30 @@ class ButlerRecoveryService:
     async def _update_case(
         self, case: ButlerRecoveryCase, **changes: Any
     ) -> ButlerRecoveryCase:
-        return await self.store.update(
+        updated = await self.store.update(
             ButlerRecoveryCase,
             case.id,
             changes,
             expected_revision=case.revision,
         )
+        if updated.finished_at is None or updated.summary_post is not None:
+            return updated
+        from .butler_check_summary import TERMINAL_STATUSES, publish_check_summary
+
+        if updated.status not in TERMINAL_STATUSES:
+            return updated
+        try:
+            return await publish_check_summary(self.store, updated.id, wake=self.wake)
+        except Exception as exc:
+            # The case outcome stands; the next project pass posts the summary.
+            record_caught_exception(
+                "butler",
+                "butler.check_summary.publish_failed",
+                "A Butler check summary was not posted; Core retries on the next pass.",
+                exc,
+                stage="check-summary",
+            )
+            return await self.store.get(ButlerRecoveryCase, updated.id)
 
     async def _claim_case(
         self, project_id: str, worker_id: str
@@ -2246,6 +2264,15 @@ class ButlerRecoveryService:
         )
 
     async def process_project(self, project_id: str, worker_id: str) -> None:
+        from .butler_check_summary import (
+            deliver_check_summaries,
+            publish_recent_check_summaries,
+        )
+
+        # Finished checks reach the main Butler chat even when a post failed
+        # or the target chat's project is owned here.
+        (await publish_recent_check_summaries(self.store, project_id, wake=self.wake))
+        (await deliver_check_summaries(self.store, project_id, wake=self.wake))
         # Reattach the durable investigation before considering crash replay.
         # Chat's normal restart recovery owns resuming its exact model turn.
         if self.agent is not None and hasattr(self.agent, "resume"):
@@ -2582,6 +2609,7 @@ class ButlerRecoveryService:
                 dialogue_review_retries=dialogue_review_retries,
                 model_turn_id=turn_id,
                 next_check_at=next_check,
+                check_summary=(summary or "")[:20_000],
                 finished_at=utc_now()
                 if status not in {"verifying", "observed"}
                 else None,

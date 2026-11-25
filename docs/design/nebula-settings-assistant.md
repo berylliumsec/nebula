@@ -653,6 +653,24 @@ Interactive Butler can also discover `butler-check-interval`, read its current
 value and revision through the Settings gateway, and save a requested interval
 with that revision in the PUT body. Core readback must confirm the requested
 minutes; a conflict requires a fresh read before retrying.
+Each Butler check also runs in its own child chat ("Butler check · …"). When a
+check finishes, Core posts its final summary once to one main Butler chat, as
+a Butler message that names the check (time, Nebula-wide or project scope, the
+project it ran in) and links to the child chat. The message starts no Butler
+turn and is not operator input. A Nebula-wide check always posts; a project or
+event-triggered check posts when it has a summary or a decision. A check that
+never started Butler posts nothing, and neither does a check whose result is
+"No change": Core saw no change, guidance, recovery goal, or main-agent
+dialogue, the check resolved, and the first line of Butler's reply begins with
+"No change". By default the summary goes to the Butler chat of the project that
+hosts the Nebula-wide check, then the most recently used Butler chat, then the
+check's own project Butler chat. The operator can choose another project Butler
+chat in Settings → Automation → Butler check interval ("Post check summaries
+to"), and Butler can read and change the same choice with
+`summary_target: {project_id, session_id}` (or `null` for the default) in the
+`butler-check-interval` PUT body with the current revision. A chosen chat that
+is deleted or archived falls back to the next default, and Settings shows the
+last fallback and its reason.
 Core persists the interval with a revision guard, reads it for each due check,
 and reports the next due time from the last saved check. Reducing the interval
 can make the next check due immediately. It can run with no running goals. An Act

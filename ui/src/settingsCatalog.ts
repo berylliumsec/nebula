@@ -45,11 +45,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-check-interval",
     label: "Butler check interval",
-    description: "Choose how often Butler checks work across projects; five minutes by default",
+    description: "Choose how often Butler checks work across projects, five minutes by default, and which Butler chat receives each check's summary",
     category: "Automation",
     scope: "Workspace",
     target: "butler-check-interval-settings",
-    keywords: ["butler", "check", "interval", "frequency", "schedule", "scheduled", "5 minutes", "five minutes", "idle projects", "periodic"],
+    keywords: ["butler", "check", "interval", "frequency", "schedule", "scheduled", "5 minutes", "five minutes", "idle projects", "periodic", "check summary", "summary chat", "main butler chat", "no change"],
   },
   {
     id: "settings.butler-effort",

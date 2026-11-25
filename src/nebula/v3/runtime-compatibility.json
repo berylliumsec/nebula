@@ -1,7 +1,7 @@
 {
   "format": "nebula.runtime-compatibility/v1",
   "migration_tree_sha256": "228e441e37d6bf1478ce4a561e24a031150236b2158d9c60b3daadfb4ef7d2cb",
-  "entity_fields_sha256": "1e4fd233a38442c84ea51a2d967404b96bf9628a74a6abc70df08549a3e4838a",
+  "entity_fields_sha256": "223a81513d3b68711ebe4982f82c5dc325303ef66cc0290d9492d0fd56d8580f",
   "entity_fields_tolerant_baseline_sha256": "6e3a99c5633c1c95ba21104250205d4dddc507be09a34e4dadd22645e1156922",
   "manifest": {
     "schema_family": 5,

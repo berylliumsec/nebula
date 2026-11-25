@@ -3858,6 +3858,16 @@ class ButlerGlobalState(Entity):
     check_interval_minutes: int = Field(default=5, ge=1, le=1440)
     last_periodic_at: datetime | None = None
     last_project_id: str | None = Field(default=None, max_length=200)
+    # The Butler chat that receives each finished check's summary; unset uses
+    # the chat of the project hosting the Nebula-wide check. See
+    # butler_check_summary.py.
+    check_summary_target_project_id: str | None = Field(default=None, max_length=200)
+    check_summary_target_session_id: str | None = Field(default=None, max_length=200)
+    check_summary_last_fallback: dict[str, Any] | None = None
+    # Summaries waiting for the worker that owns their target chat's project.
+    check_summary_outbox: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=50
+    )
 
 
 class ButlerFocusRuntime(Entity):
@@ -4160,6 +4170,11 @@ class ButlerRecoveryCase(Entity):
     next_check_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    # Butler's final reply, kept for the main Butler chat's check summary.
+    check_summary: str = Field(default="", max_length=20_000)
+    # Set once: whether this check's summary was queued for the main Butler
+    # chat or skipped, and why.
+    summary_post: dict[str, Any] | None = None
 
 
 class ButlerAgentReport(Entity):
