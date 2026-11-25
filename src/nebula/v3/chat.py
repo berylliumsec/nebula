@@ -7369,7 +7369,13 @@ class ChatService:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
             instructions += _goal_instructions(goal)
-            goal_progress = _goal_progress_block(goal)
+            # Supervisor notes whose release condition now holds are retired
+            # before the turn hears them (butler_note_release).
+            from .butler_note_release import retire_released_notes
+
+            goal_progress = _goal_progress_block(
+                await retire_released_notes(self.store, goal)
+            )
             instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = (
             None if side_chat else (await self._project_instructions(engagement_id))
