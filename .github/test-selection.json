@@ -1,5 +1,5 @@
 {
-  "change_digest": "874d1041a809b0f4718e648a2182d43887b7756001e34a62bf48d843cbd0ba37",
+  "change_digest": "b6e563e29513e42546936651c947aea8a2e268fa21ddd4fc9b20086756820f7c",
   "reviewed_by": "Claude: Claude harness account folders",
   "reason": "Per-profile account folders for the Claude harness, like Codex/Grok. A claude_agent_sdk profile with home_directory runs the Claude CLI with CLAUDE_CONFIG_DIR=<folder> for turns (ClaudeAgentOptions env), Check (probe and the `claude auth status --json` subprocess), Test turn (harness_diagnostics opens through the same adapter) and user skills/settings (setting_sources=user reads CLAUDE_CONFIG_DIR); the env is built per call, never via os.environ. A missing folder raises the shared 'Account folder is unavailable on the Nebula host' error on Check and turns. Signed-out messages name the profile folder and `CLAUDE_CONFIG_DIR=<folder> claude login` (harnesses, harness_diagnostics). The domain validator accepts home_directory for managed Claude profiles (domain). Without home_directory the env construction is byte-identical. The harness settings form shows the Account folder for Claude with its login command (HarnessSettings UI). Docs: butler-supervisor-powers Claude section, harness-account-homes and the settings-assistant Claude row; product knowledge rebuilt. Python selects the new suite, the existing Claude harness/adapter/turn suites for harnesses, test_harness_test_turn_reason for harness_diagnostics, test_domain plus the two account-home domain tests in test_harnesses for domain, and the product-knowledge digest and Claude/Butler doc rows; Frontend selects the harness settings tests.",
   "exclusions": "test_harnesses.py is selected only by its two account-home validation node ids: ::test_knowledge_access_change_refreshes_fixed_gateway_catalog and ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail on unmodified main. test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI API call changed, so the Butler workflow inventory is unchanged (registry check passes without --write-inventory). No live Claude CLI or vendor login: the SDK and CLI are fakes. No native or Playwright change. No full-suite approval.",
@@ -26,7 +26,8 @@
     "tests/v3/test_harnesses.py::test_remote_endpoint_rejects_local_account_home",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
     "tests/v3/test_product_knowledge.py::test_product_help_explains_adding_a_claude_harness",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers"
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_claude_account_folders"
   ],
   "frontend": [
     "ui/src/components/HarnessSettings.test.tsx"

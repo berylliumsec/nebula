@@ -352,14 +352,3 @@ async def test_two_profiles_run_concurrently_with_their_own_folders(
     assert results == [True, True]
     for folder in folders:
         assert f'"dir": "{folder}"' in (folder / "status.json").read_text()
-
-
-def test_product_help_explains_claude_account_folders(monkeypatch):
-    from nebula.v3.product_knowledge import search_product_knowledge
-
-    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
-    matches = search_product_knowledge(
-        "separate Claude account folder CLAUDE_CONFIG_DIR claude login"
-    )
-    text = "\n".join(str(item["text"]) for item in matches)
-    assert "CLAUDE_CONFIG_DIR=<folder> claude login" in text
