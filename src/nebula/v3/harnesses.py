@@ -97,6 +97,7 @@ from .project_hold_gate import active_hold, held_detail, is_held
 from .recovery_markers import (
     GOAL_PROVIDER_RETRY,
     HARNESS_QUEUED_CORE_RESTART_PAUSE,
+    HARNESS_RUNTIME_STOP,
     OPERATOR_RECOVERY_STOP,
     TURN_GOAL_AUTO_RETRY,
     harness_stop_cause,
@@ -10220,6 +10221,13 @@ class HarnessRuntimeService:
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
                 "error": f"{stop.subject} while the harness outcome was uncertain",
+                # The stop is now recorded in the error; a stale mark must not
+                # describe a later Core restart.
+                "metadata": {
+                    key: value
+                    for key, value in turn.metadata.items()
+                    if key != HARNESS_RUNTIME_STOP
+                },
             },
             expected_revision=turn.revision,
         )
@@ -10292,7 +10300,14 @@ class HarnessRuntimeService:
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
                 "error": error,
-                "metadata": {**turn.metadata, "interrupted_reason": reason},
+                "metadata": {
+                    **{
+                        key: value
+                        for key, value in turn.metadata.items()
+                        if key != HARNESS_RUNTIME_STOP
+                    },
+                    "interrupted_reason": reason,
+                },
             },
             expected_revision=turn.revision,
         )
