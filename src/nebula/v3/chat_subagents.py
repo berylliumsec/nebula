@@ -67,6 +67,7 @@ from typing import (
 )
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from .deployment_protocol import BUTLER_HOME_PROJECT
 from .diagnostics import create_diagnostic_task, record_caught_exception
 from .chat_snapshot_parts import resolve_request_snapshot
 from .environments import enabled_snapshot_ssh_ids
@@ -2180,12 +2181,14 @@ class SubagentService:
                 rule="subagents.runtime_model",
             )
         # Butler delegates its own Core work, so its children run in Butler
-        # mode. Only a provider turn carries Butler's Core tools.
+        # mode with Butler's Core tools (#1140). A harness child is a Butler
+        # control-assistant harness session: its Core tools come through the
+        # gateway, it never has the vendor's native shell, and Butler's own
+        # project gives it no workspace or command runtime.
         butler_child = parent_session.metadata.get("control_assistant") is True
         if butler_child and harness_id:
-            raise ToolNotPermitted(
-                "Butler subagents run on a provider model so they keep Butler's Core tools",
-                rule="subagents.runtime_model",
+            tools_enabled = (
+                tools_enabled and parent_session.engagement_id != BUTLER_HOME_PROJECT
             )
         if harness_id:
             (
@@ -2268,6 +2271,7 @@ class SubagentService:
                     mcp_server_ids=mcp_server_ids,
                     reasoning_effort=effort,
                     tools_enabled=tools_enabled,
+                    control_assistant=butler_child,
                 )
             )
             if harness_id and self.harness_runtime is not None
@@ -2365,6 +2369,7 @@ class SubagentService:
                     ssh_environment_ids=(
                         await self._ssh_environment_ids(record, parent_turn)
                     ),
+                    control_assistant=butler_child,
                 )
                 child_turn_id = child_turn.id
                 record = await self.store.update(

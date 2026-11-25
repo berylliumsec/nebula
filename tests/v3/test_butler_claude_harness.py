@@ -315,7 +315,7 @@ async def test_reservation_refuses_unverified_or_unlisted_subagent_models(tmp_pa
             store, _runtime(store, tmp_path), request(unverified.id, "other-model")
         )
     assert await store.list_entities(ChatSession, engagement_id=project.id) == []
-    with pytest.raises(ValueError, match="both a provider and a model"):
+    with pytest.raises(ValueError, match="both a runtime and a model"):
         ButlerSessionReservation(
             engagement_id=project.id,
             backend=ChatBackend.HARNESS,

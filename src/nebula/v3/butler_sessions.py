@@ -57,9 +57,14 @@ class ButlerSessionReservation(NebulaModel):
         Literal["automatic", "standard", "daybreakBlue", "daybreakRed"] | None
     ) = None
     allow_cloud_tool_results: bool = False
-    # A harness Butler's subagents run on a provider model (#1140): the
-    # main agent on ``harness_profile_id``, its children on this provider.
+    # A harness Butler's subagents: the main agent on ``harness_profile_id``,
+    # its children on a provider model or on a harness profile (one of the
+    # two). Either way they run in Butler mode with Butler's Core tools
+    # (#1140); a harness child never gets the vendor's native shell.
     subagent_provider_id: str | None = Field(default=None, min_length=1, max_length=200)
+    subagent_harness_profile_id: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
     subagent_model: str | None = Field(default=None, min_length=1, max_length=500)
     max_active_subagents: int | None = Field(default=None, ge=1, le=100)
     # Butler mode: start a separate Butler conversation that runs alongside
@@ -83,16 +88,25 @@ class ButlerSessionReservation(NebulaModel):
                 raise ValueError(
                     "provider Butler sessions cannot select harness options"
                 )
-            if self.subagent_provider_id or self.subagent_model:
+            if (
+                self.subagent_provider_id
+                or self.subagent_harness_profile_id
+                or self.subagent_model
+            ):
                 raise ValueError(
                     "provider Butler sessions use Assistant settings for subagents"
                 )
         elif not self.harness_profile_id or self.provider_id:
             raise ValueError("harness Butler sessions require only harness_profile_id")
-        if bool(self.subagent_provider_id) != bool(self.subagent_model):
-            raise ValueError("Butler subagents need both a provider and a model")
-        if self.max_active_subagents is not None and not self.subagent_provider_id:
-            raise ValueError("a subagent limit needs a subagent provider")
+        if self.subagent_provider_id and self.subagent_harness_profile_id:
+            raise ValueError(
+                "choose one Butler subagent runtime: a provider or a harness profile"
+            )
+        child_runtime = self.subagent_provider_id or self.subagent_harness_profile_id
+        if bool(child_runtime) != bool(self.subagent_model):
+            raise ValueError("Butler subagents need both a runtime and a model")
+        if self.max_active_subagents is not None and not child_runtime:
+            raise ValueError("a subagent limit needs a subagent runtime")
         if self.title is not None and not self.thread:
             raise ValueError("only a Butler thread takes a title")
         if self.focus is not None and self.engagement_id != BUTLER_HOME_PROJECT:
@@ -340,7 +354,9 @@ async def _reserve_butler_session(
                         f"{focused.name} keeps its data on local models; "
                         "choose a local harness for Butler."
                     )
-            subagent_metadata = await _provider_subagent_metadata(store, request)
+            subagent_metadata = await _subagent_metadata(
+                store, harness_runtime, request
+            )
             session = await harness_runtime.create_session(
                 engagement_id=request.engagement_id,
                 profile_id=harness_profile.id,
@@ -383,33 +399,67 @@ async def _reserve_butler_session(
         return chat
 
 
-async def _provider_subagent_metadata(
-    store: NebulaStore, request: ButlerSessionReservation
+async def _subagent_metadata(
+    store: NebulaStore,
+    harness_runtime: HarnessRuntimeService,
+    request: ButlerSessionReservation,
 ) -> dict[str, object]:
-    """The saved provider-subagent choice for a new harness Butler chat.
+    """The saved subagent choice for a new harness Butler chat.
 
-    Checked as Assistant settings check it (enabled provider, listed model)
-    plus the tool check the subagent runtime requires before a turn uses it,
-    so a reservation never saves a choice every turn would then skip.
+    Checked as Assistant settings and the subagent runtime check it before a
+    turn uses it (enabled runtime, listed model, tool check or project-data
+    permission), so a reservation never saves a choice every turn would then
+    skip.
     """
 
-    if not request.subagent_provider_id or not request.subagent_model:
-        return {}
-    provider = await store.get(ProviderProfile, request.subagent_provider_id)
     model = request.subagent_model
-    if not provider.enabled or model not in provider.model_allowlist:
-        raise ChatConfigurationError(
-            "choose an enabled subagent provider and one of its listed models"
+    if not model:
+        return {}
+    child: dict[str, object]
+    if request.subagent_harness_profile_id:
+        try:
+            harness = await store.get(
+                HarnessProfile, request.subagent_harness_profile_id
+            )
+        except NotFoundError as exc:
+            raise ChatConfigurationError(
+                f"subagent harness {request.subagent_harness_profile_id!r} does not exist"
+            ) from exc
+        if not harness.enabled or model not in harness.capabilities.models:
+            raise ChatConfigurationError(
+                "choose an enabled subagent harness and a model it advertises; "
+                "run Check on the harness first"
+            )
+        if (
+            not harness.privacy.local_only
+            and not harness.privacy.permits_sensitive_data
+        ):
+            raise ChatConfigurationError(
+                "this subagent harness does not permit project data"
+            )
+        (
+            await harness_runtime._validate_harness_privacy(
+                request.engagement_id, harness, [], allow_remote_mcp=False
+            )
         )
-    if not provider.tools_verified_for(model):
-        raise ChatConfigurationError(
-            f"subagent model {model!r} has not passed the tool check; verify it "
-            "before using it for Butler's subagents"
-        )
+        child = {"harness_profile_id": harness.id, "model": model}
+    elif request.subagent_provider_id:
+        provider = await store.get(ProviderProfile, request.subagent_provider_id)
+        if not provider.enabled or model not in provider.model_allowlist:
+            raise ChatConfigurationError(
+                "choose an enabled subagent provider and one of its listed models"
+            )
+        if not provider.tools_verified_for(model):
+            raise ChatConfigurationError(
+                f"subagent model {model!r} has not passed the tool check; verify it "
+                "before using it for Butler's subagents"
+            )
+        child = {"provider_profile_id": provider.id, "model": model}
+    else:
+        return {}
     return {
         "provider_subagent": {
-            "provider_profile_id": provider.id,
-            "model": model,
+            **child,
             **(
                 {"max_active": request.max_active_subagents}
                 if request.max_active_subagents is not None

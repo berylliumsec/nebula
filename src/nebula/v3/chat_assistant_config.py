@@ -265,12 +265,6 @@ async def validate_chat_assistant_selection(
         )
         for hook_id in selected["hook_ids"]:
             snapshot_native_hook(hook_id, catalog)
-    if (
-        selected["allow_subagents"]
-        and selected["subagent_harness_profile_id"]
-        and session.metadata.get("control_assistant") is True
-    ):
-        raise ValueError("Butler subagents need a provider model")
     if selected["allow_subagents"] and (
         backend == "harness"
         or selected["subagent_provider_id"]

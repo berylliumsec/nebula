@@ -283,9 +283,10 @@ async def test_background_runtime_matrix(
     )
     from nebula.v3.domain import HarnessProfile, HarnessSession, ProviderProfile
 
-    # Butler's children run on a provider model (#1140): a harness child saved
-    # before that rule leaves the background check without subagents.
-    delegates = enabled and child_backend == "provider"
+    # Butler's children run in Butler mode with its Core tools (#1140). A
+    # harness child is a control-assistant harness session, so a saved
+    # harness child delegates too.
+    delegates = enabled
 
     provider = RoutedProvider(
         parent=[
@@ -414,6 +415,16 @@ async def test_background_runtime_matrix(
             )
             return "Checked without delegation"
         if "Recovery child task" in prompt:
+            if child_backend == "harness":
+                # #1140 regression: the harness child is Butler mode, not an
+                # ordinary project agent: Butler's Core tools through the
+                # gateway and no vendor-native shell.
+                child = connection.request.session
+                assert child.metadata["control_assistant"] is True
+                assert child.metadata["native_capabilities"]["shell"] is False
+                catalog = await runtime._gateway_catalog(child)
+                names = {item["name"] for item in catalog["tools"]}
+                assert "nebula.capabilities.search" in names, names
             return "Recovery child evidence"
         result = _payload(
             await connection.call(
@@ -452,6 +463,7 @@ async def test_background_runtime_matrix(
         assert child.status == ChatSubagentStatus.COMPLETED
         child_session = await store.get(ChatSession, child.child_session_id)
         assert child_session.backend.value == child_backend
+        assert child_session.metadata["control_assistant"] is True
         saved = await store.get(ButlerRecoveryCase, case.id)
         assert child.parent_session_id == saved.investigation_session_id
         turn = await store.get(ChatTurn, saved.investigation_turn_ids[-1])
