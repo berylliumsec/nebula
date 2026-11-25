@@ -231,6 +231,47 @@ def test_operator_only_actions_are_never_automated(
     assert caught.value.rule == rule
 
 
+def test_malformed_operator_pattern_fails_closed_and_is_diagnosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nebula.v3.butler_supervisor_policy as policy_module
+
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        policy_module,
+        "record_caught_exception",
+        lambda feature, code, *args, **kwargs: recorded.append(code),
+    )
+    with pytest.raises(GuardrailViolation) as caught:
+        _screen(
+            tmp_path,
+            "ls /tmp",
+            NEBULA_BUTLER_SUPERVISOR_OPERATOR_ONLY_PATTERNS="([unclosed",
+        )
+    assert caught.value.rule == "operator_only_configured"
+    assert recorded == ["butler_supervisor.operator_pattern_invalid"]
+
+
+def test_unreadable_ceiling_policy_uses_default_and_is_diagnosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import nebula.v3.butler_independent_review as review_module
+
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        review_module,
+        "record_caught_exception",
+        lambda feature, code, *args, **kwargs: recorded.append(code),
+    )
+    policy = _policy(
+        tmp_path,
+        NEBULA_BUTLER_REVIEW_CEILING_POLICY=str(tmp_path / "missing.md"),
+    )
+    assert policy.ceiling_policy_path
+    assert review_module._ceiling_policy(policy) == review_module.DEFAULT_CEILING_POLICY
+    assert recorded == ["butler_supervisor.ceiling_policy_unreadable"]
+
+
 def test_private_strings_never_leave_the_host(tmp_path: Path) -> None:
     with pytest.raises(GuardrailViolation) as caught:
         _screen(tmp_path, "git commit --author='Op <operator@example.test>' -m x")

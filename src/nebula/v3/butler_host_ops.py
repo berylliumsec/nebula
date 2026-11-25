@@ -252,10 +252,13 @@ class ButlerHostOps:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
         except TimeoutError:
+            # diagnostic-expected: a timeout is recorded below as the audited
+            # "timeout" outcome and returned to the caller.
             timed_out = True
             try:
                 os.killpg(process.pid, signal_module.SIGKILL)
             except ProcessLookupError:
+                # diagnostic-expected: the process group already exited.
                 pass
             stdout, stderr = await process.communicate()
         duration = round(time.monotonic() - started, 3)
@@ -308,6 +311,7 @@ class ButlerHostOps:
         try:
             screen_command(policy, command, host=host, cwd=cwd)
         except GuardrailViolation as error:
+            # diagnostic-expected: _refuse audits the refusal and re-raises it.
             await self._refuse(policy, tool, error, host=host.name, command=command)
         if host.local:
             argv = ["bash", "-o", "pipefail", "-c", command]
@@ -334,6 +338,7 @@ class ButlerHostOps:
         try:
             host = policy.host(arguments["host"])
         except GuardrailViolation as error:
+            # diagnostic-expected: _refuse audits the refusal and re-raises it.
             await self._refuse(
                 policy,
                 "shell",
@@ -476,6 +481,7 @@ class ButlerHostOps:
                 )
             _require_committed(path)
         except GuardrailViolation as error:
+            # diagnostic-expected: _refuse audits the refusal and re-raises it.
             await self._refuse(policy, "run_gate", error, command=str(path))
         args = [str(item) for item in arguments.get("args") or []]
         if any(

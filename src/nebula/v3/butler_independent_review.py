@@ -40,6 +40,7 @@ from .butler_supervisor_policy import (
     redact,
     write_audit,
 )
+from .diagnostics import record_caught_exception
 from .domain import (
     GOAL_COMPLETION_PROPOSAL_KEY,
     ChatGoal,
@@ -127,7 +128,14 @@ def _ceiling_policy(policy: SupervisorPolicy) -> str:
         return DEFAULT_CEILING_POLICY
     try:
         return Path(policy.ceiling_policy_path).read_text(encoding="utf-8")[:20_000]
-    except OSError:
+    except OSError as exc:
+        record_caught_exception(
+            "butler_supervisor",
+            "butler_supervisor.ceiling_policy_unreadable",
+            "The configured Butler ceiling policy could not be read; the default policy was used.",
+            exc,
+            stage="independent_review",
+        )
         return DEFAULT_CEILING_POLICY
 
 
