@@ -201,6 +201,36 @@ def test_signoff_detector_is_used_and_its_failure_is_contained(monkeypatch) -> N
     assert guard.detect_signoffs("x") == ([], "failed")
 
 
+REQUESTED_REVIEW_NEXT_STEP = (
+    "An independent closure review of goal A must be run by a principal Core "
+    "allows (the supervisor or the operator). Do not record LOW as an accepted "
+    "disposition until then. If it rejects, the must-dos above go to goal A or "
+    "a follow-up goal."
+)
+
+
+def test_requested_review_is_not_an_unsupported_signoff() -> None:
+    result = guard.check_text(
+        "p1",
+        "Decision: request the independent review; Core refused it.\n"
+        + REQUESTED_REVIEW_NEXT_STEP,
+        environ={guard.MODE_ENV: "flag"},
+    )
+    assert result.signoff_check == "checked"
+    assert result.forged_signoffs == []
+    assert not result.flagged
+
+
+def test_claimed_review_is_still_an_unsupported_signoff() -> None:
+    result = guard.check_text(
+        "p1",
+        "Review requested earlier.\nIndependent review: approved",
+        environ={guard.MODE_ENV: "flag"},
+    )
+    assert result.forged_signoffs == ["Independent review: approved"]
+    assert result.flagged
+
+
 # --- Work check-in integration ---------------------------------------------------------
 
 
@@ -268,6 +298,41 @@ async def test_reject_mode_refuses_and_names_hashes(
             actor_id="agent-1",
         )
     assert await service.updates(project_id, item_id) == []
+
+
+async def test_butler_check_in_requesting_review_is_stored_unflagged(
+    tmp_path, monkeypatch
+) -> None:
+    # Butler's check-ins are agent check-ins and stay guarded: a request for
+    # review passes unchanged, a claimed approval is still flagged.
+    service, project_id, item_id = await _item(tmp_path)
+    monkeypatch.delenv(guard.REPOS_ENV, raising=False)
+    monkeypatch.setenv(guard.MODE_ENV, "flag")
+    update, result = await service.check_in_guarded(
+        project_id,
+        item_id,
+        WorkCheckIn(summary="Scheduled check.", next_step=REQUESTED_REVIEW_NEXT_STEP),
+        actor_kind="agent",
+        actor_id="butler-session",
+    )
+    assert result is not None and not result.flagged
+    assert update.summary == "Scheduled check."
+
+    update, result = await service.check_in_guarded(
+        project_id,
+        item_id,
+        WorkCheckIn(
+            summary="Scheduled check.",
+            next_step="Supervisor sign-off: approved",
+            request_id="second",
+        ),
+        actor_kind="agent",
+        actor_id="butler-session",
+    )
+    assert result is not None and result.forged_signoffs == [
+        "Supervisor sign-off: approved"
+    ]
+    assert "fabrication guard" in update.summary
 
 
 async def test_operator_check_ins_are_not_guarded(tmp_path, monkeypatch) -> None:

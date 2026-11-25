@@ -1,40 +1,31 @@
 {
-  "change_digest": "b6e563e29513e42546936651c947aea8a2e268fa21ddd4fc9b20086756820f7c",
-  "reviewed_by": "Claude: Claude harness account folders",
-  "reason": "Per-profile account folders for the Claude harness, like Codex/Grok. A claude_agent_sdk profile with home_directory runs the Claude CLI with CLAUDE_CONFIG_DIR=<folder> for turns (ClaudeAgentOptions env), Check (probe and the `claude auth status --json` subprocess), Test turn (harness_diagnostics opens through the same adapter) and user skills/settings (setting_sources=user reads CLAUDE_CONFIG_DIR); the env is built per call, never via os.environ. A missing folder raises the shared 'Account folder is unavailable on the Nebula host' error on Check and turns. Signed-out messages name the profile folder and `CLAUDE_CONFIG_DIR=<folder> claude login` (harnesses, harness_diagnostics). The domain validator accepts home_directory for managed Claude profiles (domain). Without home_directory the env construction is byte-identical. The harness settings form shows the Account folder for Claude with its login command (HarnessSettings UI). Docs: butler-supervisor-powers Claude section, harness-account-homes and the settings-assistant Claude row; product knowledge rebuilt. Python selects the new suite, the existing Claude harness/adapter/turn suites for harnesses, test_harness_test_turn_reason for harness_diagnostics, test_domain plus the two account-home domain tests in test_harnesses for domain, and the product-knowledge digest and Claude/Butler doc rows; Frontend selects the harness settings tests.",
-  "exclusions": "test_harnesses.py is selected only by its two account-home validation node ids: ::test_knowledge_access_change_refreshes_fixed_gateway_catalog and ::test_browser_attachment_refreshes_catalog_without_replacing_native_thread fail on unmodified main. test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI API call changed, so the Butler workflow inventory is unchanged (registry check passes without --write-inventory). No live Claude CLI or vendor login: the SDK and CLI are fakes. No native or Playwright change. No full-suite approval.",
+  "change_digest": "52ead93273a95968d74410499810b38b7fcb06438209aa4f3e1564e9665fda6c",
+  "reviewed_by": "Claude: Butler independent review denial and sign-off guard precision",
+  "reason": "Production root cause: a harness-backed Butler at Act called nebula.supervisor.independent_review with project-relative evidence paths; the review reached _read_evidence, which raised GuardrailViolation(not_configured) because NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS was unset, and even with roots set the relative paths would have resolved against Core's process cwd (evidence_outside_roots). The PermissionError surfaced only as a bare permission_denied. Fix (butler_independent_review): the goal's own project workspace is always an evidence root, relative paths resolve there (realpath before the root check, so .. and symlink escapes are refused), configured roots remain extra absolute roots, the workspace resolver is injected by the execution kernel (native_workspace: engagement workspace_path, else the managed workspace) and its failure is recorded and falls back to configured roots; the tool handler converts GuardrailViolation and ReviewUnavailable into a GuidedToolError with error_code independent_review.<rule>, a Core-authored problem/remedy (never the cited path or reviewer output) and before_execution for pre-reviewer refusals. Second fix (butler_review_gating.detect_forged_signoff): the case-insensitive 'INDEPENDENT CLOSURE REVIEW' header pattern matched ordinary prose naming the review, and an authority+approval pair with a pending marker was re-flagged by any approval word or colon; detection is now per clause, the header pattern matches only Core's uppercase header or its '(model):' shape, 'sign-off: pending'-style values and irrealis contexts ('must be approved by', 'do not record ... accepted until') are not claims, while stated verdicts/completed approvals still are. Butler's own check-ins stay guarded (Butler cannot produce a reviewer record). Docs: butler-supervisor-powers review flow, evidence-roots row, refusal codes and sign-off rule; product knowledge rebuilt (no change: that doc is not a knowledge source). Python selects the new suite, the suites of the edited modules and their consumers (supervisor powers, review gating, fabrication guard, goal runtime routing, harness parity) and the product-knowledge digest and supervisor-powers rows. Review follow-up: _PENDING_VALUE counts none/no/n/a only as the whole value (pending/requested/awaiting/not yet/to be may lead), _IRREALIS looks back at most three plain words, never across punctuation, and no longer treats bare 'no' as irrealis; semicolons no longer split clauses; a bare completed approval word outside an irrealis context is a strong claim (eight reviewer strings are must-flag tests, false-positive cases kept). _read_evidence checks the path lexically, then opens it component by component with O_NOFOLLOW via workspace._open_directory_chain and O_NOFOLLOW|O_NONBLOCK on the leaf, requires a regular file (fstat), keeps at most MAX_FILE_BYTES+1 bytes and hashes the whole file in 1 MiB chunks from the same descriptor; links, folders and special files are refused as evidence_not_regular_file. Tests cover a simulated post-check symlink swap, symlinked file and folder, a sibling project's absolute path, and an oversized file.",
+  "exclusions": "execution_kernel gains one line wiring the existing native_workspace resolver into the reviewer; no kernel-construction test was added: building the full app in a test is not cheap (a minimal create_app probe did not finish within 120 s), so the wiring is checked by review and the resolver path is covered with an injected resolver in test_butler_review_denial. test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli fails on unmodified main and is not selected. No UI, native or Playwright change. No live Core, harness or reviewer call. No full-suite approval.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 189,
-    "frontend": 24,
+    "python": 210,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_claude_account_folders.py",
-    "tests/v3/test_butler_claude_harness.py",
+    "tests/v3/test_butler_review_denial.py",
+    "tests/v3/test_butler_review_gating.py",
+    "tests/v3/test_checkin_fabrication_guard.py",
+    "tests/v3/test_butler_supervisor_powers.py",
+    "tests/v3/test_goal_runtime_routing.py",
     "tests/v3/test_butler_harness_parity.py",
-    "tests/v3/test_claude_harness_turns.py",
-    "tests/v3/test_domain.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harness_test_turn_reason.py",
-    "tests/v3/test_harnesses.py::test_account_home_requires_unambiguous_absolute_path",
-    "tests/v3/test_harnesses.py::test_remote_endpoint_rejects_local_account_home",
     "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_adding_a_claude_harness",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers",
-    "tests/v3/test_product_knowledge.py::test_product_help_explains_claude_account_folders"
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_butler_supervisor_powers"
   ],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": [
-    "frontend-audit"
-  ]
+  "checks": []
 }
