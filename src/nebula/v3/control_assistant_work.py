@@ -784,6 +784,16 @@ ADD_GOAL_NOTE_SCHEMA: dict[str, Any] = {
     "properties": {
         **CHAT_TARGET_SCHEMA["properties"],
         "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "release_condition": {
+            "type": "object",
+            "description": (
+                "Machine-checkable condition that retires this note, required "
+                "when the note stops or gates work. kind is one of until_time "
+                "(at), until_path_exists (path), until_work_item (item_id plus "
+                "stage, status, closed or ruling), until_goal_status "
+                "(statuses, optional goal_id), until_note_superseded."
+            ),
+        },
     },
     "required": ["session_id", "text"],
 }
@@ -2349,6 +2359,11 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal",
             body.model_dump(mode="json"),
         )
+        from .butler_review_gating import record_butler_steering
+
+        # Rewriting a goal steers it, so this Butler can no longer approve
+        # the goal's completion itself.
+        await record_butler_steering(self.store, self.goals.get, session.id, "update")
         return await self.goal_detail(project_id, session.id)
 
     async def add_goal_note(
@@ -2359,7 +2374,11 @@ class ControlAssistantWork:
         session = await self._chat(project_id, arguments.get("session_id"))
         await self.goals.get(session.id)
         body = GoalNoteCreate.model_validate(
-            {"text": arguments.get("text"), "author": "butler"}
+            {
+                "text": arguments.get("text"),
+                "author": "butler",
+                "release_condition": arguments.get("release_condition"),
+            }
         )
         result = await self._request(
             "POST",
@@ -2383,14 +2402,20 @@ class ControlAssistantWork:
         body = GoalWrite.model_validate(
             {key: value for key, value in arguments.items() if key != "session_id"}
         )
-        if body.action == "complete" and current.completion_requires_review:
-            # No self-approval: Butler may complete a goal that requires review
-            # only on a Core-recorded independent review of its current proposal
-            # by a model other than the goal's own. The operator's own route is
-            # unchanged.
-            from .butler_independent_review import independent_review_approves
+        from .butler_review_gating import (
+            butler_completion_gate,
+            record_butler_steering,
+        )
 
-            approved, why = independent_review_approves(current, session.model)
+        if body.action == "complete":
+            # No self-approval: Butler may complete a goal that requires
+            # review, or one Butler steered, only on a Core-recorded
+            # independent review of its current proposal by a model other
+            # than the goal's own; never while review must-dos are open. The
+            # operator's own route is unchanged.
+            approved, why = butler_completion_gate(
+                current, session.model, completion_summary=body.completion_summary
+            )
             if not approved:
                 raise PermissionError(
                     "Butler cannot approve this completion: "
@@ -2402,6 +2427,12 @@ class ControlAssistantWork:
             f"/api/v1/chat/sessions/{quote(session.id, safe='')}/goal/actions",
             body.model_dump(mode="json"),
         )
+        if body.action != "complete":
+            # A Butler that pauses, resumes, blocks or starts a goal has
+            # steered it and can no longer approve its completion itself.
+            await record_butler_steering(
+                self.store, self.goals.get, session.id, body.action
+            )
         return await self.goal_detail(project_id, session.id)
 
     async def handoff_goal(

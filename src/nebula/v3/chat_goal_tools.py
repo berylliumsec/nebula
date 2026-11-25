@@ -11,6 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from .butler_review_gating import closure_request_refusal, record_closure_request
 from .chat_goal_addenda import GOAL_READ_TOOL_NAME, read_goal_page
 from .chat_goals import ChatGoalService
 from .domain import (
@@ -23,6 +24,7 @@ from .domain import (
     RiskClass,
     ScopePolicy,
     ToolCallOrigin,
+    utc_now,
 )
 from .runtime_platform import RuntimeToolComponents
 from .storage import NebulaStore
@@ -148,6 +150,40 @@ def agent_completion_changes(
     }
 
 
+async def _gate_closure_request(
+    goals: ChatGoalService,
+    goal: ChatGoal,
+    turn_id: str,
+    proposal: GoalCompletionProposal,
+) -> None:
+    """Rate-limit, sign-off and must-do checks on the goal's own closure request.
+
+    Every request is recorded in ``metadata["closure_requests"]`` with its
+    outcome. A proposal that claims a supervisor or reviewer sign-off is
+    rejected outright: only Core's independent reviewer records approval.
+    """
+
+    now = utc_now()
+    refusal = closure_request_refusal(
+        goal,
+        [proposal.completion_summary, *proposal.completion_evidence],
+        now=now,
+    )
+    entry: dict[str, Any] = {
+        "at": now.isoformat(),
+        "turn_id": turn_id,
+        "outcome": refusal[0] if refusal else "accepted",
+    }
+    if refusal:
+        entry["reason"] = refusal[1][:1_000]
+    await record_closure_request(goals.store, goals.get, goal.session_id, entry)
+    if refusal:
+        raise ToolNotPermitted(
+            "closure request refused: " + refusal[1],
+            rule=f"chat.goal_complete_{refusal[0]}",
+        )
+
+
 class GoalCompletionBroker:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
@@ -196,7 +232,8 @@ class GoalCompletionBroker:
                 "wait for this goal's working subagents before completing it",
                 rule="chat.goal_complete_children",
             )
-        GoalCompletionProposal.model_validate(invocation.arguments)
+        proposal = GoalCompletionProposal.model_validate(invocation.arguments)
+        await _gate_closure_request(goals, goal, turn.id, proposal)
         output: dict[str, Any] = {
             "accepted": True,
             "goal_id": goal.id,
