@@ -717,6 +717,45 @@ def test_diagnostics_cli_status_levels_reset_and_export(tmp_path: Path) -> None:
     diagnostics.shutdown_diagnostics()
 
 
+async def test_queue_pressure_notice_never_blocks_an_event_loop_caller(
+    tmp_path: Path,
+) -> None:
+    """A full queue's drop notice is an ERROR record. A WARNING caller on the
+    event loop must not wait for it: it used to wait up to 10 s on the very
+    writer whose slowness filled the queue."""
+
+    manager = DiagnosticManager(tmp_path, queue_capacity=1, watch_settings=False)
+    manager.update_settings(
+        {"schema": SETTINGS_SCHEMA, "global_level": "debug", "feature_levels": {}}
+    )
+    assert manager.flush(timeout=5)
+    # Every lower-level record now meets a full queue.
+    manager._queue_capacity = 0
+    # Stall the single writer the way a slow disk does.
+    manager._writer_lock.acquire()
+    try:
+        started = time.monotonic()
+        for level in ("warning", "info", "debug"):
+            manager.record(level, "api", "api.queue.loop", "A record from the loop.")
+        assert time.monotonic() - started < 1.0
+        status = manager.status()
+        assert status["dropped_record_count"] == 3
+        assert status["loop_notice_waits_skipped"] == 1
+    finally:
+        manager._writer_lock.release()
+    try:
+        assert manager.flush(timeout=5)
+        notices = [
+            item
+            for item in _records(manager.log_dir / "errors.log")
+            if item["event_code"] == "diagnostics.records_dropped"
+        ]
+        assert len(notices) == 1
+        assert notices[0]["metadata"]["dropped_count"] == 1
+    finally:
+        manager.close()
+
+
 async def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

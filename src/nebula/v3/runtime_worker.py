@@ -34,6 +34,7 @@ from .deployment_protocol import (
 )
 from .deployments import DeploymentCoordinator
 from .diagnostics import record_caught_exception, record_diagnostic
+from .loop_watchdog import EventLoopWatchdog
 from .release_store import ReleaseStore
 from .runtime_coordination import HEARTBEAT_SECONDS, LeaseLost, LeaseRenewal
 from .runtime_coordination import STORAGE_REPORT_COMMAND as STORAGE_REPORT_FEATURE
@@ -87,6 +88,7 @@ async def keep_lease(
     *,
     interval: float,
     lock_wait: Callable[[], str | None] | None = None,
+    stall_report: Callable[[], str | None] | None = None,
 ) -> NoReturn:
     """Renew this incarnation's leases until ownership can no longer be proven.
 
@@ -100,7 +102,8 @@ async def keep_lease(
     ``lock_wait`` names a SQL lock the latest renewal waited on, when that
     (not an unreachable server) is why renewals did not complete. A timer that
     fired well past its deadline means this process's event loop was blocked
-    (CPU-bound work in the worker), which is reported as that instead.
+    (CPU-bound work in the worker), which is reported as that instead;
+    ``stall_report`` then names the code the loop watchdog caught holding it.
     """
     failures = 0
     cause: BaseException | None = None
@@ -122,11 +125,12 @@ async def keep_lease(
                     "It stops before the lease can expire"
                 ) from cause
             if stalled:
+                captured = stall_report() if stall_report is not None else None
                 raise LeaseLost(
                     f"This worker's event loop was blocked for {stalled:.0f} s past a "
                     "lease renewal deadline (CPU-bound work in the worker), so it "
                     "could no longer prove its lease; it stops before the lease can "
-                    "expire"
+                    "expire" + (f"; {captured}" if captured else "")
                 ) from cause
             raise LeaseLost(
                 "SQL stayed unreachable until this runtime could no longer prove "
@@ -319,6 +323,7 @@ async def run_worker(
     heartbeat = None
     server = None
     diagnostics = None
+    watchdog: EventLoopWatchdog | None = None
     try:
         secret = await validate_worker_binding(bootstrap, coordinator)
         manifest = await asyncio.to_thread(
@@ -473,12 +478,16 @@ async def run_worker(
                     renewal,
                     interval=HEARTBEAT_SECONDS,
                     lock_wait=lambda: coordinator.coordination.renewal_wait,
+                    stall_report=loop_watchdog.describe_last_stall,
                 )
             except BaseException:
                 if server is not None:
                     server.should_exit = True
                 raise
 
+        # Names the code holding the loop before a blocked loop costs the lease.
+        watchdog = loop_watchdog = EventLoopWatchdog()
+        watchdog.start()
         # diagnostic-expected: lost or unprovable leases request server exit and are awaited before the worker returns.
         heartbeat = asyncio.create_task(pulse(), name="nebula-worker-heartbeat")
         async with factory(context) as application:
@@ -526,6 +535,8 @@ async def run_worker(
         if heartbeat is not None:
             heartbeat.cancel()
             await asyncio.gather(heartbeat, return_exceptions=True)
+        if watchdog is not None:
+            watchdog.stop()
         await database.dispose()
         if diagnostics is not None:
             await asyncio.to_thread(diagnostics.close)

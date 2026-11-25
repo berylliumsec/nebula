@@ -484,6 +484,8 @@ class DiagnosticManager:
         # disk holds the durable copy, so it is bounded rather than unbounded.
         self._memory_errors: deque[dict[str, Any]] = deque(maxlen=MAX_MEMORY_ERRORS)
         self._dropped_count = 0
+        # Queue-pressure notices an event-loop caller did not wait for.
+        self._loop_notice_waits_skipped = 0
         # Unreadable log lines are counted per file so the viewer can report a
         # torn write once per launch instead of once per read.
         self._unreadable_lines: dict[str, int] = {}
@@ -1046,6 +1048,7 @@ class DiagnosticManager:
                 sensitive_available = capture.available
                 sensitive_expires = capture.expires_at
         wait_for: threading.Event | None = None
+        own_record = normalized_level in {"error", "critical"}
         with self._condition:
             record = self._build_record(
                 normalized_level,
@@ -1103,7 +1106,18 @@ class DiagnosticManager:
         # asyncio event loop: disk latency there would stall every request and
         # websocket for as long as the writer needs, so the writer thread
         # acknowledges those on its own and its sink handling reports failures.
-        if wait_for is not None and normalized_level == "error" and _on_event_loop():
+        # A queue-pressure notice is never the caller's own record: whatever
+        # the caller's level, an event-loop caller must not wait for it (the
+        # queue is full precisely because the writer is slow), so the notice
+        # is left to the writer and the skipped wait is counted.
+        if (
+            wait_for is not None
+            and (normalized_level == "error" or not own_record)
+            and _on_event_loop()
+        ):
+            if not own_record:
+                with self._condition:
+                    self._loop_notice_waits_skipped += 1
             return error_id
         if wait_for is not None and not wait_for.wait(timeout=10):
             self._mark_degraded(
@@ -1577,6 +1591,7 @@ class DiagnosticManager:
             "disk_usage_bytes": self._disk_usage(),
             "last_rotation": self._last_rotation,
             "dropped_record_count": self._dropped_count,
+            "loop_notice_waits_skipped": self._loop_notice_waits_skipped,
             "unreadable_record_count": sum(self._unreadable_lines.values()),
             "queued_record_count": len(self._queue) + self._in_flight,
             "last_failure": self._last_failure,

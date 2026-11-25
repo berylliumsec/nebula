@@ -221,6 +221,25 @@ class ConflictError(StorageError):
     pass
 
 
+class ModelSafeConflict(ConflictError):
+    """A conflict whose message Core authored for the agent that caused it.
+
+    Ordinary ``ConflictError`` text may name private records, so the model is
+    shown a fixed explanation instead. Raise this type when the message is
+    built only from Core-owned wording and values the caller itself supplied
+    (such as the id of a reference it passed), so the agent learns exactly
+    which input to correct. ``next_action`` is the model-facing recovery step
+    and ``field`` names the offending argument, if any.
+    """
+
+    def __init__(
+        self, message: str, *, next_action: str, field: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.next_action = next_action
+        self.field = field
+
+
 class RevisionConflict(ConflictError):
     """The record changed after the writer read the revision it expected.
 
