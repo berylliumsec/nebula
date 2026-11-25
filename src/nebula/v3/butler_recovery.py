@@ -157,7 +157,8 @@ _GLOBAL_INSTRUCTIONS = (
     "project under an Act project. "
     "When a paused or blocked main goal needs a separate recovery goal, use "
     "nebula.global.create_recovery_goal with the exact source goal ID. That "
-    "route requires Codex gpt-6-sol, max effort, and Daybreak Blue and links "
+    "route runs on Butler's own reserved harness and model (a Codex or provider "
+    "Butler uses Codex gpt-6-sol, max effort, and Daybreak Blue) and links "
     "the recovery result to this scheduled check. Save a concrete main-agent "
     "plan with the goal and pass relevant steps to any delegated subagents. Do not use create_goal for "
     "recovery work. The recovery goal must report an evidence-backed result and "
@@ -1381,8 +1382,86 @@ class ButlerRecoveryService:
                     )
                 )
         (await self._run_goal_hygiene())
+        (await self._run_stuck_turn_sweep())
+        (await self._run_operator_action_sweep())
         (await self._share_host_runtime(project_id))
         return True
+
+    async def _run_stuck_turn_sweep(self) -> None:
+        """Cancel and resume goal turns stuck without progress.
+
+        Off unless the supervisor policy is enabled and the operator sets
+        NEBULA_BUTLER_STUCK_TURN_AUTO=1; a failure is recorded and the check
+        still runs.
+        """
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            policy = load_policy()
+            work = getattr(self.agent, "work", None)
+            if not policy.enabled or work is None:
+                return
+            from .butler_stuck_turns import sweep_stuck_turns
+
+            result = await sweep_stuck_turns(self.store, work, policy=policy)
+            record_diagnostic(
+                "info",
+                "butler",
+                "butler.stuck_turns.sweep",
+                "Butler stuck-turn sweep ran before the global periodic check.",
+                outcome="completed",
+                stage="stuck-turns",
+                metadata={
+                    key: len(value) if isinstance(value, list) else value
+                    for key, value in result.items()
+                    if isinstance(value, (list, int, bool, str))
+                },
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.stuck_turns.failed",
+                "Butler stuck-turn sweep failed; the periodic check continues.",
+                exc,
+                stage="stuck-turns",
+            )
+
+    async def _run_operator_action_sweep(self) -> None:
+        """Close operator action requests whose auto-check passes and resume
+        the goals waiting on them. Off unless the supervisor policy is
+        enabled; a failure is recorded and the check still runs."""
+
+        from .butler_supervisor_policy import load_policy
+
+        try:
+            work = getattr(self.agent, "work", None)
+            if not load_policy().enabled or work is None:
+                return
+            from .operator_action_requests import sweep_operator_actions
+
+            result = await sweep_operator_actions(self.store, work)
+            record_diagnostic(
+                "info",
+                "butler",
+                "butler.operator_actions.sweep",
+                "Butler operator action sweep ran before the global periodic check.",
+                outcome="completed",
+                stage="operator-actions",
+                metadata={
+                    key: len(value) if isinstance(value, list) else value
+                    for key, value in result.items()
+                    if isinstance(value, (list, int, bool, str))
+                },
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "butler",
+                "butler.operator_actions.failed",
+                "Butler operator action sweep failed; the periodic check continues.",
+                exc,
+                stage="operator-actions",
+            )
 
     async def _run_goal_hygiene(self) -> None:
         """Run deterministic goal hygiene before the check's Butler case exists.

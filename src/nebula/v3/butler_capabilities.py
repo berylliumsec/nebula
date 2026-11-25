@@ -171,6 +171,15 @@ SUPERVISOR_ACTIONS = frozenset(
         "nebula.supervisor.repo_restore",
         "nebula.supervisor.independent_review",
         "nebula.supervisor.hygiene_tick",
+        "nebula.supervisor.must_do_resolve",
+        "nebula.supervisor.recover_stuck_turn",
+        "nebula.supervisor.post_goal_note",
+        "nebula.supervisor.probe",
+        "nebula.supervisor.tmp_cleanup",
+        "nebula.supervisor.log_writer_status",
+        "nebula.supervisor.request_operator_action",
+        "nebula.supervisor.list_operator_actions",
+        "nebula.supervisor.close_operator_action",
     }
 )
 _BACKGROUND_CHANGES = _BACKGROUND_CHANGES | SUPERVISOR_ACTIONS
@@ -634,15 +643,29 @@ class ButlerCapabilities:
         async def record_event(entry: dict[str, Any]) -> None:
             await record_supervisor_event(store, project_id, entry)
 
+        from .butler_host_probes import ButlerHostProbes
+        from .butler_note_release import ButlerNoteRelease
+        from .butler_review_gating import ButlerMustDoResolver
+        from .butler_stuck_turns import ButlerStuckTurns
+        from .operator_action_requests import ButlerOperatorActions
+
         actions: list[AnalysisTool] = [
             *ButlerHostOps(
                 project_id=project_id, actor=actor, event_sink=record_event
             ).actions(),
+            *ButlerHostProbes(
+                project_id=project_id, actor=actor, event_sink=record_event
+            ).actions(),
             *ButlerRepoForensics().actions(),
+            _log_writer_status_action(),
         ]
         if work is not None:
             actions += ButlerIndependentReview(store, work, project_id).actions()
             actions += ButlerGoalHygiene(store, work).actions()
+            actions += ButlerMustDoResolver(store, work, project_id).actions()
+            actions += ButlerStuckTurns(store, work, project_id).actions()
+            actions += ButlerNoteRelease(store, work, project_id).actions()
+            actions += ButlerOperatorActions(store, work).actions()
         return actions
 
     async def _propose_goal_chat(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -1535,3 +1558,36 @@ async def record_supervisor_event(
             ).hexdigest(),
             now=now,
         )
+
+
+def _log_writer_status_action() -> AnalysisTool:
+    """Read-only health of Core's file log writer (log_writer_health)."""
+
+    async def status(arguments: dict[str, Any]) -> dict[str, Any]:
+        from .butler_supervisor_policy import SupervisorDisabled, load_policy
+        from .log_writer_health import log_writer_status
+
+        if not load_policy().enabled:
+            raise SupervisorDisabled("Butler supervisor tools are switched off")
+        return log_writer_status()
+
+    return AnalysisTool(
+        ToolSpec(
+            name="nebula.supervisor.log_writer_status",
+            description=(
+                "Read the health of Core's file log writer: whether the writer "
+                "thread is alive, when runtime.log last took the heartbeat, failed "
+                "sinks, free space in the log directory and any open outage. Use "
+                "it when runtime.log or errors.log look stale."
+            ),
+            input_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            idempotency=IdempotencyBehavior.SAFE,
+        ),
+        status,
+    )
