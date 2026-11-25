@@ -14,6 +14,11 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from .butler_review_gating import closure_request_refusal, record_closure_request
 from .chat_goal_addenda import GOAL_READ_TOOL_NAME, read_goal_page
 from .chat_goals import ChatGoalService
+from .goal_operator_requests import (
+    GOAL_REQUEST_TOOL,
+    execute_goal_request,
+    goal_request_spec,
+)
 from .domain import (
     GOAL_COMPLETION_PROPOSAL_KEY,
     GOAL_COMPLETION_REVIEW_REASON,
@@ -38,7 +43,10 @@ from .tools import (
 
 
 GOAL_COMPLETE_TOOL_NAME = "goal.complete"
-GOAL_TOOL_NAMES = frozenset({GOAL_COMPLETE_TOOL_NAME, GOAL_READ_TOOL_NAME})
+GOAL_OPERATOR_REQUEST_TOOL_NAME = GOAL_REQUEST_TOOL
+GOAL_TOOL_NAMES = frozenset(
+    {GOAL_COMPLETE_TOOL_NAME, GOAL_READ_TOOL_NAME, GOAL_OPERATOR_REQUEST_TOOL_NAME}
+)
 
 
 class GoalCompletionProposal(BaseModel):
@@ -198,6 +206,8 @@ class GoalCompletionBroker:
         del scope, approval
         if invocation.tool_name == GOAL_READ_TOOL_NAME:
             return await self._read(invocation)
+        if invocation.tool_name == GOAL_OPERATOR_REQUEST_TOOL_NAME:
+            return await execute_goal_request(self.store, invocation)
         if (
             invocation.tool_name != GOAL_COMPLETE_TOOL_NAME
             or invocation.origin != ToolCallOrigin.CHAT
@@ -349,9 +359,14 @@ def goal_completion_components(
     include_read: bool = False,
 ) -> RuntimeToolComponents:
     """The goal's own tools. Provider turns also get ``goal.read``, which
-    carries supervisor addenda; harness turns are steered instead."""
+    carries supervisor addenda; harness turns are steered instead. Both get
+    ``goal.request_operator_action`` (harness gateways offer their native
+    entry of the same name first)."""
 
-    specs = {GOAL_COMPLETE_TOOL_NAME: goal_completion_spec()}
+    specs = {
+        GOAL_COMPLETE_TOOL_NAME: goal_completion_spec(),
+        GOAL_OPERATOR_REQUEST_TOOL_NAME: goal_request_spec(),
+    }
     if include_read:
         specs[GOAL_READ_TOOL_NAME] = goal_read_spec()
     return RuntimeToolComponents(

@@ -73,7 +73,7 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` | A harness profile for the independent reviewer, such as a Claude harness on the host's existing login. Each review is one turn in a fresh session with no tools, no MCP server and no Core gateway. |
 | `NEBULA_BUTLER_REVIEW_MODEL` | The reviewer model. Default: `claude-opus-5-5`. It must differ from the reviewed goal's model. |
 | `NEBULA_BUTLER_REVIEW_CEILING_POLICY` | A file appended to the reviewer instructions, such as an impact-ceiling policy. |
-| `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Directories the reviewer may read evidence bytes from. |
+| `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Extra directories the reviewer may read evidence bytes from. The goal's own project workspace is always an evidence root, so this is optional. |
 | `NEBULA_BUTLER_HYGIENE_PROJECT_IDS` | Projects the hygiene tick covers. |
 | `NEBULA_BUTLER_HYGIENE_UNLIMITED_BUDGETS` | `1` nulls the token, time and step budgets of live goals in those projects. |
 | `NEBULA_BUTLER_HYGIENE_DEFAULT_STAGE` | The stage given to a newly created Work item. Default: `triage`. |
@@ -153,6 +153,14 @@ Butler event stream.
 
 1. Butler calls `nebula.supervisor.independent_review` with the goal's session
    and its evidence paths. Evidence cited in the held proposal is added automatically.
+   A relative path resolves in the goal's project workspace, the same paths the
+   workspace tools return. An absolute path must be inside that workspace or
+   under `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`. Core opens each path one
+   folder at a time and never follows a symbolic link below a root. It
+   refuses a link, a folder or a special file with
+   `independent_review.evidence_not_regular_file`, also when a link replaces
+   the file after the check. Core keeps at most the first 60,000 bytes of a
+   file and hashes the whole file in chunks.
 2. Core checks two things. The reviewer model must differ from the goal's model.
    The reviewer profile must be enabled, allowlisted (on a harness: offer the
    model after **Check**), and permit sensitive data.
@@ -162,7 +170,8 @@ Butler event stream.
    event ends the review with an error. It contains:
    - the completion criteria;
    - the proposal;
-   - the evidence bytes, read only from the evidence roots, bounded and redacted;
+   - the evidence bytes, read only from the project workspace and the evidence
+     roots, bounded and redacted;
    - the reviewer instructions, including the ceiling policy and the MUST-DO prompt.
 
    Butler's conversation and notes are not included.
@@ -175,6 +184,13 @@ Butler event stream.
    - ACCEPT_WITH_RESIDUALS completes the goal and starts a follow-up goal with
      null budgets and `completion_requires_review`, or, with `on_residuals=feed`,
      feeds the residuals back to the goal instead.
+
+If Core refuses the review, Butler gets the exact rule as
+`error_code` `independent_review.<rule>`, for example
+`independent_review.evidence_outside_roots` or
+`independent_review.reviewer_not_independent`. The refusal also gives the
+remedy. The text comes from Core and never repeats a cited path or the
+reviewer's output.
 
 ## Enabling (operator steps)
 
@@ -204,7 +220,12 @@ Butler event stream.
   which records its provenance: provider or harness profile, model, review id
   and packet digest.
 - Goal-written supervisor or reviewer sign-off lines are refused in completion
-  proposals and redacted from review packets.
+  proposals and redacted from review packets. A line is a sign-off claim when it
+  states a verdict or sign-off value, says an authority approved it, or copies
+  Core's review header. A request or a pending state is not a claim, for
+  example "review requested", "awaiting independent review", "sign-off:
+  pending" or "must be approved by the supervisor". Butler's own Work check-ins
+  get the same check: Butler cannot produce a reviewer record either.
 - A goal may request closure at most `NEBULA_BUTLER_CLOSURE_REQUESTS_PER_DAY`
   times per rolling day.
 - A completed goal that a review rejects is reopened in place.
@@ -226,6 +247,36 @@ verification evidence first, a request whose check already passes is refused,
 and an open request for the same action and device is returned instead of a
 duplicate. The periodic check closes requests whose check passes and resumes
 the waiting goal. Open requests appear at the top of the Butler board.
+
+Goal agents raise the same requests with `goal.request_operator_action`
+(`goal_request_operator_action` for provider goals; a native gateway tool for
+harness goals). It is only for operator-only physical or account actions:
+replug, plug in or power-cycle a device, restart a host, attach a credential,
+approve an account change, or a physical check. Operator autonomy is in force,
+so goals decide research questions themselves. Core links the request to the
+calling goal (project, goal chat and the turn in `created_by`), keeps the
+verification, auto-check and de-duplication (same action, device and goal)
+rules, and refuses: a turn that does not own the running goal; Core-only
+actions (`review_model_refusal`, `answer_question`); a physical action whose
+device or host is a placeholder ("device", "the host"); a reason that asks for
+a decision ("should I", "which ... should"), or any question for `other`; and a
+fourth open request for one goal. `block_goal: true` blocks the goal on
+`operator-action:<id>`, and the periodic sweep resumes it when the request
+closes.
+
+Opening and closing a request notify the operator. Every open (Butler, Core or
+a goal) adds the `Needs you:` Work item, which the Butler board lists at the
+top, and opens a Butler incident (`source=operator_action`, event
+`incident.opened`) in the project's oversight feed; closing resolves it.
+Nebula has no push channel: the iOS app is a web view of the same UI, and the
+web app's service worker does not register for push.
+
+A Claude harness model in a headless Nebula turn can call `AskUserQuestion`.
+Core offers it only to answer it: the PreToolUse hook denies it with Core's
+reply. A research decision gets "decide this yourself"; a question that asks
+the operator to act with hands or account (replug, power-cycle, unlock, enter
+a passcode, approve an account change) opens an `answer_question` request and
+blocks the goal; a turn that is not a goal is told to ask in its reply.
 
 ## Running Butler on Claude
 

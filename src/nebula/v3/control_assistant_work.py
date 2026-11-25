@@ -978,6 +978,10 @@ class ControlAssistantWork:
         self.goals = ChatGoalService(store, harness)
         self.schedules = ChatScheduleService(store)
         self.timeline = ButlerTimeline(store)
+        # An execution worker's butler.action/v1 client, through which a
+        # Nebula-wide check hosted here changes other projects; None in one
+        # Core process (see butler_global_capabilities.py).
+        self.global_butler_actions: Any = None
 
     async def _project(self, project_id: str) -> Engagement:
         return await self.store.get(Engagement, project_id)

@@ -1929,7 +1929,10 @@ def create_execution_kernel(
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
-    from .butler_independent_review import set_review_harness_runner
+    from .butler_independent_review import (
+        set_review_harness_runner,
+        set_review_workspace_resolver,
+    )
     from .harness_diagnostics import run_harness_one_shot
 
     async def review_on_harness(
@@ -1947,6 +1950,9 @@ def create_execution_kernel(
         )
 
     set_review_harness_runner(review_on_harness)
+    # The reviewer reads a goal's cited evidence from that goal's own project
+    # workspace, the same folder Butler's workspace tools list.
+    set_review_workspace_resolver(native_workspace)
     runtime_usage = RuntimeUsageService(
         store, credentials, transport=runtime_usage_transport
     )

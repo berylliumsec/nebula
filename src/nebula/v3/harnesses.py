@@ -96,8 +96,11 @@ from .work_priority import is_high
 from .project_hold_gate import active_hold, held_detail, is_held
 from .recovery_markers import (
     GOAL_PROVIDER_RETRY,
+    HARNESS_QUEUED_CORE_RESTART_PAUSE,
+    HARNESS_RUNTIME_STOP,
     OPERATOR_RECOVERY_STOP,
     TURN_GOAL_AUTO_RETRY,
+    harness_stop_cause,
 )
 from .chat import (
     ChatError,
@@ -1237,6 +1240,14 @@ def _harness_developer_instructions(
             else ""
         )
         + (
+            "Decide research questions yourself; never ask the operator to choose. Only when the operator must act with their hands or account (replug or power-cycle a device, restart a host, attach a credential, approve an account change), call goal.request_operator_action with verification evidence instead of writing it into a Work check-in. "
+            if any(
+                item.get("name") == "goal.request_operator_action"
+                for item in gateway_tools
+            )
+            else ""
+        )
+        + (
             harness_subagent_instructions(
                 provider_subagent["model"],
                 _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
@@ -2006,6 +2017,12 @@ async def _decline_unsupported_interaction(
     return str(uuid4()), future
 
 
+# Answers a vendor's interactive ask-the-user tool (Claude's AskUserQuestion)
+# during a headless Nebula turn with the text the model reads as the result.
+AskUserHandler = Callable[[dict[str, Any]], Awaitable[str]]
+CLAUDE_ASK_USER_TOOL = "AskUserQuestion"
+
+
 @dataclass(frozen=True)
 class AdapterOpenRequest:
     profile: HarnessProfile
@@ -2017,6 +2034,8 @@ class AdapterOpenRequest:
     interaction_handler: InteractionHandler = _decline_unsupported_interaction
     gateway_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     gateway_tools: tuple[dict[str, Any], ...] = ()
+    # None: the vendor's ask-the-user tool is not offered (and is denied).
+    ask_user_handler: AskUserHandler | None = None
 
 
 class HarnessConnection(ABC):
@@ -9348,6 +9367,11 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             request.session, request.profile
         )
         native_tools = _claude_native_tools(native_capabilities)
+        ask_user = request.ask_user_handler
+        if ask_user is not None:
+            # Offered so Core sees the question; it is always answered by Core
+            # (never by a person) through the PreToolUse deny reason below.
+            native_tools = [*native_tools, CLAUDE_ASK_USER_TOOL]
         mcp_config, _ = _mcp_runtime_config(
             request.mcp_profiles,
             request.credential_store,
@@ -9376,6 +9400,20 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     allow(updated_input=input_data)
                     if allow
                     else {"behavior": "allow", "updatedInput": input_data}
+                )
+            if not server and tool_name == CLAUDE_ASK_USER_TOOL:
+                # Reached only without the PreToolUse hook: Core answers the
+                # question instead of an operator approval prompt.
+                message = (
+                    await ask_user(dict(input_data))
+                    if ask_user is not None
+                    else "Nebula does not relay AskUserQuestion in this session."
+                )
+                deny = getattr(sdk, "PermissionResultDeny", None)
+                return (
+                    deny(message=message)
+                    if deny
+                    else {"behavior": "deny", "message": message}
                 )
             ticket = await request.permission_handler(
                 HarnessPermissionRequest(
@@ -9418,6 +9456,14 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             if server == "nebula":
                 decision = "allow"
                 reason = "Nebula gateway performs the authoritative policy decision"
+            elif tool_name == CLAUDE_ASK_USER_TOOL and ask_user is not None:
+                # No person answers a headless turn: Core decides what the
+                # question becomes and the deny reason carries its answer.
+                tool_input = hook_input.get("tool_input")
+                decision = "deny"
+                reason = await ask_user(
+                    dict(tool_input) if isinstance(tool_input, Mapping) else {}
+                )
             elif server:
                 decision = "ask"
                 reason = "Nebula approval is required for this configured MCP tool"
@@ -10185,10 +10231,17 @@ class HarnessRuntimeService:
                     )
 
     async def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
-        """Settle one harness turn whose producer died with the previous Core."""
+        """Settle one harness turn whose producer died with the previous process.
+
+        That process is the previous Core, or only this project's runtime when
+        dead-owner reconciliation marked the turn (``HARNESS_RUNTIME_STOP``):
+        a deployment handoff that stopped the worker, a crash or an OOM kill
+        while Core kept running. The recorded reasons name which one.
+        """
 
         await self._reconcile_turn_tool_calls(turn.id)
         turn = await self.store.get(HarnessTurn, turn.id)
+        stop = harness_stop_cause(turn)
         if turn.status == HarnessTurnStatus.QUEUED:
             # A queued chat or analysis turn's producer died with the
             # previous process, before or while it connected; nothing will
@@ -10198,8 +10251,9 @@ class HarnessRuntimeService:
                 (
                     await self._settle_orphaned_queued_turn(
                         turn,
-                        "Nebula Core restarted before the harness turn started.",
-                        reason="core_restart",
+                        f"{stop.subject} before the harness turn started.",
+                        reason=stop.reason,
+                        goal_pause=stop.queued_goal_pause,
                     )
                 )
             return
@@ -10209,14 +10263,21 @@ class HarnessRuntimeService:
             {
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
-                "error": "Nebula Core restarted while the harness outcome was uncertain",
+                "error": f"{stop.subject} while the harness outcome was uncertain",
+                # The stop is now recorded in the error; a stale mark must not
+                # describe a later Core restart.
+                "metadata": {
+                    key: value
+                    for key, value in turn.metadata.items()
+                    if key != HARNESS_RUNTIME_STOP
+                },
             },
             expected_revision=turn.revision,
         )
         (
             await self._expire_ended_turn_approvals(
                 interrupted_turn,
-                "Nebula Core restarted while this request was waiting; "
+                f"{stop.subject} while this request was waiting; "
                 "no decision can reach the harness.",
             )
         )
@@ -10224,12 +10285,7 @@ class HarnessRuntimeService:
         if turn.chat_session_id and turn.chat_turn_id:
             chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                (
-                    await self._pause_goal(
-                        turn.chat_session_id,
-                        "Core restarted during a harness goal turn. Review the saved reply before resuming.",
-                    )
-                )
+                (await self._pause_goal(turn.chat_session_id, stop.goal_pause))
         session = await self.store.get(HarnessSession, turn.harness_session_id)
         if session.status not in {
             HarnessSessionStatus.CLOSED,
@@ -10256,14 +10312,19 @@ class HarnessRuntimeService:
                     harness_turn_id=turn.id,
                     model=session.model,
                     item_status="interrupted",
-                    summary="Nebula Core restarted while the harness outcome was uncertain.",
-                    payload={"phase": "interrupted", "reason": "core_restart"},
+                    summary=f"{stop.subject} while the harness outcome was uncertain.",
+                    payload={"phase": "interrupted", "reason": stop.reason},
                 ),
             )
         )
 
     async def _settle_orphaned_queued_turn(
-        self, turn: HarnessTurn, error: str, *, reason: str
+        self,
+        turn: HarnessTurn,
+        error: str,
+        *,
+        reason: str,
+        goal_pause: str = HARNESS_QUEUED_CORE_RESTART_PAUSE,
     ) -> None:
         """Interrupt a turn whose producer ended before the harness started it.
 
@@ -10282,7 +10343,14 @@ class HarnessRuntimeService:
                 "status": HarnessTurnStatus.INTERRUPTED,
                 "completed_at": utc_now(),
                 "error": error,
-                "metadata": {**turn.metadata, "interrupted_reason": reason},
+                "metadata": {
+                    **{
+                        key: value
+                        for key, value in turn.metadata.items()
+                        if key != HARNESS_RUNTIME_STOP
+                    },
+                    "interrupted_reason": reason,
+                },
             },
             expected_revision=turn.revision,
         )
@@ -10290,12 +10358,7 @@ class HarnessRuntimeService:
         if turn.chat_session_id and turn.chat_turn_id:
             chat_turn = await self.store.get(ChatTurn, turn.chat_turn_id)
             if chat_turn.goal_id:
-                (
-                    await self._pause_goal(
-                        turn.chat_session_id,
-                        "Core restarted before the harness goal turn started. Review it before resuming.",
-                    )
-                )
+                (await self._pause_goal(turn.chat_session_id, goal_pause))
         # The session only turns running once connected, so its status
         # belongs to other turns and stays as it is.
         session = await self.store.get(HarnessSession, turn.harness_session_id)
@@ -17680,6 +17743,9 @@ class HarnessRuntimeService:
                             },
                         }
                     )
+                    from .goal_operator_requests import gateway_tool
+
+                    tools.append(gateway_tool())
             work_enabled = await self.work.enabled(current.engagement_id)
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
                 if name != "work.agents" and not work_enabled:
@@ -17731,6 +17797,7 @@ class HarnessRuntimeService:
                             "report_attention",
                             "goal.complete",
                             "goal.block",
+                            "goal.request_operator_action",
                         }
                     )
                 if allowed is not None and name not in allowed and name not in always:
@@ -17877,6 +17944,7 @@ class HarnessRuntimeService:
                             "report_attention",
                             "goal.complete",
                             "goal.block",
+                            "goal.request_operator_action",
                         }
                     )
                 if _session_provider_subagent(current) is not None:
@@ -18611,6 +18679,8 @@ class HarnessRuntimeService:
             return await self._gateway_agent_message(session, turn, name, arguments)
         if name == "goal.block":
             return await self._gateway_goal_block_call(turn, arguments)
+        if name == "goal.request_operator_action":
+            return await self._gateway_goal_operator_request_call(turn, arguments)
         if name in _GATEWAY_WORK_SCHEMAS:
             if name == "work.agents":
                 # Its roster is a database read; keep it off the MCP event loop.
@@ -19172,6 +19242,59 @@ class HarnessRuntimeService:
                 "blocked_reason": saved.blocked_reason,
                 "revision": saved.revision,
             }
+        except Exception as exc:
+            (await self._finish_gateway_call(call.id, error=exc))
+            raise
+        (await self._finish_gateway_call(call.id, result=result))
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    async def _gateway_goal_operator_request_call(
+        self, turn: HarnessTurn, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Open an operator action request for the goal this turn owns."""
+
+        from .goal_operator_requests import GOAL_REQUEST_TOOL, request_from_goal_turn
+
+        if not turn.chat_turn_id or not turn.chat_session_id:
+            raise HarnessConfigurationError(
+                "Only a goal chat turn can request an operator action"
+            )
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("control_assistant") or turn.metadata.get(
+            "analysis_only"
+        ):
+            raise HarnessConfigurationError(
+                "This turn cannot request an operator action"
+            )
+        call = ToolCall(
+            engagement_id=turn.engagement_id,
+            run_id=turn.chat_turn_id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=turn.chat_turn_id,
+            tool_name=GOAL_REQUEST_TOOL,
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "goal"},
+        )
+        call = await self.store.reserve_tool_call(call)
+        (await self._attach_gateway_tool_call(turn, call.id))
+        try:
+            result = await request_from_goal_turn(
+                self.store,
+                project_id=turn.engagement_id,
+                session_id=turn.chat_session_id,
+                chat_turn_id=turn.chat_turn_id,
+                arguments=arguments,
+                runtime="harness",
+            )
         except Exception as exc:
             (await self._finish_gateway_call(call.id, error=exc))
             raise
@@ -20649,6 +20772,25 @@ class HarnessRuntimeService:
             active_turn = await self._active_gateway_turn(session.id)
             return await self._request_interaction(active_turn.id, request)
 
+        async def ask_user_handler(tool_input: dict[str, Any]) -> str:
+            from .goal_operator_requests import handle_headless_question
+
+            try:
+                active_turn = await self._active_gateway_turn(session.id)
+            except HarnessStateError as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.claude.ask_user_no_turn",
+                    "AskUserQuestion arrived without an active harness turn.",
+                    exc,
+                    stage="ask-user",
+                )
+                return (
+                    "Nebula does not relay AskUserQuestion. Decide this yourself "
+                    "and continue."
+                )
+            return await handle_headless_question(self.store, active_turn, tool_input)
+
         portable_names = profile.kind == HarnessKind.GROK_ACP
 
         async def gateway_catalog(params: dict[str, Any]) -> dict[str, Any]:
@@ -20775,6 +20917,7 @@ class HarnessRuntimeService:
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
                     interaction_handler=interaction_handler,
+                    ask_user_handler=None if analysis_only else ask_user_handler,
                 ),
             )
             if standing is not None:

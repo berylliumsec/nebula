@@ -1,4 +1,13 @@
-"""Bounded Core actions for one Nebula-wide scheduled Butler case."""
+"""Bounded Core actions for one Nebula-wide scheduled Butler case.
+
+The case runs on the worker of the Act project that hosts the check, which
+otherwise sees only that project. Its reads enter ``global_check_reads`` so the
+check sees every Act project its mandate covers. A change to the host project
+runs here; a change to another project is sent to that project's own worker
+as a ``butler.action/v1`` command (``runtime_butler_actions.py``), which runs
+it only under that project's current Act authority. Without an execution
+worker (one Core process) every change runs here, under the same checks.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +26,7 @@ if TYPE_CHECKING:
 from jsonschema import Draft202012Validator, ValidationError
 
 from .butler_instructions import read_butler_instructions
+from .execution_scope import global_check_reads
 from .butler_sessions import DEFAULT_RUNTIME_FOCUS, focus_runtime_id
 from .chat_assistant_config import chat_assistant_config
 from .harnesses import HarnessConfigurationError
@@ -40,6 +50,15 @@ from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 
 _ID = {"type": "string", "minLength": 1, "maxLength": 200}
+# The scheduled check's prompt roster: every Act project, open main goals.
+ROSTER_PROJECT_LIMIT = 30
+ROSTER_GOALS_PER_PROJECT = 8
+ROSTER_GOAL_LIMIT = 60
+ROSTER_GOAL_STATUSES = (
+    ChatGoalStatus.RUNNING.value,
+    ChatGoalStatus.PAUSED.value,
+    ChatGoalStatus.BLOCKED.value,
+)
 _REV = {"type": "integer", "minimum": 1}
 _PROJECT = {
     "type": "object",
@@ -109,12 +128,16 @@ class ButlerGlobalActions:
         case_id: str,
         *,
         runtime_local: bool = False,
+        remote_actions: Any = None,
     ) -> None:
         self.store = store
         self.work = work
         self.instructions_root = instructions_root
         self.case_id = case_id
         self.runtime_local = runtime_local
+        # The execution worker's client for butler.action/v1 (None in one
+        # Core process, where every project is local).
+        self.remote_actions = remote_actions
 
     async def _case(self) -> ButlerRecoveryCase:
         case = await self.store.get(ButlerRecoveryCase, self.case_id)
@@ -142,13 +165,18 @@ class ButlerGlobalActions:
         return case
 
     async def _project(self, project_id: str) -> Engagement:
-        project = await self.store.get(Engagement, project_id)
-        if project.status == EngagementStatus.ARCHIVED:
-            raise ValueError("Archived projects cannot be managed by Butler")
-        if not (await self._visible(project)):
-            raise ValueError(
-                "Project is outside this Butler runtime's Act and privacy scope"
-            )
+        with global_check_reads():
+            project = await self.store.get(Engagement, project_id)
+            if project.status == EngagementStatus.ARCHIVED:
+                raise ValueError("Archived projects cannot be managed by Butler")
+            if not (await self._visible(project)):
+                # One generic refusal: a model-supplied ID must not learn a
+                # Watch, Steer or local-only project's name or authority.
+                raise ValueError(
+                    "Project is outside this Butler runtime's Act and privacy "
+                    "scope; a Nebula-wide check reads and changes only Act "
+                    "projects it may share with this runtime."
+                )
         return project
 
     async def _visible(self, project: Engagement) -> bool:
@@ -164,29 +192,128 @@ class ButlerGlobalActions:
         return True
 
     async def _act(self, project_id: str, expected: int) -> Engagement:
+        """Check the target project's own Act authority, not the host's."""
+
         (await self._mandate())
         project = await self._project(project_id)
-        policy = await self.store.find_entity(
-            ButlerAuthorityPolicy, "engagement_id", project_id
-        )
-        if (
-            not project.work_enabled
-            or policy is None
-            or policy.authority != "act"
-            or policy.revision != expected
-        ):
-            raise ValueError("Target project Act authority changed or is unavailable")
-        hold = await active_hold(self.store, project_id)
+        with global_check_reads():
+            policy = await self.store.find_entity(
+                ButlerAuthorityPolicy, "engagement_id", project_id
+            )
+            if (
+                not project.work_enabled
+                or policy is None
+                or policy.authority != "act"
+                or policy.revision != expected
+            ):
+                raise ValueError(
+                    "Target project Act authority changed or is unavailable"
+                )
+            hold = await active_hold(self.store, project_id)
         if hold is not None:
             raise ValueError(held_detail(hold))
         return project
+
+    async def _remote(self, project_id: str) -> bool:
+        """Whether a change to this project must run on its own worker."""
+
+        case = await self._case()
+        if project_id == case.engagement_id:
+            return False
+        if self.remote_actions is not None:
+            return True
+        if getattr(self.store.database, "execution_runtime_id", None) is not None:
+            raise ValueError(
+                "This Core worker cannot send Butler's changes to other projects "
+                "yet; it will after its next update."
+            )
+        return False
+
+    async def _send(
+        self,
+        project_id: str,
+        action: str,
+        arguments: dict[str, Any],
+        authority_revision: int,
+    ) -> dict[str, Any]:
+        """Have the target project's own worker make one Butler work change."""
+
+        from .runtime_butler_actions import ButlerAction
+
+        case = await self._case()
+        with global_check_reads():
+            name = (await self.store.get(Engagement, project_id)).name
+        outcome = await self.remote_actions.run(
+            project_id,
+            ButlerAction(
+                action=action,
+                arguments=arguments,
+                initiator="background",
+                case_id=case.id,
+                authority_revision=authority_revision,
+            ),
+        )
+        if outcome["state"] == "failed":
+            detail = outcome["result"].get("detail") or "the change was refused"
+            raise ValueError(f"{name} refused the change: {detail}")
+        if outcome["state"] == "accepted":
+            return {
+                "state": "accepted",
+                "command_id": outcome["command_id"],
+                "detail": (
+                    f"Queued behind {name}'s current work; it runs there within "
+                    "ten minutes or not at all. Read the project again before "
+                    "reporting it done."
+                ),
+            }
+        applied = outcome["result"].get("applied")
+        return applied if isinstance(applied, dict) else {"result": applied}
+
+    def _local_only(self, project_id: str, route: str) -> ValueError:
+        return ValueError(
+            f"nebula.global.{route} runs only in this check's host project; "
+            f"{project_id} needs a check hosted there or the operator."
+        )
 
     async def projects(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._projects_read(arguments)
 
     async def _projects_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._case())
+        with global_check_reads():
+            return await self._projects_rows(arguments)
+
+    async def _projects_rows(self, arguments: dict[str, Any]) -> dict[str, Any]:
         offset = arguments.get("offset", 0)
+        projects, policies = await self._act_projects()
+        rows = []
+        for project in projects[offset : offset + 50]:
+            policy = policies[project.id]
+            rows.append(
+                {
+                    "id": project.id,
+                    "name": project.name,
+                    "status": project.status.value,
+                    "revision": project.revision,
+                    "work_enabled": project.work_enabled,
+                    "parent_project_id": project.parent_engagement_id,
+                    "authority": policy.authority,
+                    "authority_revision": policy.revision,
+                }
+            )
+        return {
+            "projects": rows,
+            "next_offset": offset + 50 if offset + 50 < len(projects) else None,
+            "runtimes": (await self.work.catalog((await self._case()).engagement_id))[
+                "runtimes"
+            ],
+        }
+
+    async def _act_projects(
+        self,
+    ) -> tuple[list[Engagement], dict[str, ButlerAuthorityPolicy]]:
+        """Every Act project this runtime may see, oldest first, and policies."""
+
         # Resolve authority once, preserving find_entity's oldest-policy rule.
         # A roster scan with one policy lookup per project serializes pool waits.
         policies: dict[str, ButlerAuthorityPolicy] = {}
@@ -212,27 +339,85 @@ class ButlerGlobalActions:
             visible_projects,
             key=lambda item: (item.created_at, item.id),
         )
-        rows = []
-        for project in projects[offset : offset + 50]:
-            policy = policies[project.id]
-            rows.append(
-                {
-                    "id": project.id,
-                    "name": project.name,
-                    "status": project.status.value,
-                    "revision": project.revision,
-                    "work_enabled": project.work_enabled,
-                    "parent_project_id": project.parent_engagement_id,
-                    "authority": policy.authority,
-                    "authority_revision": policy.revision,
-                }
-            )
+        return projects, policies
+
+    async def roster(self) -> dict[str, Any]:
+        """Every Act project and its open main goals, bounded for the prompt.
+
+        A scheduled check's summary must cover every Act project, so its
+        prompt lists them all, not just the project hosting the check. Counts
+        are capped; ``truncated`` and per-project ``goals_omitted`` say what
+        was left out, and nebula.global.projects / project read the rest.
+        """
+
+        from .chat_work_stage import work_stages_for_chats
+
+        with global_check_reads():
+            projects, policies = await self._act_projects()
+            rows: list[dict[str, Any]] = []
+            goals_left = ROSTER_GOAL_LIMIT
+            for project in projects[:ROSTER_PROJECT_LIMIT]:
+                policy = policies[project.id]
+                goals = await self.store.find_entities(
+                    ChatGoal,
+                    {"status": list(ROSTER_GOAL_STATUSES), "parent_goal_id": None},
+                    engagement_id=project.id,
+                    newest_first=True,
+                    limit=ROSTER_GOALS_PER_PROJECT + 1,
+                )
+                total = await self.store.count_entities(
+                    ChatGoal,
+                    {"status": list(ROSTER_GOAL_STATUSES), "parent_goal_id": None},
+                    engagement_id=project.id,
+                )
+                shown = goals[: min(ROSTER_GOALS_PER_PROJECT, goals_left)]
+                goals_left -= len(shown)
+                titles = (
+                    {
+                        session.id: session.title
+                        for session in await self.store.find_entities(
+                            ChatSession,
+                            {"id": [goal.session_id for goal in shown]},
+                            engagement_id=project.id,
+                        )
+                    }
+                    if shown
+                    else {}
+                )
+                async with self.store.database.session() as database:
+                    stages = await work_stages_for_chats(
+                        database, [goal.session_id for goal in shown], [project.id]
+                    )
+                rows.append(
+                    {
+                        "project_id": project.id,
+                        "name": project.name,
+                        "status": project.status.value,
+                        "authority_revision": policy.revision,
+                        "open_main_goals": total,
+                        "goals": [
+                            {
+                                "goal_id": goal.id,
+                                "session_id": goal.session_id,
+                                "title": titles.get(goal.session_id, "")[:120],
+                                "objective": " ".join(goal.objective.split())[:160],
+                                "status": goal.status.value,
+                                "stage": (stages.get(goal.session_id) or {}).get(
+                                    "label"
+                                ),
+                                "step": goal.current_step,
+                                "plan_steps": len(goal.plan),
+                            }
+                            for goal in shown
+                        ],
+                        "goals_omitted": max(0, total - len(shown)),
+                    }
+                )
         return {
-            "projects": rows,
-            "next_offset": offset + 50 if offset + 50 < len(projects) else None,
-            "runtimes": (await self.work.catalog((await self._case()).engagement_id))[
-                "runtimes"
-            ],
+            "act_projects": rows,
+            "act_project_count": len(projects),
+            "truncated": len(projects) > ROSTER_PROJECT_LIMIT
+            or any(row["goals_omitted"] for row in rows),
         }
 
     async def project(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -241,20 +426,22 @@ class ButlerGlobalActions:
     async def _project_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         project = await self._project(project_id)
-        return {
-            "project": project.model_dump(mode="json"),
-            "work": (await self.work.overview(project_id)),
-            "goals": (await self.work.goals_overview(project_id)),
-        }
+        with global_check_reads():
+            return {
+                "project": project.model_dump(mode="json"),
+                "work": (await self.work.overview(project_id)),
+                "goals": (await self.work.goals_overview(project_id)),
+            }
 
     async def goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._goal_read(arguments)
 
     async def _goal_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return await self.work.goal_detail(
-            arguments["project_id"], arguments["session_id"]
-        )
+        with global_check_reads():
+            return await self.work.goal_detail(
+                arguments["project_id"], arguments["session_id"]
+            )
 
     async def assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._assistant_defaults_read(arguments)
@@ -263,27 +450,32 @@ class ButlerGlobalActions:
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return await self.work.assistant_defaults(arguments["project_id"])
+        with global_check_reads():
+            return await self.work.assistant_defaults(arguments["project_id"])
 
     async def set_assistant_defaults(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        return await self.work.set_assistant_defaults(
-            project_id,
-            {
-                "expected_revision": arguments["expected_revision"],
-                "settings": arguments["settings"],
-            },
-        )
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        change = {
+            "expected_revision": arguments["expected_revision"],
+            "settings": arguments["settings"],
+        }
+        if await self._remote(project_id):
+            return await self._send(
+                project_id, "nebula.work.set_assistant_defaults", change, expected
+            )
+        return await self.work.set_assistant_defaults(project_id, change)
 
     async def chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._chat_settings_read(arguments)
 
     async def _chat_settings_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return await self.work.chat_settings(
-            arguments["project_id"], arguments["session_id"]
-        )
+        with global_check_reads():
+            return await self.work.chat_settings(
+                arguments["project_id"], arguments["session_id"]
+            )
 
     async def chat_settings_many(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._chat_settings_many_read(arguments)
@@ -292,9 +484,10 @@ class ButlerGlobalActions:
         self, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return await self.work.chat_settings_many(
-            arguments["project_id"], arguments["session_ids"]
-        )
+        with global_check_reads():
+            return await self.work.chat_settings_many(
+                arguments["project_id"], arguments["session_ids"]
+            )
 
     async def work_catalog(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._work_catalog_read(arguments)
@@ -302,7 +495,8 @@ class ButlerGlobalActions:
     async def _work_catalog_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         (await self._project(project_id))
-        return await self.work.catalog(project_id, arguments.get("operation"))
+        with global_check_reads():
+            return await self.work.catalog(project_id, arguments.get("operation"))
 
     async def work_read(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._dispatch_work(arguments, change=False)
@@ -335,21 +529,31 @@ class ButlerGlobalActions:
                 f"Invalid Assistant work arguments for {operation}: {exc.message}; "
                 "read work_catalog for its exact schema"
             ) from exc
-        if change:
-            (await self._act(project_id, arguments["expected_authority_revision"]))
+        if not change:
+            with global_check_reads():
+                return await dispatch_work_tool(
+                    self.work, project_id, operation, payload
+                )
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        if await self._remote(project_id):
+            return await self._send(project_id, operation, payload, expected)
         return await dispatch_work_tool(self.work, project_id, operation, payload)
 
     async def set_chat_settings(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        return await self.work.set_chat_settings(
-            project_id,
-            {
-                key: value
-                for key, value in arguments.items()
-                if key not in {"project_id", "expected_authority_revision"}
-            },
-        )
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        change = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"project_id", "expected_authority_revision"}
+        }
+        if await self._remote(project_id):
+            return await self._send(
+                project_id, "nebula.work.set_chat_settings", change, expected
+            )
+        return await self.work.set_chat_settings(project_id, change)
 
     async def host_load(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self.work.host_load((await self._case()).engagement_id, {})
@@ -362,18 +566,27 @@ class ButlerGlobalActions:
 
     async def harness_quota(self, arguments: dict[str, Any]) -> dict[str, Any]:
         (await self._project(arguments["project_id"]))
-        return await self.work.harness_quota(arguments["project_id"], arguments)
+        # An account's quota is not project data: read it through the host
+        # project, whose worker may refresh the shared observation.
+        return await self.work.harness_quota(
+            (await self._case()).engagement_id, arguments
+        )
 
     async def resume_project(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
         project = await self._act(project_id, arguments["expected_authority_revision"])
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project revision changed; read it again")
-        if project.status not in {EngagementStatus.DRAFT, EngagementStatus.PAUSED}:
+        if project.status not in {
+            EngagementStatus.DRAFT,
+            EngagementStatus.PAUSED,
+        }:
             return {
                 "project": project.model_dump(mode="json"),
                 "already_active": project.status == EngagementStatus.ACTIVE,
             }
+        if await self._remote(project_id):
+            raise self._local_only(project_id, "resume_project")
         saved = await self.store.update(
             Engagement,
             project.id,
@@ -384,17 +597,18 @@ class ButlerGlobalActions:
 
     async def _existing_goal(self, project_id: str, objective: str) -> ChatGoal | None:
         wanted = " ".join(objective.split()).casefold()
-        return await async_first(
-            (
-                goal
-                async for goal in self.store.iter_readable_entities(
-                    ChatGoal, engagement_id=project_id
-                )
-                if goal.parent_goal_id is None
-                and " ".join(goal.objective.split()).casefold() == wanted
-            ),
-            None,
-        )
+        with global_check_reads():
+            return await async_first(
+                (
+                    goal
+                    async for goal in self.store.iter_readable_entities(
+                        ChatGoal, engagement_id=project_id
+                    )
+                    if goal.parent_goal_id is None
+                    and " ".join(goal.objective.split()).casefold() == wanted
+                ),
+                None,
+            )
 
     async def create_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
@@ -405,10 +619,9 @@ class ButlerGlobalActions:
             raise ValueError("Activate the project before creating a goal")
         existing = await self._existing_goal(project_id, arguments["objective"])
         if existing is not None:
-            return {
-                **(await self.work.goal_detail(project_id, existing.session_id)),
-                "already_exists": True,
-            }
+            with global_check_reads():
+                detail = await self.work.goal_detail(project_id, existing.session_id)
+            return {**detail, "already_exists": True}
         goal_args = {
             key: value
             for key, value in arguments.items()
@@ -420,22 +633,49 @@ class ButlerGlobalActions:
                 "start",
             }
         }
-        project = await self._act(project_id, arguments["expected_authority_revision"])
+        expected = arguments["expected_authority_revision"]
+        project = await self._act(project_id, expected)
         if project.status != EngagementStatus.ACTIVE:
             raise ValueError("Activate the project before creating a goal")
-        created = await self.work.create_goal_conversation(project_id, goal_args)
+        created = await self._change(
+            project_id,
+            expected,
+            "nebula.work.create_goal_conversation",
+            goal_args,
+            self.work.create_goal_conversation,
+        )
+        if created.get("state") == "accepted":
+            return {**created, "started": False}
         if arguments.get("start", False):
-            (await self._act(project_id, arguments["expected_authority_revision"]))
-            started = await self.work.goal_action(
+            (await self._act(project_id, expected))
+            started = await self._change(
                 project_id,
+                expected,
+                "nebula.work.goal_action",
                 {
                     "session_id": created["session_id"],
                     "expected_revision": created["goal"]["revision"],
                     "action": "start",
                 },
+                self.work.goal_action,
             )
             return {**started, "created": True, "started": True}
         return {**created, "created": True}
+
+    async def _change(
+        self,
+        project_id: str,
+        expected: int,
+        action: str,
+        arguments: dict[str, Any],
+        local: Any,
+    ) -> dict[str, Any]:
+        """Run one work change here, or on the target project's own worker."""
+
+        if await self._remote(project_id):
+            return await self._send(project_id, action, arguments, expected)
+        result: dict[str, Any] = await local(project_id, arguments)
+        return result
 
     async def _butler_runtime(
         self,
@@ -633,6 +873,10 @@ class ButlerGlobalActions:
         case = await self._mandate()
         project_id = arguments["project_id"]
         project = await self._act(project_id, arguments["expected_authority_revision"])
+        if await self._remote(project_id):
+            # The recovery goal reports through this case, whose rows only
+            # the host project's worker can link and read back.
+            raise self._local_only(project_id, "create_recovery_goal")
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project revision changed; read it again")
         if project.status != EngagementStatus.ACTIVE:
@@ -768,7 +1012,24 @@ class ButlerGlobalActions:
             and project.status != EngagementStatus.ACTIVE
         ):
             raise ValueError("Activate the project before starting or resuming a goal")
-        current = await self.work.goal_detail(project_id, arguments["session_id"])
+        await self._main_goal(project_id, arguments)
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        return await self._change(
+            project_id,
+            expected,
+            "nebula.work.goal_action",
+            {
+                key: value
+                for key, value in arguments.items()
+                if key not in {"project_id", "expected_authority_revision"}
+            },
+            self.work.goal_action,
+        )
+
+    async def _main_goal(self, project_id: str, arguments: dict[str, Any]) -> None:
+        with global_check_reads():
+            current = await self.work.goal_detail(project_id, arguments["session_id"])
         goal = current.get("goal")
         if (
             current.get("kind") != "main"
@@ -776,35 +1037,23 @@ class ButlerGlobalActions:
             or goal["revision"] != arguments["expected_revision"]
         ):
             raise ValueError("Main goal changed; read it again")
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        return await self.work.goal_action(
-            project_id,
-            {
-                key: value
-                for key, value in arguments.items()
-                if key not in {"project_id", "expected_authority_revision"}
-            },
-        )
 
     async def update_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
         project_id = arguments["project_id"]
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        current = await self.work.goal_detail(project_id, arguments["session_id"])
-        goal = current.get("goal")
-        if (
-            current.get("kind") != "main"
-            or goal is None
-            or goal["revision"] != arguments["expected_revision"]
-        ):
-            raise ValueError("Main goal changed; read it again")
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        return await self.work.update_goal(
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        await self._main_goal(project_id, arguments)
+        (await self._act(project_id, expected))
+        return await self._change(
             project_id,
+            expected,
+            "nebula.work.update_goal",
             {
                 key: value
                 for key, value in arguments.items()
                 if key not in {"project_id", "expected_authority_revision"}
             },
+            self.work.update_goal,
         )
 
     async def handoff_goal(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -816,7 +1065,8 @@ class ButlerGlobalActions:
             raise ValueError("Activate the project before handing off a goal")
         if project.revision != arguments["expected_project_revision"]:
             raise ValueError("Project changed; read its revision again")
-        current = await self.work.goal_detail(project_id, arguments["session_id"])
+        with global_check_reads():
+            current = await self.work.goal_detail(project_id, arguments["session_id"])
         source = current.get("goal")
         if current.get("kind") != "main" or source is None:
             raise ValueError("Handoff requires a listed main goal")
@@ -826,9 +1076,12 @@ class ButlerGlobalActions:
             "metadata", {}
         ).get("handoff_target_session_id"):
             raise ValueError("Source goal changed; read it again")
-        (await self._act(project_id, arguments["expected_authority_revision"]))
-        handoff = await self.work.handoff_goal(
+        expected = arguments["expected_authority_revision"]
+        (await self._act(project_id, expected))
+        handoff = await self._change(
             project_id,
+            expected,
+            "nebula.work.handoff_goal",
             {
                 key: value
                 for key, value in arguments.items()
@@ -842,21 +1095,27 @@ class ButlerGlobalActions:
                     "max_time_seconds",
                 }
             },
+            self.work.handoff_goal,
         )
+        if handoff.get("state") == "accepted":
+            return {**handoff, "started": False}
         if arguments.get("start", True) and handoff["goal"]["status"] == "draft":
-            (await self._act(project_id, arguments["expected_authority_revision"]))
+            (await self._act(project_id, expected))
             handoff = {
-                **await self.work.goal_action(
+                **await self._change(
                     project_id,
+                    expected,
+                    "nebula.work.goal_action",
                     {
                         "session_id": handoff["session_id"],
                         "expected_revision": handoff["goal"]["revision"],
                         "action": "start",
                     },
+                    self.work.goal_action,
                 ),
                 "source_goal_id": source["id"],
                 "source_session_id": arguments["session_id"],
-                "already_exists": handoff["already_exists"],
+                "already_exists": handoff.get("already_exists", False),
             }
         return handoff
 
@@ -865,6 +1124,8 @@ class ButlerGlobalActions:
 
         parent_id = arguments["parent_project_id"]
         parent = await self._act(parent_id, arguments["expected_authority_revision"])
+        if await self._remote(parent_id):
+            raise self._local_only(parent_id, "create_child_project")
         if parent.revision != arguments["expected_parent_revision"]:
             raise ValueError("Parent project revision changed; read it again")
         if parent.status != EngagementStatus.ACTIVE:

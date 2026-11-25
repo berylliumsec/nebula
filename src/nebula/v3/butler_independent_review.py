@@ -12,7 +12,10 @@ asks Core for an independent review; Core then:
    the work;
 2. builds a fresh packet from the goal's completion criteria, its held
    completion proposal, the ceiling policy and the bytes of the cited evidence
-   files. Butler's conversation, notes and instructions are not included;
+   files. Butler's conversation, notes and instructions are not included.
+   Evidence files are read only from the goal's own project workspace (a
+   relative path, as Butler's workspace tools return it, resolves there) and
+   from the operator's extra ``NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS``;
 3. makes one tool-free model call (on a harness: one turn in a fresh session
    with every native capability off, no MCP server, no Core gateway, every
    permission denied and any tool event fatal) and validates the verdict
@@ -81,7 +84,7 @@ from .domain import (
     ProviderProfile,
     RiskClass,
 )
-from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
+from .tools import AnalysisTool, GuidedToolError, IdempotencyBehavior, ToolSpec
 
 
 REVIEW_KEY = "independent_review"
@@ -100,6 +103,10 @@ _provider_factory: Callable[[ProviderProfile], Any] | None = None
 HarnessReviewRunner = Callable[[HarnessProfile, str, str], Awaitable[str]]
 _harness_runner: HarnessReviewRunner | None = None
 
+# project id -> that project's workspace folder (Core's own resolver).
+WorkspaceResolver = Callable[[str], Awaitable[Path]]
+_workspace_resolver: WorkspaceResolver | None = None
+
 
 def set_review_provider_factory(factory: Callable[[ProviderProfile], Any]) -> None:
     """Called once by the execution kernel with Core's provider factory."""
@@ -113,6 +120,13 @@ def set_review_harness_runner(runner: HarnessReviewRunner) -> None:
 
     global _harness_runner
     _harness_runner = runner
+
+
+def set_review_workspace_resolver(resolver: WorkspaceResolver) -> None:
+    """Called once by the execution kernel with Core's project workspace resolver."""
+
+    global _workspace_resolver
+    _workspace_resolver = resolver
 
 
 class ReviewUnavailable(RuntimeError):
@@ -264,38 +278,127 @@ REVIEWER_INSTRUCTIONS = (
 )
 
 
-def _read_evidence(policy: SupervisorPolicy, paths: list[str]) -> list[dict[str, Any]]:
-    roots = [os.path.realpath(item) for item in policy.evidence_roots]
+_READ_CHUNK = 1 << 20
+
+
+def _root_relative(
+    candidate: str, roots: list[tuple[str, str]]
+) -> tuple[str, tuple[str, ...]] | None:
+    """The real root and the components below it, compared lexically."""
+
+    for lexical, real in roots:
+        for base in dict.fromkeys((lexical, real)):
+            prefix = base.rstrip("/") + "/"
+            if candidate.startswith(prefix):
+                parts = tuple(candidate[len(prefix) :].split("/"))
+                if all(part not in {"", ".", ".."} for part in parts):
+                    return real, parts
+    return None
+
+
+def _read_pinned(real_root: str, parts: tuple[str, ...]) -> tuple[bytes, int, str]:
+    """Read one regular file below ``real_root`` without following links.
+
+    Every component is opened with ``O_NOFOLLOW`` from the root descriptor,
+    so a link swapped in after the path was checked is refused instead of
+    followed. Returns the first ``MAX_FILE_BYTES + 1`` bytes, the file size
+    and the SHA-256 of the whole file, hashed in chunks from the same
+    descriptor, so memory stays bounded whatever the file size.
+    """
+
+    import hashlib
+    import stat
+
+    from .workspace import _open_directory_chain
+
+    directory = _open_directory_chain(Path(real_root), parts[:-1])
+    try:
+        descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory,
+        )
+    finally:
+        os.close(directory)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise IsADirectoryError(parts[-1])
+        hasher = hashlib.sha256()
+        head = bytearray()
+        size = 0
+        while chunk := os.read(descriptor, _READ_CHUNK):
+            hasher.update(chunk)
+            size += len(chunk)
+            if len(head) <= MAX_FILE_BYTES:
+                head += chunk[: MAX_FILE_BYTES + 1 - len(head)]
+        return bytes(head), size, hasher.hexdigest()
+    finally:
+        os.close(descriptor)
+
+
+def _read_evidence(
+    policy: SupervisorPolicy, paths: list[str], workspace: str | None = None
+) -> list[dict[str, Any]]:
+    """Read cited evidence from the goal's project workspace or extra roots.
+
+    ``workspace`` is the goal's own project folder: a relative path resolves
+    inside it, and it is always an evidence root for that goal. The
+    operator's ``NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS`` add absolute roots.
+    The path is checked lexically and then opened one component at a time
+    without following links: a symbolic link anywhere below a root is
+    refused, so the goal cannot point the reviewer outside its roots, even
+    by swapping a link in after the check.
+    """
+
+    roots = [
+        (os.path.normpath(item), os.path.realpath(item))
+        for item in policy.evidence_roots
+    ]
+    if workspace is not None:
+        roots.append((os.path.normpath(workspace), os.path.realpath(workspace)))
     if not roots:
         raise GuardrailViolation(
-            "not_configured", "set NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS"
+            "not_configured",
+            "the goal's project has no workspace and "
+            "NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS is not set",
         )
     files: list[dict[str, Any]] = []
     total = 0
     for raw in paths[:MAX_EVIDENCE_FILES]:
-        resolved = os.path.realpath(raw)
-        if not any(
-            resolved == r or resolved.startswith(r.rstrip("/") + "/") for r in roots
-        ):
+        if not os.path.isabs(raw):
+            if workspace is None:
+                raise GuardrailViolation(
+                    "relative_evidence_path",
+                    f"{raw} is relative and the goal's project has no workspace",
+                )
+            candidate = os.path.normpath(os.path.join(os.path.realpath(workspace), raw))
+        else:
+            candidate = os.path.normpath(raw)
+        located = _root_relative(candidate, roots)
+        if located is None:
             raise GuardrailViolation(
                 "evidence_outside_roots", f"{raw} is outside the evidence roots"
             )
-        path = Path(resolved)
-        if not path.is_file():
+        try:
+            body, size, sha256 = _read_pinned(*located)
+        except FileNotFoundError:
+            # diagnostic-expected: a cited file that does not exist is reported to the reviewer as missing.
             files.append({"path": raw, "missing": True})
             continue
-        data = path.read_bytes()
-        body = data[:MAX_FILE_BYTES]
+        except OSError as exc:
+            # A symbolic link (ELOOP/ENOTDIR under O_NOFOLLOW), a folder or a
+            # special file: refused, never followed.
+            raise GuardrailViolation(
+                "evidence_not_regular_file",
+                f"{raw} is a symbolic link, folder or special file",
+            ) from exc
         if b"\x00" in body[:4096]:
-            files.append(
-                {
-                    "path": raw,
-                    "binary": True,
-                    "bytes": len(data),
-                    "sha256": digest(data),
-                }
-            )
+            files.append({"path": raw, "binary": True, "bytes": size, "sha256": sha256})
             continue
+        body = body[:MAX_FILE_BYTES]
         if total + len(body) > MAX_EVIDENCE_BYTES:
             files.append({"path": raw, "omitted": "evidence byte budget reached"})
             continue
@@ -303,13 +406,104 @@ def _read_evidence(policy: SupervisorPolicy, paths: list[str]) -> list[dict[str,
         files.append(
             {
                 "path": raw,
-                "bytes": len(data),
-                "sha256": digest(data),
-                "truncated": len(data) > MAX_FILE_BYTES,
+                "bytes": size,
+                "sha256": sha256,
+                "truncated": size > MAX_FILE_BYTES,
                 "content": redact(policy, body.decode("utf-8", "replace")),
             }
         )
     return files
+
+
+# Refusals raised before the reviewer is called: no state changed.
+_BEFORE_REVIEWER = frozenset(
+    {
+        "not_configured",
+        "relative_evidence_path",
+        "evidence_outside_roots",
+        "evidence_not_regular_file",
+        "reviewer_disabled",
+        "reviewer_model_not_allowed",
+        "reviewer_privacy_not_authorized",
+        "harness_runner_unavailable",
+        "provider_factory_unavailable",
+        "reviewer_not_independent",
+        "ambiguous_reviewer",
+    }
+)
+_EVIDENCE_REFUSALS: dict[str, tuple[str, str]] = {
+    "not_configured": (
+        "Core has no evidence root for this goal: its project has no workspace "
+        "and NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS is not set.",
+        "Ask the operator to give the project a workspace or set "
+        "NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS. Do not retry unchanged.",
+    ),
+    "relative_evidence_path": (
+        "An evidence path is relative, and the goal's project has no workspace "
+        "to resolve it in.",
+        "Pass absolute paths under NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS, or ask "
+        "the operator to give the project a workspace.",
+    ),
+    "evidence_not_regular_file": (
+        "An evidence path is a symbolic link, a folder or a special file. Core "
+        "reads evidence only from regular files and never follows links.",
+        "Cite the regular file itself, inside the goal's project workspace or "
+        "the configured evidence roots.",
+    ),
+    "evidence_outside_roots": (
+        "An evidence path is outside the goal's project workspace and the "
+        "operator's NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS.",
+        "Cite only files in the goal's project workspace (paths as the "
+        "workspace tools return them) or under the configured evidence roots.",
+    ),
+}
+_REVIEWER_REMEDY = (
+    "Tell the operator the exact rule above; the reviewer runtime is set with "
+    "NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID or NEBULA_BUTLER_REVIEW_PROVIDER_ID "
+    "and NEBULA_BUTLER_REVIEW_MODEL. Do not retry unchanged."
+)
+
+
+def review_refusal(exc: GuardrailViolation | ReviewUnavailable) -> GuidedToolError:
+    """A model-safe refusal that names Core's exact rule and its remedy.
+
+    The text is Core-authored: evidence paths from the call and reviewer
+    output are never copied into it.
+    """
+
+    if isinstance(exc, GuardrailViolation):
+        code = exc.rule
+        problem, action = _EVIDENCE_REFUSALS.get(
+            code,
+            (
+                f"Core refused the review's evidence ({code}).",
+                "Correct the evidence paths or ask the operator. Do not retry "
+                "unchanged.",
+            ),
+        )
+        return GuidedToolError(
+            str(exc),
+            code=f"independent_review.{code}",
+            category="permission_denied",
+            problem=problem,
+            next_action=action,
+            field="evidence_paths",
+            before_execution=True,
+        )
+    code = exc.code
+    detail = str(exc).removeprefix(code).removeprefix(": ")
+    if code == "invalid_model_output" or not detail:
+        problem = f"Core could not run the independent review ({code})."
+    else:
+        problem = f"Core could not run the independent review ({code}): {detail}"
+    return GuidedToolError(
+        str(exc),
+        code=f"independent_review.{code}",
+        category="unavailable_dependency",
+        problem=problem[:600],
+        next_action=_REVIEWER_REMEDY,
+        before_execution=code in _BEFORE_REVIEWER,
+    )
 
 
 class ButlerIndependentReview:
@@ -324,6 +518,7 @@ class ButlerIndependentReview:
         policy_loader: Callable[[], SupervisorPolicy] = load_policy,
         provider_factory: Callable[[ProviderProfile], Any] | None = None,
         harness_runner: HarnessReviewRunner | None = None,
+        workspace_resolver: WorkspaceResolver | None = None,
     ) -> None:
         self.store = store
         self.work = work
@@ -331,6 +526,26 @@ class ButlerIndependentReview:
         self._policy_loader = policy_loader
         self._provider_factory = provider_factory
         self._harness_runner = harness_runner
+        self._workspace_resolver = workspace_resolver
+
+    async def _project_workspace(self) -> str | None:
+        """The goal project's workspace folder, or None when Core has none."""
+
+        resolver = self._workspace_resolver or _workspace_resolver
+        if resolver is None:
+            return None
+        try:
+            return str(await resolver(self.project_id))
+        except (OSError, ValueError, RuntimeError, LookupError) as exc:
+            record_caught_exception(
+                "butler",
+                "butler.independent_review.workspace_unavailable",
+                "The project workspace could not be resolved for an independent "
+                "review; only the configured evidence roots apply.",
+                exc,
+                stage="independent_review",
+            )
+            return None
 
     async def _harness_reviewer(
         self, policy: SupervisorPolicy
@@ -446,7 +661,7 @@ class ButlerIndependentReview:
         # claim lines are removed and flagged for the reviewer.
         clean_proposal, proposal_flags = sanitize_goal_text(proposal)
         evidence_files, evidence_flags = sanitize_goal_text(
-            _read_evidence(policy, paths)
+            _read_evidence(policy, paths, await self._project_workspace())
         )
         packet = {
             "goal_id": goal.id,
@@ -756,12 +971,17 @@ class ButlerIndependentReview:
         return {"session_id": new_session, "objective_sha256": digest(objective)}
 
     async def request(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return await self.review(
-            arguments["session_id"],
-            list(arguments.get("evidence_paths") or []),
-            on_residuals=arguments.get("on_residuals", "feed"),
-            apply=bool(arguments.get("apply", True)),
-        )
+        try:
+            return await self.review(
+                arguments["session_id"],
+                list(arguments.get("evidence_paths") or []),
+                on_residuals=arguments.get("on_residuals", "feed"),
+                apply=bool(arguments.get("apply", True)),
+            )
+        except (GuardrailViolation, ReviewUnavailable) as exc:
+            # Butler sees the exact Core rule and its remedy, not a bare
+            # "permission denied" it cannot act on.
+            raise review_refusal(exc) from exc
 
     def actions(self) -> list[AnalysisTool]:
         return [

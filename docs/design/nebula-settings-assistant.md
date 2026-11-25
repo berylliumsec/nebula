@@ -631,6 +631,18 @@ recorded tool activity, so a status-only loop cannot continue indefinitely.
 The agent's block action is scoped to the goal on its active turn and cannot
 choose another conversation's goal.
 
+When only the operator can act with their hands or account (replug or
+power-cycle a device, restart a host, attach a credential, approve an account
+change, a physical check), a goal agent calls `goal.request_operator_action`
+(`goal_request_operator_action` for provider goals) instead of writing "NEEDS
+YOU" into a Work check-in. The request appears under **Needs you** at the top
+of the Butler board and as a Butler incident; with `block_goal` the goal waits
+on it and resumes when the operator marks it Done. Goals decide research
+questions themselves, so Core refuses a request that asks for a decision. A
+Claude harness goal that calls `AskUserQuestion` gets the same treatment: a
+research question is answered with "decide this yourself", and an
+operator-only one becomes a request that blocks the goal.
+
 ## Nebula-wide Butler instructions
 
 An operator may create one `.butler/BUTLER.md` under Core's data directory
