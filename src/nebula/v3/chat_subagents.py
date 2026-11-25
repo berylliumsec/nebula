@@ -106,7 +106,7 @@ from .native_hooks import discover_native_hooks
 from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
 from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
 from .project_hold_gate import is_held
-from .recovery_markers import CALLBACK_STALL_CAUSE
+from .recovery_markers import CALLBACK_STALL_CAUSE, PROJECT_RUNTIME_STOP_CAUSE
 from .storage import (
     REVISE_ATTEMPTS,
     ConflictError,
@@ -817,10 +817,10 @@ def _step_error(entry: dict[str, Any]) -> str:
     return _bounded(str(summary), 300) if summary else ""
 
 
-# Interruptions Core continues by itself: a stop or restart of Core, and the
-# first stall of a callback wait (``CALLBACK_STALL_CAUSE``).
+# Interruptions Core continues by itself: a stop or restart of Core, a stop of
+# the project runtime while Core kept running, and the first stall of a callback wait (``CALLBACK_STALL_CAUSE``).
 _CORE_RESUMED_CAUSES = frozenset(
-    {"core_shutdown", "core_restart", CALLBACK_STALL_CAUSE}
+    {"core_shutdown", "core_restart", PROJECT_RUNTIME_STOP_CAUSE, CALLBACK_STALL_CAUSE}
 )
 
 
