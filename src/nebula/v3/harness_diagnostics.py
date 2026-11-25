@@ -12,7 +12,14 @@ from uuid import uuid4
 from .credentials import CredentialStore
 from .diagnostic_guidance import reason_code_for
 from .diagnostics import record_caught_exception
-from .domain import HarnessNativeCapabilities, HarnessProfile, HarnessSession, utc_now
+from .domain import (
+    HarnessAuthMode,
+    HarnessKind,
+    HarnessNativeCapabilities,
+    HarnessProfile,
+    HarnessSession,
+    utc_now,
+)
 from .storage import NebulaStore
 
 if TYPE_CHECKING:
@@ -161,11 +168,23 @@ async def run_harness_test_turn(
         if connection is not None:
             with suppress(Exception):
                 await connection.close()
+    detail = reason
+    signed_out = reason == "authentication_failed"
+    if (
+        signed_out
+        and profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+        and profile.auth_mode == HarnessAuthMode.EXISTING_SESSION
+    ):
+        from .harnesses import _claude_not_logged_in_detail
+
+        # Say where the CLI looked for its login and how to sign in there.
+        detail = _claude_not_logged_in_detail()
     current = await store.get(HarnessProfile, profile_id)
     capabilities = current.capabilities.model_copy(
         update={
+            **({"detail": detail} if signed_out and detail != reason else {}),
             "authentication_state": "failed"
-            if reason == "authentication_failed"
+            if signed_out
             else current.capabilities.authentication_state,
             "session_state": session_state,
             "turn_state": state,
@@ -200,7 +219,7 @@ async def run_harness_test_turn(
         healthy=state == "verified" and session_state == "verified",
         kind=profile.kind,
         capabilities=capabilities,
-        detail=reason,
+        detail=detail,
         authentication_state=capabilities.authentication_state,
         session_state=session_state,
         turn_state=state,
@@ -247,3 +266,94 @@ async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessH
             or HarnessRuntimeService._default_adapter,
             open_connection=open_connection,
         )
+
+
+async def run_harness_one_shot(
+    profile: HarnessProfile,
+    model: str,
+    prompt: str,
+    *,
+    credentials: CredentialStore,
+    adapter_factory: Callable[..., Any],
+    open_connection: Callable[..., Any],
+    timeout_seconds: float = 600,
+    max_reply_bytes: int = 64_000,
+) -> str:
+    """One tool-free turn in a fresh harness session; returns the reply text.
+
+    Used by Butler's independent closure reviewer. The session is new (no
+    vendor session id, so nothing is resumed), runs in an empty private
+    scratch directory, has every vendor-native capability off, no MCP server
+    and no Core gateway, and every permission request is denied. Any tool
+    event ends the turn with an error, so a reply is never the product of a
+    tool call.
+    """
+    from .harnesses import (
+        AdapterOpenRequest,
+        HarnessConfigurationError,
+        HarnessPermissionRequest,
+        HarnessTransportError,
+        PermissionTicket,
+    )
+
+    if not profile.enabled:
+        raise HarnessConfigurationError(f"harness {profile.name!r} is disabled")
+    with tempfile.TemporaryDirectory(prefix="nebula-harness-review-") as name:
+        workspace = Path(name)
+        no_tools = HarnessNativeCapabilities()
+        session = HarnessSession(
+            id=str(uuid4()),
+            engagement_id="independent-review",
+            harness_profile_id=profile.id,
+            model=model,
+            metadata={"native_capabilities": no_tools.model_dump()},
+        )
+
+        async def deny_permission(
+            _request: HarnessPermissionRequest,
+        ) -> PermissionTicket:
+            raise HarnessConfigurationError("The independent reviewer cannot use tools")
+
+        request = AdapterOpenRequest(
+            profile=profile.model_copy(update={"native_capabilities": no_tools}),
+            session=session,
+            workspace=workspace,
+            mcp_profiles=(),
+            credential_store=credentials,
+            permission_handler=deny_permission,
+        )
+        connection = await open_connection(adapter_factory(profile.kind), request)
+        try:
+            reply = ""
+            final = ""
+            size = 0
+            async with asyncio.timeout(timeout_seconds):
+                async for event in connection.run_turn(prompt, model=model):
+                    if event.type == "error":
+                        raise HarnessTransportError(
+                            event.message or "Reviewer turn failed"
+                        )
+                    if (
+                        event.type in {"tool_started", "tool_completed"}
+                        or event.item_kind == "tool"
+                    ):
+                        raise HarnessConfigurationError(
+                            "The independent reviewer attempted a tool"
+                        )
+                    if event.type == "message_delta" and event.delta:
+                        size += len(event.delta.encode())
+                        reply += event.delta
+                    elif event.type == "completed" and event.message:
+                        final = event.message
+                        size = max(size, len(final.encode()))
+                    if size > max_reply_bytes:
+                        raise HarnessTransportError(
+                            "Reviewer response exceeded its bounded size"
+                        )
+            text = (final or reply).strip()
+            if not text:
+                raise HarnessTransportError("Reviewer turn ended without a text answer")
+            return text
+        finally:
+            with suppress(Exception):
+                await connection.close()
