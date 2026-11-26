@@ -1365,6 +1365,21 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await launcher.click();
   await expect(popup).toBeVisible();
   await expect.poll(nativeVisible).toBe(true);
+  // Text inside the popup offers the same selected-text actions as the page.
+  await popup.locator("details summary").click();
+  await popup.locator("details pre").evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = document.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  const selectionToolbar = page.getByRole("toolbar", { name: "Selected text actions" });
+  await expect(selectionToolbar).toBeVisible();
+  await expect(selectionToolbar.getByRole("button", { name: "Ask Nebula" })).toBeInViewport();
+  await page.keyboard.press("Escape");
+  await expect(selectionToolbar).toHaveCount(0);
   await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
   await expect.poll(nativeVisible).toBe(true);
   await page.route("**/browser-sessions/*/traffic", async route => {
