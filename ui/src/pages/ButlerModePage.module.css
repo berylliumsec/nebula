@@ -1273,3 +1273,29 @@ a.sheetRow { text-decoration: none; }
 
 .operatorActionMeta [data-check="passes"] { color: var(--text); }
 .operatorActionButtons { display: flex; gap: 8px; }
+
+/* Replies queued in the open thread, docked to the composer. */
+.threadQueue { margin: 0; }
+.sendNow {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: var(--touch-target);
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--type-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sendNow:hover:not(:disabled) { background: var(--surface-hover); }
+.sendNow:disabled { opacity: .45; cursor: default; }
+.sendNow svg { color: var(--blue, currentColor); }
+@media (max-width: 480px) {
+  .sendNow { width: var(--touch-target); justify-content: center; padding: 0; }
+  .sendNow span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}

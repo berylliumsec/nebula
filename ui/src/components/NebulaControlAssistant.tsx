@@ -61,6 +61,7 @@ import { ChatSubagentPostedResult, ChatSubagentResultCard, HarnessSubagentSettin
 import { ButlerSubagentActivity, butlerActivityRows, hasUnreadReport } from "./ButlerSubagentActivity";
 import { useChatQueue } from "../pages/useChatQueue";
 import { ButlerQueue } from "./ButlerQueue";
+import { isSendNowShortcut, sendNowShortcutLabel } from "./composerShortcuts";
 import styles from "./NebulaControlAssistant.module.css";
 import { ButlerPanelBridgeContext, butlerModePath, type ButlerPanelEmbed } from "../state/ButlerPanelBridge";
 
@@ -2341,7 +2342,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
    * queue writes run one after another in the order they were sent, and a
    * failed one restores its text if the composer is still empty.
    */
-  const queueForButler = (prompt: string, hasImages: boolean) => {
+  const queueForButler = (prompt: string, hasImages: boolean, interrupt = false) => {
     const images = pendingImages;
     const drafts = butlerDrafts.filter((item) => !claimedDrafts.current.has(item));
     drafts.forEach((item) => claimedDrafts.current.add(item));
@@ -2363,9 +2364,11 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const memory = readQueueMemory(queueSession);
       writeQueueMemory(queueSession, { ...memory, keys: [...memory.keys, key] });
       sessionQueuedKeys.current.add(key);
-      if (await butlerQueue.enqueue(prepared.request, { key })) {
+      if (await butlerQueue.enqueue(prepared.request, { key, interrupt })) {
         if (prepared.contextAttachments.length) context?.consumeButlerDrafts(drafts);
         drafts.forEach((item) => claimedDrafts.current.delete(item));
+        // Send now: Core sends this first once the stopped response ends.
+        if (interrupt) await stop();
       } else {
         const preview = prompt.length > 60 ? `${prompt.slice(0, 57)}…` : prompt;
         restore(`“${preview}” was not queued. It is back in the composer unless you have started a new message.`);
@@ -2452,7 +2455,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       });
   }, [api, engagement?.id, sessionId, butlerQueue.queue, busy]);
 
-  const send = async (currentText = draft) => {
+  const send = async (currentText = draft, interrupt = false) => {
     const prompt = currentText.trim() || (pendingImages.length ? "Attached image" : "");
     if (!prompt || deviceBusy || loadingHistory || uploadingImage || !pendingReady) return;
     setView("chat");
@@ -2571,7 +2574,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     if (!api || !engagement || !runtime) return;
     // Butler handles one response at a time. While it works, a message goes
     // into Core's follow-up queue for Butler's chat; Core sends it next.
-    if (activeBusy) { await queueForButler(prompt, hasImages); return; }
+    if (activeBusy) { await queueForButler(prompt, hasImages, interrupt && canStopActive); return; }
     const controller = new AbortController();
     abort.current = controller;
     setBusy(true);
@@ -2934,7 +2937,7 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       {pendingStatusError && <button className="button quiet" type="button" onClick={() => pendingPoll.current()}>Retry status</button>}
       {activeBusy && canStopActive && <button className="icon-button subtle" type="button" aria-label="Stop assistant response" title="Stop Butler’s response" onClick={() => void stop()}><Square size={16} /></button>}
     </section>}
-    {sessionId && <ButlerQueue queue={butlerQueue} error={queueError} />}
+    {sessionId && <ButlerQueue queue={butlerQueue} error={queueError} interrupts={activeBusy && canStopActive} onSendNow={(item) => void (async () => { if (await butlerQueue.mutate({ action: "interrupt", item_id: item.id }) && activeBusy && canStopActive) await stop(); })()} />}
     {pendingImages.length > 0 && <div className={styles.imageTray} role="list" aria-label="Butler image attachments">{pendingImages.map((block, index) => <div className={styles.imageItem} role="listitem" key={`${block.artifactId}-${index}`}>{api && <AuthenticatedChatImage api={api} block={block} className={styles.attachedImage} />}<span title={block.alt}>{block.alt}</span><button className="icon-button subtle" type="button" aria-label={`Remove ${block.alt ?? "image"}`} disabled={activeBusy} onClick={() => setPendingImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}><X size={16} /></button></div>)}</div>}
     {uploadingImage && <p className={styles.imageStatus} role="status">Attaching image…</p>}
     {issuedStorageToken && issuedStorageToken.projectId === engagement?.id && <section className={`${styles.libraryHandoff} ${styles.storageToken}`} aria-label="New storage source token">
@@ -3054,7 +3057,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(input.current?.value ?? draft); }}>
       <input ref={imageInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp" aria-label="Choose images for Butler" onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ""; void attachImageFiles(files); }} />
       <button className="icon-button subtle" type="button" aria-label="Attach image to Butler" title="Attach image to Butler" aria-describedby={imageHelp && !imageInputSupported ? "butler-image-help" : undefined} disabled={!api || !engagement || deviceBusy || loadingHistory || uploadingImage || !pendingReady} onClick={() => imageInputSupported ? imageInput.current?.click() : setImageHelp(true)}><Image size={18} /></button>
-      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder={activeBusy ? "Queue a message for Butler…" : "Message Butler…"} disabled={deviceBusy || loadingHistory || !pendingReady} />
+      <textarea ref={input} aria-label="Ask Butler a question" value={draft} onChange={(event) => setDraft(event.target.value)} onPaste={pasteImages} onKeyDown={(event) => { if (isSendNowShortcut(event) && activeBusy && canStopActive) { event.preventDefault(); void send(event.currentTarget.value, true); } else if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(event.currentTarget.value); } }} rows={2} maxLength={4000} placeholder={activeBusy ? (canStopActive ? `Queue a message, or ${sendNowShortcutLabel()} to send it now…` : "Queue a message for Butler…") : "Message Butler…"} disabled={deviceBusy || loadingHistory || !pendingReady} />
+      {activeBusy && canStopActive && (draft.trim() || pendingImages.length > 0) && <button className={`button quiet ${styles.queueButton} ${styles.sendNowButton}`} type="button" aria-label="Send now" aria-keyshortcuts={sendNowShortcutLabel() === "⌘↵" ? "Meta+Enter" : "Control+Enter"} title={`Stop Butler’s response and send this now (${sendNowShortcutLabel()})`} disabled={deviceBusy || loadingHistory || uploadingImage || !pendingReady || !sessionId} onClick={() => void send(input.current?.value ?? draft, true)}><Send size={14} aria-hidden="true" /><span>Send now</span></button>}
       {activeBusy
         ? <button className={`button primary ${styles.queueButton}`} type="submit" aria-label="Queue message for Butler" title="Butler is working; Core sends this next" disabled={(!draft.trim() && !pendingImages.length) || deviceBusy || loadingHistory || uploadingImage || !pendingReady || !sessionId}>Queue</button>
         : <button className="icon-button subtle" type="submit" aria-label="Send to Butler" disabled={(!draft.trim() && !pendingImages.length) || (pendingImages.length > 0 && (!api || !engagement || !runtime || !imageInputSupported)) || (!pendingImages.length && !isSettingNavigationRequest(draft) && !projectModeChange(draft) && !themeChange(draft) && !destinationToOpen(draft) && (!engagement || !runtime)) || loadingHistory || uploadingImage || !pendingReady}><Send size={18} /></button>}
