@@ -171,6 +171,16 @@ def grok_quota_snapshots(
     ]
 
 
+# Claude Code's own names for its plan windows.
+CLAUDE_WINDOW_LABELS = {
+    "five_hour": "5-hour limit",
+    "seven_day": "Weekly limit",
+    "seven_day_opus": "Weekly Opus limit",
+    "seven_day_sonnet": "Weekly Sonnet limit",
+    "overage": "Extra usage",
+}
+
+
 def claude_quota_snapshot(
     info: Any, *, observed_at: datetime | None = None
 ) -> HarnessQuotaSnapshot | None:
@@ -198,7 +208,9 @@ def claude_quota_snapshot(
         harness_kind=HarnessKind.CLAUDE_AGENT_SDK,
         source="claude.RateLimitEvent",
         window_id=window[:160],
-        window_label=window.replace("_", " ").title()[:160],
+        window_label=CLAUDE_WINDOW_LABELS.get(window, window.replace("_", " ").title())[
+            :160
+        ],
         used_percent=used,
         remaining_percent=100 - used,
         observed_at=_observed_at(observed_at),

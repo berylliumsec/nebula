@@ -771,6 +771,7 @@ CUSTOM_RESOURCES = {
     "butler_agent_reports",
     "butler_account_credits",
     "butler_harness_quotas",
+    "harness_quota_observations",
     "chat_goal_usage_charges",
     "chat_subagents",
     "chat_schedules",
