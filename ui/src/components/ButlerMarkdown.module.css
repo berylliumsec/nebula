@@ -1,0 +1,43 @@
+.markdown { min-width: 0; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown :is(p, ul, ol, blockquote) { margin: 10px 0; }
+.markdown :is(h1, h2, h3, h4) { margin: 18px 0 8px; font-size: var(--type-title-sm); line-height: 1.4; }
+.markdown :not(pre) > code { padding: 1px 4px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); font-family: var(--font-mono); font-size: var(--type-secondary); overflow-wrap: anywhere; }
+.markdown pre { max-width: 100%; margin: 10px 0; padding: 10px 12px; overflow-x: auto; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); font-family: var(--font-mono); font-size: var(--type-secondary); line-height: 1.55; white-space: pre; }
+.markdown pre code { padding: 0; border: 0; background: none; }
+
+.tableScroll {
+  max-width: 100%;
+  margin: 10px 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+}
+.tableScroll:focus-visible { outline: 2px solid var(--focus-ring, var(--blue)); outline-offset: 2px; }
+.tableScroll table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--type-secondary);
+  line-height: var(--leading-ui, 1.45);
+  font-variant-numeric: tabular-nums;
+}
+/* Headers and cells start-align unless the Markdown sets a column alignment (an inline style, which wins). */
+.tableScroll th, .tableScroll td {
+  padding: 7px 12px;
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+.tableScroll th {
+  color: var(--muted-strong, var(--muted));
+  background: var(--surface-muted);
+  font-weight: var(--weight-semibold, 600);
+}
+.tableScroll tr + tr > td, .tableScroll thead + tbody > tr:first-child > td { border-top: 1px solid var(--border-soft); }
+/* The first column usually names the item; keep it from collapsing beside long neighbours.
+   Short columns (status, dates) keep a two-word value on one line; a narrow screen scrolls the table instead. */
+.tableScroll td:first-child { min-width: 12rem; }
+.tableScroll :is(th, td):not(:first-child) { min-width: 8em; }

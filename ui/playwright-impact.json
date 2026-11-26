@@ -29,7 +29,7 @@
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts","ui/tests/butler-notes.spec.ts"],"areas":["butler-notes"]},
     {"name":"butler-subagents","patterns":["ui/src/components/ButlerSubagentActivity.tsx","ui/tests/butler-subagents.spec.ts","src/nebula/v3/chat_assistant_config.py","src/nebula/v3/butler_sessions.py"],"areas":["butler-subagents"]},
     {"name":"butler-queue","patterns":["ui/src/components/ButlerQueue.tsx","ui/src/pages/useChatQueue.ts","ui/tests/butler-queue.spec.ts","src/nebula/v3/chat_queue.py"],"areas":["butler-queue"]},
-    {"name":"butler-mode","patterns":["ui/src/pages/ButlerModePage*","ui/src/pages/butlerThreads.ts","ui/src/api/butlerBoard.ts","ui/tests/butler-mode.spec.ts","src/nebula/v3/butler_board.py","src/nebula/v3/butler_sessions.py"],"areas":["butler-mode"]},
+    {"name":"butler-mode","patterns":["ui/src/pages/ButlerModePage*","ui/src/pages/ButlerChatPopup*","ui/src/components/ButlerMarkdown*","ui/src/pages/butlerThreads.ts","ui/src/api/butlerBoard.ts","ui/tests/butler-mode.spec.ts","src/nebula/v3/butler_board.py","src/nebula/v3/butler_sessions.py"],"areas":["butler-mode"]},
     {"name":"manual-note-review","patterns":["ui/src/components/ExecutionInsightDialog.tsx","ui/src/api/noteTypes.ts","ui/tests/fixtures/manual_note_review_core.py"],"areas":["manual-note-review"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
     {"name": "harness-catalog-refresh", "patterns": ["ui/src/components/HarnessSettings.tsx", "ui/src/state/WorkspaceContext.tsx", "ui/src/pages/SessionsPage.tsx"], "areas": ["harness-catalog-refresh"]},
