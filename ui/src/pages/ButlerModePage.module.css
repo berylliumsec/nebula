@@ -119,11 +119,41 @@
 }
 
 .body {
+  --butler-rail-default: 296px;
+  --butler-middle-default: minmax(380px, 520px);
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 296px minmax(380px, 520px) minmax(0, 1fr);
+  /* Zero-width tracks hold the column dividers; the hook sets the two track variables once dragged. */
+  grid-template-columns: var(--butler-rail-track, var(--butler-rail-default)) 0 var(--butler-middle-track, var(--butler-middle-default)) 0 minmax(0, 1fr);
 }
+
+.body[data-resizing="true"] { cursor: col-resize; user-select: none; }
+
+.columnHandle {
+  position: relative;
+  z-index: 5;
+  /* A 12px hit area centred on the zero-width track between two columns. */
+  width: 12px;
+  margin: 0 -6px;
+  min-height: 0;
+  outline: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.columnHandle::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 5px;
+  width: 2px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.columnHandle:hover::after,
+.columnHandle:focus-visible::after,
+.columnHandle[data-dragging="true"]::after { background: var(--blue); }
 
 .rail {
   display: flex;
@@ -281,6 +311,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* In a narrowed thread column the title and project give way; Archive and Delete stay whole. */
+.threadBar > .muted { flex: 0 1 auto; min-width: 0; }
+.threadBar > .threadActions { max-width: none; overflow: visible; }
 
 .messages {
   flex: 1;
@@ -833,7 +867,7 @@
 .mode[data-compact="true"] .messages { padding-left: 16px; padding-right: 16px; }
 
 @media (max-width: 1100px) and (min-width: 761px) {
-  .body { grid-template-columns: 240px minmax(320px, 420px) minmax(0, 1fr); }
+  .body { --butler-rail-default: 240px; --butler-middle-default: minmax(320px, 420px); }
   .pulse { display: none; }
 }
 
