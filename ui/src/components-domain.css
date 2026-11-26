@@ -791,8 +791,6 @@ body:has(.settings-lens-backdrop) > .dialog-backdrop { z-index: 120; }
 /* Saved passwords: TypeSafe panel shell with a list of named passwords. */
 #saved-credential-settings > .section-heading > .button { flex: 0 0 auto; white-space: nowrap; }
 .saved-credential-hint { color: var(--muted); font-weight: var(--weight-regular); }
-.saved-credential-servers { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
-.saved-credential-servers legend { margin-bottom: 6px; font-size: var(--type-secondary); font-weight: var(--weight-medium); }
 .saved-credential-empty { margin: 0; color: var(--muted); font-size: var(--type-secondary); }
 .saved-credential-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-control); }
 .saved-credential-list > li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }

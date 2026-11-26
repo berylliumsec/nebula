@@ -565,13 +565,12 @@ export interface TypeSafeIntegration {
 
 export type VaultState = "available" | "locked" | "unavailable";
 
-/** A password agents can enter through an allowed MCP server without reading it. */
+/** A password agents can enter through any Nebula tool without reading it. */
 export interface SavedCredential {
   name: string;
   description: string;
   /** What an agent writes in a tool argument, e.g. {{credential:mac-login}}. */
   placeholder: string;
-  allowedMcpServerIds: string[];
   available: boolean;
   revision: number;
   updatedAt: string;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { KeyRound, Plus } from "lucide-react";
-import type { McpServerProfile, SavedCredential } from "../api/types";
+import type { SavedCredential } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -8,8 +8,8 @@ import { useConfirmation } from "./DialogSystem";
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-type Draft = { name: string; description: string; secret: string; servers: string[] };
-const EMPTY: Draft = { name: "", description: "", secret: "", servers: [] };
+type Draft = { name: string; description: string; secret: string };
+const EMPTY: Draft = { name: "", description: "", secret: "" };
 
 /** Turns a label such as "Mac login" into a placeholder name such as "mac-login". */
 export function credentialName(value: string): string {
@@ -20,7 +20,6 @@ export function SavedCredentialsSettings() {
   const confirm = useConfirmation();
   const { api, coreState, previewMode } = useWorkspace();
   const [items, setItems] = useState<SavedCredential[]>([]);
-  const [servers, setServers] = useState<McpServerProfile[]>([]);
   const [editing, setEditing] = useState<SavedCredential | "new">();
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [busy, setBusy] = useState(false);
@@ -29,9 +28,7 @@ export function SavedCredentialsSettings() {
   const load = useCallback(async () => {
     if (!api || coreState !== "online") return;
     try {
-      const [saved, profiles] = await Promise.all([api.listSavedCredentials(), api.listMcpServers()]);
-      setItems(saved);
-      setServers(profiles);
+      setItems(await api.listSavedCredentials());
       setError(undefined);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.saved_credentials.load_failed", "Saved passwords could not be loaded.", loadError, "credentials");
@@ -41,14 +38,6 @@ export function SavedCredentialsSettings() {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Built-in servers (notebooks, security tools) cannot type into a prompt.
-  // Servers already allowed stay listed, and first, so they can be unticked.
-  // Order by what was allowed when the form opened, so rows never jump mid-edit.
-  const opened = editing && editing !== "new" ? editing.allowedMcpServerIds : [];
-  const choices = servers
-    .filter((server) => server.transport !== "builtin" || opened.includes(server.id))
-    .sort((a, b) => Number(opened.includes(b.id)) - Number(opened.includes(a.id)) || a.name.localeCompare(b.name));
-  const serverName = (id: string) => servers.find((server) => server.id === id)?.name ?? "Removed server";
   const disabled = previewMode || !api || coreState !== "online" || busy;
   const isNew = editing === "new";
   const nameValid = !isNew || NAME_PATTERN.test(draft.name);
@@ -56,14 +45,9 @@ export function SavedCredentialsSettings() {
 
   const open = (target: SavedCredential | "new") => {
     setEditing(target);
-    setDraft(target === "new" ? EMPTY : { name: target.name, description: target.description, secret: "", servers: target.allowedMcpServerIds });
+    setDraft(target === "new" ? EMPTY : { name: target.name, description: target.description, secret: "" });
   };
   const close = () => { setEditing(undefined); setDraft(EMPTY); };
-
-  const toggleServer = (id: string) => setDraft((current) => ({
-    ...current,
-    servers: current.servers.includes(id) ? current.servers.filter((item) => item !== id) : [...current.servers, id],
-  }));
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
@@ -72,11 +56,10 @@ export function SavedCredentialsSettings() {
     setError(undefined);
     try {
       if (editing === "new") {
-        await api.createSavedCredential({ name: draft.name, description: draft.description, secret: draft.secret, allowedMcpServerIds: draft.servers });
+        await api.createSavedCredential({ name: draft.name, description: draft.description, secret: draft.secret });
       } else {
         await api.updateSavedCredential(editing.name, {
           description: draft.description,
-          allowedMcpServerIds: draft.servers,
           ...(draft.secret ? { secret: draft.secret } : {}),
           expectedRevision: editing.revision,
         });
@@ -120,7 +103,7 @@ export function SavedCredentialsSettings() {
 
   return <section className="settings-section" id="saved-credential-settings">
     <div className="section-heading">
-      <div><h2>Saved passwords</h2><p>Passwords agents can type into prompts through an MCP server you allow. Core keeps them encrypted and models never see them.</p></div>
+      <div><h2>Saved passwords</h2><p>Passwords agents can enter through any Nebula tool, such as typing into a Mac dialog or piping to sudo. Core keeps them encrypted and models never see them.</p></div>
       <button className="button primary" type="button" disabled={disabled || Boolean(editing)} onClick={() => open("new")}><Plus size={16} /> Add password</button>
     </div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The saved password operation failed." compact />}
@@ -135,30 +118,22 @@ export function SavedCredentialsSettings() {
         <label>{isNew ? "Password" : "New password"}
           <input type="password" autoComplete="new-password" value={draft.secret} disabled={disabled} placeholder={isNew ? "Password" : "Leave blank to keep the current password"} onChange={(event) => setDraft({ ...draft, secret: event.target.value })} />
         </label>
-        <fieldset className="saved-credential-servers" disabled={disabled}>
-          <legend>MCP servers allowed to receive it</legend>
-          {choices.length === 0 && <p className="provider-dialog-note">Add an MCP server first, such as one that controls your Mac. Until one is allowed, no agent can use this password.</p>}
-          {choices.map((server) => <label key={server.id} className="provider-consent">
-            <input type="checkbox" checked={draft.servers.includes(server.id)} onChange={() => toggleServer(server.id)} />
-            <span><strong>{server.name}</strong>{server.description && <small>{server.description}</small>}</span>
-          </label>)}
-        </fieldset>
         <footer>
-          <span>Agents can enter it only through the servers you tick.</span>
+          <span>Any chat or Butler turn can enter it by name; it never sees the value.</span>
           <span className="typesafe-actions">
             <button className="button secondary" type="button" disabled={busy} onClick={close}>Cancel</button>
             <button className="button primary" type="submit" disabled={disabled || !canSave}>{busy ? "Saving…" : "Save password"}</button>
           </span>
         </footer>
       </form>}
-      {!editing && items.length === 0 && <p className="saved-credential-empty">No saved passwords yet. Add one, then allow the MCP server that types into your Mac's dialogs.</p>}
+      {!editing && items.length === 0 && <p className="saved-credential-empty">No saved passwords yet. Add one, then ask an agent to enter it by name.</p>}
       {!editing && items.length > 0 && <ul className="saved-credential-list">
         {items.map((item) => <li key={item.name}>
           <KeyRound size={16} aria-hidden="true" />
           <div>
             <strong>{item.name}</strong>
             {item.description && <p>{item.description}</p>}
-            <p><code>{item.placeholder}</code> · {item.allowedMcpServerIds.length ? item.allowedMcpServerIds.map(serverName).join(", ") : "No server allowed yet"}</p>
+            <p><code>{item.placeholder}</code></p>
           </div>
           {!item.available && <span className="integration-status bad" role="status"><span aria-hidden="true" />Unavailable</span>}
           <span className="typesafe-actions">
