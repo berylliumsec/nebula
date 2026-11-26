@@ -1,43 +1,29 @@
 {
-  "change_digest": "1927a9ca4256764df3845db70632367b07ec56b0253b27d1f0512c2b528ef770",
-  "reviewed_by": "Claude: queue or interrupt messages in chats and Butler mode",
-  "reason": "While an agent works, Enter queues the message in Core's follow-up queue and Send now (Cmd/Ctrl+Enter) interrupts. Core: QueueWrite gains interrupt (enqueue first, unpause, resume_after_turn_id = the running turn) and an 'interrupt' action that moves a waiting item first; a sending item's turn cancelled for an interrupt no longer pauses the queue. UI: one shared QueuedMessages stack (Send now, edit, reorder, remove, pause, clear) replaces ChatQueuePanel's details panel and ButlerQueue's list; SessionsPage stopAndSend uses one interrupt enqueue instead of pause/enqueue/stop/resume and is offered whenever Core reports the provider busy; the Butler panel gains Send now; Butler mode threads queue replies to an answering thread (previously refused) and reload the transcript when a queued reply moves. Guide, settings-assistant doc and knowledge index updated. Also fixes a race in test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_running (red on origin/main): Core's own queue loop can settle the item before the test's manual step.",
-  "exclusions": "thinking.spec.ts and workspace-recovery.spec.ts queue cases were updated but not selected: their fixtures (tests/v3/thinking_fixture.py, workspace_recovery_fixture.py) fail at startup on origin/main with \"'coroutine' object has no attribute 'id'\" (un-awaited NebulaStore.create). The original butler-queue.spec.ts panel journey (area:butler-queue) is not selected: it times out on origin/main: the Butler launcher now opens Butler mode instead of the floating panel, so openButler never finds the panel dialog. The new Butler mode Send now journey (area:butler-send-now) passed locally on a disposable LAN Core in assistant-real-desktop, -compact, -chromium-320/390 and -webkit-320/390. real-core.spec.ts queue cases (summary disclosure, 'Move message N up') were not updated: the file exceeds the public commit guard size limit and main does not run it.",
+  "change_digest": "6ec9c2d09ef635d06f1644a055e1d2dcff0232727bc606857c4257cd9cc5a124",
+  "reviewed_by": "Claude: run Butler's scheduled checks one at a time",
+  "reason": "Backend-only fix in butler_recovery.py: a Butler scheduled check (global or per-project) is not fired, claimed or overload-retried while an earlier check of the same signal is still open, so a check longer than the interval no longer runs a second Butler turn beside the first. Selected the suites that exercise firing, claiming, capacity retry, concurrent recovery and the home host path, plus the new single-flight tests in test_butler_instructions.py.",
+  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 35,
-    "frontend": 144,
+    "python": 62,
+    "frontend": 0,
     "native": 0,
-    "playwright": 30
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_butler_followup.py",
-    "tests/v3/test_terminal_followups_core.py",
-    "tests/v3/test_queue_interrupt_knowledge.py",
-    "tests/v3/test_butler_host_knowledge.py"
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_butler_capacity_retry.py",
+    "tests/v3/test_butler_concurrent_recovery.py",
+    "tests/v3/test_butler_home_host.py",
+    "tests/v3/test_butler_recovery.py",
+    "tests/v3/test_chat_session_recent_page.py"
   ],
-  "frontend": [
-    "ui/src/components/ChatQueuePanel.test.tsx",
-    "ui/src/components/ButlerQueue.test.tsx",
-    "ui/src/components/NebulaControlAssistant.test.tsx",
-    "ui/src/pages/ButlerModePage.send.test.tsx",
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/pages/useChatQueue.test.tsx",
-    "ui/src/guides/guides.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:butler-send-now",
-    "area:assistant-queue-reconciliation",
-    "area:chat-guidance-toolbar",
-    "area:butler-mode"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": [],
+  "checks": []
 }
