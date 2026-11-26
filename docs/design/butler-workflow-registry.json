@@ -1746,6 +1746,35 @@
       }
     },
     {
+      "id": "settings.saved_credentials",
+      "entry_point": "Saved password entry, replacement, allowed MCP servers and removal",
+      "ui_calls": [
+        "ui/src/components/SavedCredentialsSettings.tsx::createSavedCredential",
+        "ui/src/components/SavedCredentialsSettings.tsx::deleteSavedCredential",
+        "ui/src/components/SavedCredentialsSettings.tsx::listMcpServers",
+        "ui/src/components/SavedCredentialsSettings.tsx::listSavedCredentials",
+        "ui/src/components/SavedCredentialsSettings.tsx::updateSavedCredential"
+      ],
+      "core_owner": "Core saved-credential service and encrypted credential files; requesting browser owns the password, the allowed servers and removal",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.api_request GET saved-credentials (names, placeholders and allowed server IDs, never values)",
+        "change": "nebula.settings.open setting_id=saved-credentials"
+      },
+      "authority": "Only names, descriptions, placeholders and allowed server IDs enter Butler. Saving, editing and removing a saved password require the requesting operator control; the Settings gateway rejects those methods.",
+      "observed_result_test": "tests/v3/test_saved_credentials.py::test_butler_cannot_write_saved_passwords_through_the_settings_api",
+      "result": "The Saved passwords section opens; no password enters a Butler result, and an opening receipt claims no mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "saved-credentials",
+        "owner": "requesting_browser",
+        "boundary": "device_secret",
+        "reason": "A password and the servers allowed to receive it are the operator's to enter on the requesting device.",
+        "observed_result": "opened"
+      }
+    },
+    {
       "id": "settings.private_vpn",
       "entry_point": "VPN private configuration upload and backing-credential removal",
       "ui_calls": [
@@ -4864,6 +4893,26 @@
     {
       "key": "ui/src/components/RuntimeUsagePanel.tsx::getRuntimeUsage",
       "count": 2
+    },
+    {
+      "key": "ui/src/components/SavedCredentialsSettings.tsx::createSavedCredential",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SavedCredentialsSettings.tsx::deleteSavedCredential",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SavedCredentialsSettings.tsx::listMcpServers",
+      "count": 1
+    },
+    {
+      "key": "ui/src/components/SavedCredentialsSettings.tsx::listSavedCredentials",
+      "count": 3
+    },
+    {
+      "key": "ui/src/components/SavedCredentialsSettings.tsx::updateSavedCredential",
+      "count": 1
     },
     {
       "key": "ui/src/components/ScopeImportDialog.tsx::applyScopeImport",

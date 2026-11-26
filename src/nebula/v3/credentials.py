@@ -291,6 +291,7 @@ class CredentialStore:
             try:
                 available = self._files().exists(reference.removeprefix("store:"))
             except CredentialUnavailableError:
+                # diagnostic-expected: _files() already recorded why the store is unavailable.
                 return CredentialStatus(
                     reference=reference,
                     persistence="store",

@@ -929,6 +929,29 @@ receipt means the form opened; it does not claim a key or profile was saved.
 Closing an unsaved form clears its private input. Continue in its visible
 control and use Core's public status to verify any later saved result.
 
+### Saved passwords
+
+Settings › Integrations › Saved passwords (`setting_id=saved-credentials`,
+section `saved-credential-settings`) holds named passwords that agents can type
+into prompts, such as a macOS password dialog, through an MCP server the
+operator allows. Core encrypts each value with AES-256-GCM under a 0600 key
+file in its data directory (`store:` references), so it works on a headless
+Linux Core whose OS keyring stays locked. The database holds only the name,
+description, reference and allowed MCP server IDs.
+
+A chat or Butler conversation whose selected MCP servers can use a saved
+password gets the `credentials.list` tool. It returns names, placeholders and
+allowed servers, never values. The model writes `{{credential:<name>}}` in an
+MCP tool argument; Core substitutes the value only in the copy sent to an
+allowed server, refuses any other server, and puts the placeholder back
+wherever the value is echoed in results or errors. Tool-call records, approval
+cards and provider history keep the placeholder.
+
+Butler reads `GET saved-credentials` through `nebula.settings.api_request`.
+Saving, replacing, changing allowed servers and deleting are browser-owned:
+Butler opens `setting_id=saved-credentials`, and the Settings gateway rejects
+those methods. The section reports a save only after Core's list shows it.
+
 Opening Butler's model and effort or Voice timeout keeps Butler visible and
 selects More. Reopening these controls from Chat or Work returns to the saved
 settings, rather than hiding the panel or leaving a hidden section selected.

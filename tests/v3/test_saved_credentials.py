@@ -314,7 +314,9 @@ async def test_saved_credential_api_never_returns_or_persists_values(tmp_path):
         listed = await client.get("/api/v1/saved-credentials", headers=auth)
         assert [item["name"] for item in listed.json()] == ["mac-login"]
 
-        reference = (await SavedCredentialService(store, credentials).get("mac-login")).reference
+        reference = (
+            await SavedCredentialService(store, credentials).get("mac-login")
+        ).reference
         updated = await client.patch(
             "/api/v1/saved-credentials/mac-login",
             headers=auth,
@@ -324,8 +326,12 @@ async def test_saved_credential_api_never_returns_or_persists_values(tmp_path):
         assert updated.json()["allowed_mcp_server_ids"] == ["server-b"]
         assert credentials.status(reference).state == "missing"
 
-        current = (await SavedCredentialService(store, credentials).get("mac-login")).reference
-        removed = await client.delete("/api/v1/saved-credentials/mac-login", headers=auth)
+        current = (
+            await SavedCredentialService(store, credentials).get("mac-login")
+        ).reference
+        removed = await client.delete(
+            "/api/v1/saved-credentials/mac-login", headers=auth
+        )
         assert removed.status_code == 204
         assert credentials.status(current).state == "missing"
         gone = await client.delete("/api/v1/saved-credentials/mac-login", headers=auth)

@@ -36,9 +36,7 @@ class CredentialFileError(RuntimeError):
 
 def default_credential_file_root() -> Path:
     data = os.getenv("NEBULA_V3_DATA_DIR")
-    base = (
-        Path(data) if data else Path.home() / ".local" / "share" / "nebula" / "v3"
-    )
+    base = Path(data) if data else Path.home() / ".local" / "share" / "nebula" / "v3"
     return base.expanduser().absolute() / "credentials"
 
 
@@ -136,9 +134,7 @@ class EncryptedCredentialFiles:
             raise ValueError("credential secret must contain 1 to 16384 bytes")
         identifier = secrets.token_hex(16)
         nonce = secrets.token_bytes(_NONCE_BYTES)
-        sealed = nonce + AESGCM(self._key).encrypt(
-            nonce, raw, self._aad(identifier)
-        )
+        sealed = nonce + AESGCM(self._key).encrypt(nonce, raw, self._aad(identifier))
         self._publish(self.root / identifier, sealed)
         if self.read(identifier) != value:
             raise CredentialFileError("credential file failed integrity verification")

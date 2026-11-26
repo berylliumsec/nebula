@@ -45,9 +45,7 @@ def substitute(value: Any, secrets: Mapping[str, str], *, _depth: int = 0) -> An
     if _depth > _MAX_DEPTH:
         return value
     if isinstance(value, str):
-        return PLACEHOLDER.sub(
-            lambda match: secrets.get(match[1], match[0]), value
-        )
+        return PLACEHOLDER.sub(lambda match: secrets.get(match[1], match[0]), value)
     if isinstance(value, Mapping):
         return {
             key: substitute(item, secrets, _depth=_depth + 1)

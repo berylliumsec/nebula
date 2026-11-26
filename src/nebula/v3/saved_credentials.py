@@ -165,7 +165,9 @@ class SavedCredentialService:
             raise
         return await self._view(item)
 
-    async def update(self, name: str, body: SavedCredentialUpdate) -> SavedCredentialView:
+    async def update(
+        self, name: str, body: SavedCredentialUpdate
+    ) -> SavedCredentialView:
         current = await self.get(name)
         changes: dict[str, Any] = {}
         if body.description is not None:
