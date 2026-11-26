@@ -2969,6 +2969,18 @@ function mapWebSearchRuntime(value: Record<string, unknown>): import("./types").
   };
 }
 
+function mapSavedCredential(value: Record<string, unknown>): import("./types").SavedCredential {
+  return {
+    name: String(value.name),
+    description: typeof value.description === "string" ? value.description : "",
+    placeholder: String(value.placeholder),
+    allowedMcpServerIds: Array.isArray(value.allowed_mcp_server_ids) ? value.allowed_mcp_server_ids.map(String) : [],
+    available: value.available === true,
+    revision: Number(value.revision),
+    updatedAt: String(value.updated_at),
+  };
+}
+
 function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types").TypeSafeIntegration {
   const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
   const source = value.source === "vault" || value.source === "session" || value.source === "environment" ? value.source : undefined;
@@ -6904,6 +6916,34 @@ export class ApiClient {
 
   removeWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
     return this.request<Record<string, unknown>>("integrations/web-search", { method: "DELETE" }).then(mapWebSearchRuntime);
+  }
+
+  listSavedCredentials(): Promise<import("./types").SavedCredential[]> {
+    return this.request<Record<string, unknown>[]>("saved-credentials").then((items) => items.map(mapSavedCredential));
+  }
+
+  createSavedCredential(input: { name: string; description: string; secret: string; allowedMcpServerIds: string[] }): Promise<import("./types").SavedCredential> {
+    return this.request<Record<string, unknown>>("saved-credentials", {
+      method: "POST",
+      body: JSON.stringify({ name: input.name, description: input.description, secret: input.secret, allowed_mcp_server_ids: input.allowedMcpServerIds }),
+    }).then(mapSavedCredential);
+  }
+
+  updateSavedCredential(name: string, input: { description?: string; secret?: string; allowedMcpServerIds?: string[]; expectedRevision?: number }): Promise<import("./types").SavedCredential> {
+    return this.request<Record<string, unknown>>(`saved-credentials/${encodeURIComponent(name)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.secret === undefined ? {} : { secret: input.secret }),
+        ...(input.allowedMcpServerIds === undefined ? {} : { allowed_mcp_server_ids: input.allowedMcpServerIds }),
+        ...(input.expectedRevision === undefined ? {} : { expected_revision: input.expectedRevision }),
+      }),
+    }).then(mapSavedCredential);
+  }
+
+  async deleteSavedCredential(name: string, expectedRevision?: number): Promise<void> {
+    const query = expectedRevision === undefined ? "" : `?expected_revision=${expectedRevision}`;
+    await this.request<void>(`saved-credentials/${encodeURIComponent(name)}${query}`, { method: "DELETE" });
   }
 
   getTypeSafeIntegration(): Promise<import("./types").TypeSafeIntegration> {

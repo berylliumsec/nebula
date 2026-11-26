@@ -48,6 +48,13 @@ describe("settings assistant actions", () => {
     expect(settingToOpen("which setting holds API keys for models?")?.id).toBe("settings.providers");
     expect(settingToOpen("where can I enter the TypeSafe API key?")?.id).toBe("settings.typesafe");
   });
+  it("finds saved passwords for password and Mac dialog questions", () => {
+    expect(settingToOpen("where do I enter a password for Mac dialogs?")?.id).toBe("settings.saved-credentials");
+    expect(settingToOpen("open saved passwords")?.id).toBe("settings.saved-credentials");
+    expect(settingClientAction({type: "tool_completed", turnId: "turn", toolCallId: "call", capability: "nebula.settings.open", status: "complete", summary: "Opened", evidenceIds: [], artifacts: [], step: 0,
+      receipt: {state: "pending_browser_apply", client_action: {kind: "open_setting", setting_id: "saved-credentials"}}}))
+      .toEqual(expect.objectContaining({kind: "open_setting", setting: expect.objectContaining({id: "settings.saved-credentials", target: "saved-credential-settings"})}));
+  });
   it("maps explicit device-theme commands to bounded values without taking over questions", () => {
     expect(themeChange("change to zero theme")).toBe("zero-dark");
     expect(themeChange("set the theme to Zero Light")).toBe("zero-light");
