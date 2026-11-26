@@ -1,28 +1,26 @@
 {
-  "change_digest": "596c4921d0a1162a1f2c32f3e55a33b575752cc8679fbf74f0721355f48959dc",
-  "reviewed_by": "Claude: Ask Nebula popup selection actions",
-  "reason": "AskNebulaPopup wrapped its whole body in data-selection-actions-disabled, so SelectionActionsProvider dropped every selection inside the popup. The attribute now covers only the header and composer, and the body names its selections as an Ask Nebula conversation. AskNebulaPopup.test.tsx covers answer selection -> toolbar -> Ask draft and composer suppression; the native-scope-status Playwright test now selects popup context text and checks the toolbar is visible and in the viewport.",
-  "exclusions": "Only the popup markup changed; SelectionActionsProvider, placement and WorkbenchDraftContext are unchanged (their suites passed locally, 64 tests, not selected). No Core, API or settings change, so no Python tests and no settings-assistant update.",
+  "change_digest": "ebf2b68e2de62701188c9d098cbc0b1e2fc6349728cefd78497e742f5fb433c5",
+  "reviewed_by": "Claude: harness gateway keeps project hook denial reasons",
+  "reason": "HarnessRuntimeService._gateway_oci_call caught the broker's PolicyDenied (including ProjectHookPolicyDenied) and flattened it to {status: denied, detail}; _gateway_call then rebuilt a bare PermissionError, so tool_failure took its generic 'denied by an access or approval rule' branch and the hook's stderr, route_to and policy_rule never reached the harness model. The gateway now classifies the real exception with tool_failure (FAILURE_SCHEMA), which _gateway_call passes through unchanged. New tests drive _gateway_oci_call with a hook-denying broker (with and without route_to) and fail on origin/main.",
+  "exclusions": "tests/v3/test_harnesses.py ran locally (141 passed, 2 failed); the 2 failures (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) fail identically on origin/main 702cc77, so the file is not selected. No frontend, native or Playwright layer: the change is backend-only and adds no UI. No LAN real-Core harness journey was run: it needs a live vendor harness session.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 20,
+    "python": 41,
+    "frontend": 0,
     "native": 0,
-    "playwright": 1
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/AskNebulaPopup.test.tsx"
+  "python": [
+    "tests/v3/test_hook_denial_routing.py",
+    "tests/v3/test_blocking_hook_feedback.py",
+    "tests/v3/test_tool_failures.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:native-scope-status"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": [],
+  "checks": []
 }

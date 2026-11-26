@@ -19718,12 +19718,16 @@ class HarnessRuntimeService:
                 )
             except (
                 PolicyDenied
-            ) as denial:  # diagnostic-expected: returned as a bounded gateway denial
-                return self._gateway_denial(denial.decision.reason)
+            ) as denial:  # diagnostic-expected: returned as a bounded tool failure
+                return self._gateway_policy_failure(
+                    components.specs[tool_name], arguments, denial, invocation.id
+                )
         except (
             PolicyDenied
-        ) as denial:  # diagnostic-expected: returned as a bounded gateway denial
-            return self._gateway_denial(denial.decision.reason)
+        ) as denial:  # diagnostic-expected: returned as a bounded tool failure
+            return self._gateway_policy_failure(
+                components.specs[tool_name], arguments, denial, invocation.id
+            )
         finally:
             try:
                 (await self._attach_gateway_tool_call(turn, invocation.id))
@@ -19770,6 +19774,29 @@ class HarnessRuntimeService:
             "content": [{"type": "text", "text": serialized}],
             "structuredContent": receipt.as_model_result(),
             "isError": receipt.status.value != "completed",
+        }
+
+    @staticmethod
+    def _gateway_policy_failure(
+        spec: ToolSpec,
+        arguments: dict[str, Any],
+        denial: PolicyDenied,
+        call_id: str,
+    ) -> dict[str, Any]:
+        """Classify a broker denial from the exception itself.
+
+        A project hook's block carries the hook's output and its routed tool;
+        flattening it to a ``denied`` status left the model only a generic
+        "access or approval rule" failure and no next step.
+        """
+
+        failure = tool_failure(
+            spec, arguments, denial, phase="before_execution", call_id=call_id
+        )
+        return {
+            "content": [{"type": "text", "text": json.dumps(failure, sort_keys=True)}],
+            "structuredContent": failure,
+            "isError": True,
         }
 
     @staticmethod
