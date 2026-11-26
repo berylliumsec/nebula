@@ -41,7 +41,8 @@ export function useButlerColumns(enabled: boolean, className: string) {
   const geometry = (handle: HTMLElement, column: Column) => {
     const container = handle.parentElement?.clientWidth ?? 0;
     const current = (handle.previousElementSibling as HTMLElement | null)?.getBoundingClientRect().width ?? 0;
-    const rail = (handle.parentElement?.firstElementChild as HTMLElement | null)?.getBoundingClientRect().width ?? 0;
+    // The rail may be hidden, and then its divider is not rendered either.
+    const rail = (handles.current.rail?.previousElementSibling as HTMLElement | null | undefined)?.getBoundingClientRect().width ?? 0;
     // jsdom and a detached body report 0: only the fixed bounds apply then.
     const max = column === "rail"
       ? (container ? Math.min(RAIL_MAX, container - MIDDLE_MIN - BOARD_MIN) : RAIL_MAX)

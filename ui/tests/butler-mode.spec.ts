@@ -517,6 +517,46 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
         await page.screenshot({path: process.env.BUTLER_RESIZE_SHOT ?? testInfo.outputPath("butler-mode-resized.png")});
         await railHandle.dblclick();
         await expect.poll(async () => Math.round((await rail.boundingBox())!.width)).toBe(Math.round(railBefore));
+
+        // Hiding both side columns leaves the thread alone at full width, on this device across a reload.
+        await threadPane.getByRole("button", {name: "Hide threads list"}).click();
+        await threadPane.getByRole("button", {name: "Hide board"}).click();
+        await expect(rail).toHaveCount(0);
+        await expect(page.getByRole("region", {name: "Status board"})).toHaveCount(0);
+        await expect(page.getByRole("separator")).toHaveCount(0);
+        const fullWidth = page.viewportSize()!.width;
+        await expect.poll(async () => Math.round((await threadPane.boundingBox())!.width)).toBeGreaterThanOrEqual(fullWidth - 2);
+        await page.reload();
+        await expect(threadPane).toBeVisible({timeout: 60_000});
+        await expect(rail).toHaveCount(0);
+        await expect(threadPane.getByRole("button", {name: "Show board"})).toHaveAttribute("aria-pressed", "true");
+
+        // Jump to latest appears once the thread is scrolled away from its newest message.
+        const log = threadPane.getByRole("log", {name: "Butler thread messages"});
+        const jump = threadPane.getByRole("button", {name: "Jump to latest message"});
+        await expect(jump).toHaveCount(0);
+        await log.evaluate(element => {
+          const spacer = document.createElement("div");
+          spacer.dataset.testSpacer = "true";
+          spacer.style.minHeight = "3000px";
+          element.prepend(spacer);
+          element.scrollTop = 0;
+          element.dispatchEvent(new Event("scroll"));
+        });
+        await expect(jump).toBeVisible();
+        await jump.click();
+        await expect(jump).toHaveCount(0);
+        await expect.poll(() => log.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(2);
+        await log.evaluate(element => element.querySelector("[data-test-spacer]")?.remove());
+
+        // Choosing Oversight brings the board column back; the threads list returns from its toggle.
+        const sections = page.getByRole("navigation", {name: "Butler sections"});
+        await sections.getByRole("button", {name: /^Oversight/}).click();
+        await expect(page.getByRole("region", {name: "Oversight"}).first()).toBeVisible();
+        await sections.getByRole("button", {name: /^Board/}).click();
+        await threadPane.getByRole("button", {name: "Show threads list"}).click();
+        await expect(rail).toBeVisible();
+        await expect(page.getByRole("region", {name: "Status board"})).toBeVisible();
       }
       expect(stub.prompts().filter(prompt => prompt.includes(PROMPTS.held))).toHaveLength(1);
       type Threads = {items: Array<{session_id: string; title: string; state: string; project: {id: string}}>};
@@ -695,6 +735,30 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await confirm.getByRole("button", {name: "Delete thread"}).click();
       await expect.poll(async () => (await api.get(`chat-sessions/${quickId}`)).status()).toBe(404);
       expect(((await (await api.get("butler/threads")).json()) as Threads).items.some(item => item.session_id === quickId)).toBe(false);
+
+      // Ticked threads archive or delete together from the threads list; Delete asks first.
+      await startThread(page, "THREAD-C Anything blocked?");
+      await expect.poll(async () => ((await (await api.get("butler/threads")).json()) as Threads).items.filter(item => item.state !== "working").length, {timeout: 60_000}).toBeGreaterThanOrEqual(2);
+      await showThreads(page);
+      if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
+      const remaining = ((await (await api.get("butler/threads")).json()) as Threads).items.filter(item => item.state !== "working");
+      const [first, second] = remaining;
+      await rail.getByRole("checkbox", {name: `Select ${first.title}`}).check();
+      await rail.getByRole("checkbox", {name: `Select ${second.title}`}).check();
+      const bulk = rail.getByRole("group", {name: "Selected threads"});
+      await expect(bulk.getByText("2 selected")).toBeVisible();
+      await bulk.getByRole("button", {name: "Delete", exact: true}).click();
+      const bulkConfirm = bulk.getByRole("group", {name: "Confirm delete"});
+      await expect(bulkConfirm.getByText("Delete 2 threads and their messages?")).toBeVisible();
+      await bulkConfirm.getByRole("button", {name: "Cancel"}).click();
+      await expect(bulkConfirm).toHaveCount(0);
+      await bulk.getByRole("button", {name: "Archive", exact: true}).click();
+      await expect(rail.getByRole("status")).toHaveText("Archived 2 threads.");
+      await expect(bulk).toHaveCount(0);
+      for (const item of [first, second]) {
+        expect(((await (await api.get(`chat-sessions/${item.session_id}`)).json()) as {metadata: {archived_at?: string}}).metadata.archived_at).toBeTruthy();
+      }
+      expect(((await (await api.get("butler/threads")).json()) as Threads).items.some(item => item.session_id === first.session_id || item.session_id === second.session_id)).toBe(false);
 
       expect((await new AxeBuilder({page}).analyze()).violations).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);

@@ -93,6 +93,7 @@
 }
 
 .iconButton:hover { background: var(--surface-hover); color: var(--text); }
+.iconButton[aria-pressed="true"] { color: var(--blue); }
 
 .projectsLink {
   display: inline-flex;
@@ -127,6 +128,12 @@
   /* Zero-width tracks hold the column dividers; the hook sets the two track variables once dragged. */
   grid-template-columns: var(--butler-rail-track, var(--butler-rail-default)) 0 var(--butler-middle-track, var(--butler-middle-default)) 0 minmax(0, 1fr);
 }
+
+/* Hidden side columns leave the open thread the remaining width. */
+.body[data-rail="hidden"] { grid-template-columns: var(--butler-middle-track, var(--butler-middle-default)) 0 minmax(0, 1fr); }
+.body[data-board="hidden"] { grid-template-columns: var(--butler-rail-track, var(--butler-rail-default)) 0 minmax(0, 1fr); }
+.body[data-rail="hidden"][data-board="hidden"] { grid-template-columns: minmax(0, 1fr); }
+.body[data-board="hidden"] .conversation { border-right: 0; }
 
 .body[data-resizing="true"] { cursor: col-resize; user-select: none; }
 
@@ -205,6 +212,36 @@
   list-style: none;
 }
 
+.threadRow { display: flex; align-items: flex-start; min-width: 0; border-radius: var(--radius-control); }
+.threadRow[data-picked="true"] { background: var(--surface-hover); }
+.threadRow > .thread { flex: 1; min-width: 0; padding-left: 4px; }
+
+.threadPick {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  min-height: var(--touch-target);
+  cursor: pointer;
+}
+
+.threadPick input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); cursor: pointer; }
+.threadPick input:disabled { cursor: not-allowed; opacity: 0.4; }
+
+.threadBulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.threadBulkCount { font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+.threadBulk .confirmDelete { flex-basis: 100%; margin: 0; padding: 10px; }
+
 .thread {
   display: flex;
   flex-direction: column;
@@ -268,6 +305,34 @@
 }
 
 .threadActions { display: inline-flex; flex: none; gap: 8px; margin-left: auto; }
+.panelToggleEnd { flex: none; margin-left: auto; }
+.threadActions + .panelToggleEnd { margin-left: 0; }
+
+.messagesWrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.jumpLatest {
+  position: absolute;
+  right: 20px;
+  bottom: 12px;
+  display: inline-grid;
+  place-items: center;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+  cursor: pointer;
+}
+
+.jumpLatest:hover { background: var(--surface-hover); }
 
 .threadAction,
 .dangerButton {
