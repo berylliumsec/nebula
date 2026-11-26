@@ -72,7 +72,7 @@ describe("Butler queue", () => {
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
     await user.type(composer, "Summarize yesterday’s findings.{enter}");
-    await waitFor(() => expect(composer).toHaveAttribute("placeholder", "Queue a message for Butler…"));
+    await waitFor(() => expect(composer).toHaveAttribute("placeholder", expect.stringMatching(/^Queue a message/)));
 
     await user.type(composer, "Then pause the Fuzz parser goal.{enter}");
     await waitFor(() => expect(queue.writes).toHaveLength(1));
@@ -93,6 +93,28 @@ describe("Butler queue", () => {
     expect(await screen.findByText("Summary ready.")).toBeInTheDocument();
   });
 
+  it("sends a message now by putting it first in Core's queue and stopping Butler's answer", async () => {
+    const user = userEvent.setup();
+    const queue = coreQueue();
+    const streamChat = vi.fn().mockImplementation((_request: unknown, onEvent: (event: ChatStreamEvent) => void) => {
+      onEvent({ type: "started", model: "model", turnId: "turn", sessionId: "control" } as ChatStreamEvent);
+      return new Promise(() => undefined);
+    });
+    const cancelChatTurn = vi.fn().mockResolvedValue({ id: "turn", status: "cancelled" });
+    renderButler({ ...queue, streamChat, cancelChatTurn });
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
+    await user.type(composer, "Summarize yesterday’s findings.{enter}");
+    await waitFor(() => expect(composer).toHaveAttribute("placeholder", expect.stringMatching(/to send it now/)));
+
+    await user.type(composer, "Actually, pause everything first.");
+    await user.click(screen.getByRole("button", { name: "Send now" }));
+    await waitFor(() => expect(cancelChatTurn).toHaveBeenCalledWith("turn"));
+    expect(queue.writes[0]).toMatchObject({ action: "enqueue", interrupt: true,
+      request: { control_assistant: true, messages: [{ role: "user", content: "Actually, pause everything first." }] } });
+    expect(composer).toHaveValue("");
+  });
+
   it("queues two quick messages in the order they were sent", async () => {
     const user = userEvent.setup();
     const queue = coreQueue();
@@ -104,7 +126,7 @@ describe("Butler queue", () => {
     await user.click(screen.getByRole("button", { name: "Open Butler" }));
     const composer = screen.getByRole("textbox", { name: "Ask Butler a question" });
     await user.type(composer, "First request.{enter}");
-    await waitFor(() => expect(composer).toHaveAttribute("placeholder", "Queue a message for Butler…"));
+    await waitFor(() => expect(composer).toHaveAttribute("placeholder", expect.stringMatching(/^Queue a message/)));
     await user.type(composer, "Second request.{enter}");
     await user.type(composer, "Third request.{enter}");
     await waitFor(() => expect(queue.writes).toHaveLength(2));
@@ -146,7 +168,7 @@ describe("Butler queue", () => {
     await user.type(composer, "Use that detail.{enter}");
     await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
     expect(streamChat.mock.calls[1][0].contextAttachments).toHaveLength(1);
-    await waitFor(() => expect(composer).toHaveAttribute("placeholder", "Queue a message for Butler…"));
+    await waitFor(() => expect(composer).toHaveAttribute("placeholder", expect.stringMatching(/^Queue a message/)));
     await user.type(composer, "Then check the queue.{enter}");
     await waitFor(() => expect(queue.writes).toHaveLength(1));
     expect((queue.writes[0].request as Record<string, unknown>).context_attachments ?? []).toEqual([]);
@@ -215,9 +237,9 @@ describe("Butler queue", () => {
     expect(within(list).getByRole("status")).toHaveTextContent("Queue paused · 1 needs attention");
     expect(within(list).getByText(/Needs review · Butler's settings changed/)).toBeInTheDocument();
     expect(queue.writes).toEqual([]);
-    await user.click(within(list).getByRole("button", { name: "Retry" }));
+    await user.click(within(list).getByRole("button", { name: "Retry as new message" }));
     await waitFor(() => expect(queue.writes.at(-1)).toMatchObject({ action: "retry", item_id: "q1" }));
-    await user.click(within(list).getByRole("button", { name: "Resume" }));
+    await user.click(within(list).getByRole("button", { name: "Resume queue" }));
     await waitFor(() => expect(queue.writes.at(-1)).toMatchObject({ action: "resume" }));
   });
 });
