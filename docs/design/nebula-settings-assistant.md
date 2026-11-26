@@ -750,7 +750,13 @@ and `nebula.global.harness_quota` read tools. The Usage view shows both balances
 even when the included window is exhausted. Codex credits and Grok prepaid credits
 are vendor units; a positive balance is separate from included usage and does not
 guarantee admission if a vendor denial or spending limit applies. Grok's included-credit period may be
-shared with other Grok products; missing vendor values remain unknown.
+shared with other Grok products; missing vendor values remain unknown. Claude
+harness cards in Usage and credits show the plan windows (5-hour, weekly) Claude
+last reported during a turn in any project, labelled with the report time;
+Claude has no on-demand account read and reports only when a limit's status
+changes, so the card says when no report is current. In a Claude chat, `/usage`
+gives the conversation's Nebula token totals and the windows last reported in
+that project, without a model turn.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |

@@ -721,6 +721,8 @@ describe("settings assistant actions", () => {
   it("finds the intended setting in conversational navigation requests", () => {
     const cases = [
       ["where can I see usage limits?", "settings.usage"],
+      ["where can I see my claude plan limits?", "settings.usage"],
+      ["where is my claude weekly limit?", "settings.usage"],
       ["where can I change the theme colors?", "settings.appearance"],
       ["which setting holds API keys for models?", "settings.providers"],
       ["where are the shared skills?", "settings.skills"],

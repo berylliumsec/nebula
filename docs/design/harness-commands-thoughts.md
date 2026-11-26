@@ -42,6 +42,15 @@ change because App Server has no generic slash-command dispatcher.
 
 Grok usage describes the current harness process's session totals. Codex usage
 is a native session estimate and explicitly reports unavailable estimates.
+
+Claude chats offer `/usage` only; other slash text still reaches Claude. Nebula
+answers it without a model turn: the conversation's token totals counted by
+Nebula, plus the plan windows (5-hour, weekly) Claude last reported in this
+project, with the report time and each window's reset. The Agent SDK has no
+on-demand plan read: Claude reports utilization in a `RateLimitEvent` during a
+turn, and only when a limit's status changes, so a fresh account may have no
+report yet. Core keeps the newest report per project, profile and window
+(`harness_quota_observations`); a window past its reset is no longer shown.
 Reading cumulative usage does not add those totals to Nebula's turn billing.
 Goal continuations retain the selected planning mode and Core context.
 

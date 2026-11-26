@@ -65,3 +65,33 @@ it("shows Codex and Grok credits when included windows have no remaining usage",
   expect(screen.getByRole("article", { name: "Grok Build usage" })).toHaveTextContent("3.75");
   expect(screen.getAllByText("0% left")).toHaveLength(2);
 });
+
+it("shows Claude's last reported plan windows and says when none is current", async () => {
+  const base = snapshot.items[1];
+  const claude = (vendor: RuntimeUsageResponse["items"][number]["vendor"]) => ({ ...base, profileId: "claude", name: "Claude", providerType: "claude_agent_sdk", enabled: true, vendor });
+  const getRuntimeUsage = vi.fn().mockResolvedValueOnce({ ...snapshot, items: [claude({
+    state: "available", source: "Claude plan limits · last reported", detail: "Last reported by Claude during a turn. Claude does not report between turns, so usage since then is not shown.",
+    checkedAt: "2026-10-12T11:40:00Z", balances: [],
+    windows: [{ label: "5-hour limit", usedPercent: 42, resetsAt: "2026-10-12T15:00:00Z" }, { label: "Weekly limit", usedPercent: 10 }],
+  })] }).mockResolvedValueOnce({ ...snapshot, items: [claude({
+    state: "unavailable", source: "Claude plan limits", detail: "Claude reports plan limits only during a turn, when a limit's status changes, such as when you near a limit. None is current yet.", balances: [], windows: [],
+  })] });
+  const api = { getRuntimeUsage } as unknown as ApiClient;
+  const user = userEvent.setup();
+  render(<RuntimeUsagePanel api={api} active />);
+  const card = await screen.findByRole("article", { name: "Claude usage" });
+  expect(card).toHaveTextContent("Plan limits58%");
+  expect(card).not.toHaveTextContent("Included usage");
+  expect(card).toHaveTextContent("5-hour limit");
+  expect(card).toHaveTextContent("Weekly limit90% left");
+  expect(card).toHaveTextContent("Claude plan limits · last reported");
+  expect(within(card).getByRole("meter", { name: "5-hour limit" })).toHaveAttribute("aria-valuenow", "42");
+  await user.click(screen.getByRole("button", { name: "Refresh provider and harness usage" }));
+  await waitFor(() => expect(screen.getByRole("article", { name: "Claude usage" })).toHaveTextContent("Not reported yet"));
+  const empty = screen.getByRole("article", { name: "Claude usage" });
+  expect(empty).toHaveTextContent("Plan limits");
+  expect(empty).not.toHaveTextContent("Remaining balance");
+  expect(empty).toHaveTextContent("Not reported");
+  expect(empty).not.toHaveTextContent("Not checked");
+  expect(empty).not.toHaveTextContent("0%");
+});

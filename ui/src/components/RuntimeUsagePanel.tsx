@@ -49,6 +49,8 @@ function UsageCard({ item }: { item: RuntimeUsageItem }) {
   const window = item.vendor.windows[0];
   const title = item.kind === "harness" ? "Agent harness" : "Model provider";
   const Icon = item.kind === "harness" ? Bot : Cloud;
+  // Claude reports plan windows only during turns; it has no balance to read.
+  const planReported = item.providerType === "claude_agent_sdk";
   const usedPercent = balance?.limit && balance.used !== undefined && balance.limit > 0
     ? Math.round(balance.used / balance.limit * 100)
     : undefined;
@@ -59,9 +61,9 @@ function UsageCard({ item }: { item: RuntimeUsageItem }) {
       {!item.enabled && <span className="runtime-usage-disabled">Disabled</span>}
     </header>
     <div className="runtime-usage-hero">
-      <small>{balance?.label ?? (window ? "Included usage" : "Remaining balance")}</small>
+      <small>{balance?.label ?? (planReported ? "Plan limits" : window ? "Included usage" : "Remaining balance")}</small>
       <div className="runtime-usage-figure">
-        <strong>{balance ? figure(balance) : window ? `${Math.max(0, 100 - window.usedPercent)}%` : item.vendor.state === "error" ? "Could not refresh" : "Unavailable"}</strong>
+        <strong>{balance ? figure(balance) : window ? `${Math.max(0, 100 - window.usedPercent)}%` : item.vendor.state === "error" ? "Could not refresh" : planReported ? "Not reported yet" : "Unavailable"}</strong>
         {(balance?.remaining !== undefined || window) && <span>{window && !balance ? "left" : "remaining"}</span>}
       </div>
       {item.vendor.ordinaryUsageAllowed === false && <p className="runtime-usage-attention">Included usage is currently unavailable.</p>}
@@ -90,7 +92,7 @@ function UsageCard({ item }: { item: RuntimeUsageItem }) {
       <p>{item.recorded.scope}. Activity outside Nebula is excluded from these token counts.</p>
       {balance?.note && <p>{balance.note}</p>}
     </details>
-    <footer><span>{item.vendor.source}</span><time dateTime={item.vendor.checkedAt}>{timeLabel(item.vendor.checkedAt)}</time></footer>
+    <footer><span>{item.vendor.source}</span><time dateTime={item.vendor.checkedAt}>{planReported && !item.vendor.checkedAt ? "Not reported" : timeLabel(item.vendor.checkedAt)}</time></footer>
   </article>;
 }
 

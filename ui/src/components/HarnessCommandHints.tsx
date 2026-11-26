@@ -8,18 +8,26 @@ export const harnessCommands: HarnessCommand[] = [
   { name: "help", description: "Command help", hint: "", source: "nebula" },
 ];
 
+// Claude chats: Nebula answers /usage; any other slash text still reaches Claude.
+export const claudeHarnessCommands: HarnessCommand[] = [
+  { name: "usage", description: "Conversation tokens and Claude plan limits", hint: "", source: "nebula" },
+];
+
 export function isHarnessCommand(text: string): boolean {
   return /^\/[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}(?:\s|$)/.test(text.trim());
 }
 
-export function HarnessCommandHints({ draft, onSelect, commands = harnessCommands, discoveryPending = false }: {
+export function HarnessCommandHints({ draft, onSelect, commands = harnessCommands, discoveryPending = false, otherTextReachesHarness = false }: {
   draft: string;
   onSelect: (text: string) => void;
   commands?: HarnessCommand[];
   discoveryPending?: boolean;
+  /** Unlisted slash text is sent to the harness, so it is not "unavailable". */
+  otherTextReachesHarness?: boolean;
 }) {
   if (!draft.startsWith("/") || /\s/.test(draft)) return null;
   const matches = commands.filter(({ name }) => `/${name}`.startsWith(draft));
+  if (!matches.length && otherTextReachesHarness) return null;
   return <div className="harness-command-hints" aria-label="Harness commands">
     {matches.map(({ name, description, hint }) => <button className="button quiet" type="button" key={name} title={hint || description} aria-label={`/${name} ${description}`} onClick={() => onSelect(`/${name} `)}><strong>/{name}</strong><span>{description}{hint && <small>{hint}</small>}</span></button>)}
     {!matches.length && <span role="status">Command unavailable. Use /help to see available commands.</span>}

@@ -1414,3 +1414,14 @@ def test_product_help_explains_the_butler_board_stage_filter(monkeypatch):
     assert "no stage" in text
     assert "clear stage filter" in text
     assert "hold and resume act only on these" in text
+
+
+def test_product_help_explains_claude_usage_and_plan_limits(monkeypatch):
+    monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
+    matches = search_product_knowledge(
+        "Claude usage plan limits 5-hour weekly Usage and credits /usage"
+    )
+    text = "\n".join(str(item["text"]) for item in matches)
+    assert "last reported" in text
+    assert "/usage" in text
+    assert "no on-demand" in text

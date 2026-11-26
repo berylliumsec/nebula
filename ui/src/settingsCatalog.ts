@@ -90,11 +90,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.usage",
     label: "Usage and credits",
-    description: "See Codex and Grok credits separately from included usage, plus other balances and Nebula activity",
+    description: "See Codex and Grok credits separately from included usage, Claude's last reported plan limits, plus other balances and Nebula activity",
     category: "Models",
     scope: "Workspace",
     target: "usage-settings",
-    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "grok", "grok build", "openrouter", "deepseek"],
+    keywords: ["usage", "credits", "balance", "remaining", "quota", "rate limit", "tokens", "provider", "harness", "codex", "grok", "grok build", "claude", "claude plan limits", "plan limits", "5-hour limit", "weekly limit", "limit left", "/usage", "openrouter", "deepseek"],
   },
   {
     id: "settings.appearance",
