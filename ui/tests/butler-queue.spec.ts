@@ -118,6 +118,10 @@ const PROMPTS = {
   first: "Summarize the synthetic findings.",
   open: "Handle follow-up item seven.",
   dropped: "Handle follow-up item eight.",
+  held: "Keep reviewing the long synthetic backlog.",
+  urgent: "Handle the urgent synthetic item now.",
+  threadHeld: "Walk through every synthetic project slowly.",
+  threadUrgent: "Only check the synthetic auth project instead.",
 };
 
 /**
@@ -169,7 +173,7 @@ async function startModelStub(release: Promise<void>): Promise<ModelStub & {prom
     const prompt = String(messages[lastUser]?.content ?? "");
     const toolReplies = messages.slice(lastUser + 1).filter(message => message.role === "tool").length;
     if (!synthesis && toolReplies === 0) prompts.push(prompt);
-    if (prompt.includes(PROMPTS.first)) await release;
+    if (prompt.includes(PROMPTS.first) || prompt.includes(PROMPTS.held) || prompt.includes(PROMPTS.threadHeld)) await release;
     if (prompt.includes(PROMPTS.open) && !synthesis) offered = tools.map(tool => tool.function?.name ?? "");
     // Butler reaches browser actions through its capability tools: describe, then change.
     const describe = toolNamed("nebula_capabilities_describe");
@@ -186,7 +190,9 @@ async function startModelStub(release: Promise<void>): Promise<ModelStub & {prom
       response.end(call(finish, {}));
       return;
     }
-    response.end(completion({content: prompt.includes(PROMPTS.first)
+    response.end(completion({content: prompt.includes(PROMPTS.urgent) ? "Urgent synthetic item handled."
+      : prompt.includes(PROMPTS.threadUrgent) ? "Synthetic auth project checked."
+      : prompt.includes(PROMPTS.first)
       ? "Synthetic findings: two confirmed, one duplicate."
       : prompt.includes(PROMPTS.open) ? "Opened Appearance settings on your device." : "Done."}, "stop"));
   });
@@ -285,7 +291,7 @@ test("assistant upgrade Butler queues messages while it works and follows them o
       await assistant.getByRole("button", {name: "Send to Butler"}).click();
       await expect.poll(stub.prompts, {timeout: 60_000}).toContain(PROMPTS.first);
       // Butler is answering: the composer queues instead of sending.
-      await expect(composer).toHaveAttribute("placeholder", "Queue a message for Butler…", {timeout: 30_000});
+      await expect(composer).toHaveAttribute("placeholder", /^Queue a message/, {timeout: 30_000});
       await expect(composer).toBeEnabled();
       await composer.fill(PROMPTS.open);
       await assistant.getByRole("button", {name: "Queue message for Butler"}).click();
@@ -336,5 +342,79 @@ test("assistant upgrade Butler queues messages while it works and follows them o
     {name: "release held Butler answer", dispose: async () => { releaseFirst(); }},
     {name: "model stub", dispose: () => stopModelStub(stub)},
     {name: "Butler queue fixture Core", dispose: async () => { if (core) await stopCore(core); }},
+  ]);
+});
+
+test("assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core", async ({page}, testInfo) => {
+  test.setTimeout(360_000);
+  let releaseHeld!: () => void;
+  const release = new Promise<void>(resolve => { releaseHeld = resolve; });
+  const stub = await startModelStub(release);
+  let core: TestCore | undefined;
+  await withOwnedCleanup(async () => {
+    core = await startCore();
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    try {
+      await waitForCoreApi(api, 90_000);
+      const projectResponse = await coreMutation(api, "post", "engagements", {name: "Send now fixture", status: "active", metadata: {}});
+      expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+      const projectId = (await projectResponse.json() as {id: string}).id;
+      const modelResponse = await coreMutation(api, "post", "providers", {name: "Send now model", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true,
+        is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+        metadata: {default_model: "security-model", options: {context_window: 32768}}});
+      expect(modelResponse.ok(), await modelResponse.text()).toBe(true);
+      const model = await modelResponse.json() as {id: string; revision: number};
+      const verified = await coreMutation(api, "post", `providers/${model.id}/capabilities/verify`, {model: "security-model", expected_revision: model.revision});
+      expect(verified.ok(), await verified.text()).toBe(true);
+      // The project's Butler, set up as an operator does once from the Butler panel.
+      const butler = await coreMutation(api, "post", "chat/control-assistant/session", {engagement_id: projectId, backend: "provider", provider_id: model.id, model: "security-model"});
+      expect(butler.ok(), await butler.text()).toBe(true);
+      type Queue = {paused: boolean; items: Array<{id: string; status: string; request?: {messages: Array<{content: string}>}}>};
+      const readQueue = async (sessionId: string) => await (await api.get(`chat/sessions/${sessionId}/queue`)).json() as Queue;
+
+      await page.addInitScript(id => localStorage.setItem("nebula.engagement", id), projectId);
+      await pairBrowser(page, core, "Send now LAN browser");
+
+      // Butler mode: a reply to a thread Butler is still answering queues, then Send now interrupts.
+      await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat`);
+      // Entry: the Butler launcher opens Butler mode.
+      await openButler(page);
+      await expect(page).toHaveURL(`${core.origin}/butler?project=${projectId}`);
+      const butlerComposer = page.getByRole("textbox", {name: "Message Butler"});
+      // On a phone the board and threads are tabs.
+      const threadsTab = page.getByRole("tab", {name: /^Threads/});
+      await expect(threadsTab.or(butlerComposer).first()).toBeVisible({timeout: 30_000});
+      if (await threadsTab.isVisible()) await threadsTab.click();
+      await expect(butlerComposer).toBeEditable({timeout: 60_000});
+      await butlerComposer.fill(PROMPTS.threadHeld);
+      await butlerComposer.press("Enter");
+      await expect.poll(stub.prompts, {timeout: 120_000}).toContainEqual(expect.stringContaining(PROMPTS.threadHeld));
+      const thread = new URL(page.url()).searchParams.get("thread");
+      expect(thread).toBeTruthy();
+      // A new thread opens with the composer set to start another; reply in this one.
+      await page.getByRole("button", {name: "Reply in this thread"}).click();
+      await expect(page.getByRole("button", {name: "Stop response"})).toBeVisible({timeout: 30_000});
+      await butlerComposer.fill(PROMPTS.threadUrgent);
+      await page.getByRole("button", {name: "Queue reply"}).click();
+      const threadQueue = page.getByRole("region", {name: "Thread queue"});
+      await expect(threadQueue.getByText(PROMPTS.threadUrgent)).toBeVisible({timeout: 30_000});
+      expect((await readQueue(thread!)).items.map(item => item.request?.messages[0]?.content.includes(PROMPTS.threadUrgent))).toEqual([true]);
+      await threadQueue.getByRole("button", {name: "Send queued message 1 now"}).click();
+      await expect.poll(stub.prompts, {timeout: 90_000}).toContainEqual(expect.stringContaining(PROMPTS.threadUrgent));
+      await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText("Synthetic auth project checked.")).toBeVisible({timeout: 90_000});
+      await expect(threadQueue).toHaveCount(0, {timeout: 30_000});
+      expect((await readQueue(thread!)).paused).toBe(false);
+
+      expect((await new AxeBuilder({page}).include('section[aria-label^="Thread:"]').analyze()).violations).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+      await testInfo.attach("butler-send-now-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(),
+        result: "In Butler mode a reply to a thread Butler was still answering queued in Core; Send now on the queued reply stopped the answer, and Core sent the reply next without pausing the queue."}), contentType: "application/json"});
+    } finally {
+      await api.dispose();
+    }
+  }, [
+    {name: "release held Butler answers", dispose: async () => { releaseHeld(); }},
+    {name: "model stub", dispose: () => stopModelStub(stub)},
+    {name: "Send now fixture Core", dispose: async () => { if (core) await stopCore(core); }},
   ]);
 });

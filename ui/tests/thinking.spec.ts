@@ -140,11 +140,11 @@ test("expanded review queue can scroll to its last action without clipping", asy
   await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20000});
   await page.goto("/projects/thinking-project/workbench?view=chat&session=queue-chat");
   const queue = page.getByRole("region", {name: "Core follow-up queue"});
-  const details = queue.locator("details");
-  await expect(details).toHaveAttribute("open", "");
-  await details.scrollIntoViewIfNeeded();
-  await details.evaluate(element => {element.scrollTop = element.scrollHeight;});
-  const remove = queue.getByRole("button", {name: "Remove", exact: true});
+  await expect(queue.locator("button[aria-expanded]")).toHaveAttribute("aria-expanded", "true");
+  const list = queue.locator("ol");
+  await list.scrollIntoViewIfNeeded();
+  await list.evaluate(element => {element.scrollTop = element.scrollHeight;});
+  const remove = queue.getByRole("button", {name: /^Remove queued message \d+$/}).last();
   await expect(remove).toBeInViewport({ratio: 1});
   expect(await remove.evaluate(element => {
     const rect = element.getBoundingClientRect();
@@ -152,9 +152,9 @@ test("expanded review queue can scroll to its last action without clipping", asy
   })).toBe(true);
   await queue.getByRole("button", {name: "Edit queued message 1"}).click();
   await queue.getByLabel("Edit queued text").focus();
-  await queue.getByRole("button", {name: "Cancel edit"}).click();
+  await queue.getByRole("button", {name: "Cancel", exact: true}).click();
   await expect(queue.getByLabel("Edit queued text")).toHaveCount(0);
-  expect((await new AxeBuilder({page}).include(".chat-follow-up-queue").analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({page}).include(".queued-messages").analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({path: info.outputPath("queue-scroll.png"), fullPage: true});
 });
