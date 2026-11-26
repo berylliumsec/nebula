@@ -1481,9 +1481,7 @@ async def test_claude_probe_offers_stable_model_aliases(monkeypatch):
         assert option.default_reasoning_effort is None
 
 
-async def test_claude_sdk_receives_the_session_reasoning_effort(
-    tmp_path, monkeypatch
-):
+async def test_claude_sdk_receives_the_session_reasoning_effort(tmp_path, monkeypatch):
     sdk = SimpleNamespace(
         ClaudeAgentOptions=FakeClaudeOptions,
         ClaudeSDKClient=FakeClaudeClient,

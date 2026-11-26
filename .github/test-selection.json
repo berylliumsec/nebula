@@ -1,37 +1,21 @@
 {
-  "change_digest": "6d310559bffd50d59fcd3cb2ad20eee2ac563cccf383087f362aad99723d0f58",
-  "reviewed_by": "Claude: encrypted saved passwords for agents",
-  "reason": "Adds an AES-256-GCM credential file store (store: refs, 0600 key under the Core data root), a SavedCredential entity and /api/v1/saved-credentials routes (host settings + kernel), {{credential:<name>}} substitution and echo scrubbing inside McpToolPlugin.execute with a per-password MCP server allow list, a credentials.list tool for chats/Butler whose selected servers can use one, Butler read access with browser-owned writes, and a Settings > Saved passwords section. Python selects the new saved-credential tests plus the credential, MCP inline-output, settings-assistant API, host-settings and runtime-bundle suites it touches. Frontend selects the assistant action tests (catalog discovery + open_setting) and the new component test. Playwright runs universal settings search at desktop and narrow width.",
-  "exclusions": "test_tolerant_entity_readers.py::test_a_new_entity_field_needs_a_reviewed_addition_flag, test_settings_assistant_tools.py (2 count assertions) and test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings fail identically on origin/main and are not selected. No native change. Real-Core journey (save via browser, chat lists and enters a password through a stdio MCP echo server, other server refused, no plaintext in the data root) was run on a disposable LAN Core instead of a Playwright real-Core spec.",
+  "change_digest": "addda6ea6994fd3a0b2e33e86ce200aa80061c8e0bd69e424c8a9aae9619566c",
+  "reviewed_by": "Claude: ruff format fix",
+  "reason": "ruff format --check failed on main for tests/v3/test_harness_adapters.py (from #1331), which stopped the Python 3.12 job before any tests ran. Whitespace-only reformat.",
+  "exclusions": "Formatting only; no behavior change, so no tests are selected beyond the formatting check itself.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 121,
-    "frontend": 43,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_saved_credentials.py",
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_mcp_inline_output.py",
-    "tests/v3/test_settings_assistant_api.py",
-    "tests/v3/test_runtime_host_settings.py",
-    "tests/v3/test_runtime_bundle.py"
-  ],
-  "frontend": [
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/SavedCredentialsSettings.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:settings-search/desktop",
-    "entry:settings-search/narrow"
-  ],
-  "checks": [
-    "frontend-audit"
-  ]
+  "playwright": []
 }
