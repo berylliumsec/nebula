@@ -239,6 +239,31 @@ async def test_claude_probe_advertises_exact_model_without_a_saved_default(
     assert CLAUDE_MODEL in health.capabilities.models
 
 
+async def test_probed_claude_profile_accepts_an_explicit_reasoning_effort(
+    tmp_path, monkeypatch
+):
+    """Butler's goal creation names an effort; a probed Claude profile takes it.
+
+    Prod refused every Butler goal on Claude with "reasoning effort 'high' is
+    not advertised for 'claude-opus-5-5'" because the probe listed no efforts.
+    """
+
+    monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(_fake_sdk))
+    store = NebulaStore(tmp_path / "claude-effort.db")
+    project = await store.create(Engagement(name="Selected project"))
+    health = await ClaudeAgentSdkAdapter().probe(_claude_harness(), CredentialStore())
+    profile = await store.create(_claude_harness(capabilities=health.capabilities))
+
+    session = await _runtime(store, tmp_path).create_session(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model=CLAUDE_MODEL,
+        reasoning_effort="high",
+    )
+
+    assert session.metadata["runtime_options"]["reasoning_effort"] == "high"
+
+
 def _runtime(store: NebulaStore, tmp_path) -> HarnessRuntimeService:
     return HarnessRuntimeService(
         store,
