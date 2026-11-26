@@ -2901,6 +2901,25 @@ class SshEnvironment(Entity):
         return self.display_name.strip() or self.alias
 
 
+SAVED_CREDENTIAL_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,63}$"
+
+
+class SavedCredential(Entity):
+    """A named secret agents can enter without reading it.
+
+    The value lives in Nebula's encrypted credential files; this row holds only
+    the reference and the MCP servers allowed to receive it. A tool argument
+    that contains ``{{credential:<name>}}`` gets the value substituted at call
+    time, and only for an allowed server.
+    """
+
+    entity_kind: ClassVar[str] = "saved_credentials"
+    name: str = Field(pattern=SAVED_CREDENTIAL_NAME_PATTERN)
+    description: str = Field(default="", max_length=500)
+    reference: str = Field(pattern=r"^store:[0-9a-f]{32}$")
+    allowed_mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+
+
 MCP_DESCRIPTION_MAX_CHARS = 500
 
 
@@ -5484,6 +5503,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ProviderProfile,
     HarnessProfile,
     McpServerProfile,
+    SavedCredential,
     SshEnvironment,
     HarnessSession,
     SourceSnapshot,

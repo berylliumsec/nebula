@@ -14,6 +14,11 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from starlette.responses import JSONResponse
 
+from .saved_credentials import (
+    SAVED_CREDENTIALS_PATH,
+    SavedCredentialService,
+    mount_saved_credential_routes,
+)
 from .credentials import (
     CredentialCreateRequest,
     CredentialError,
@@ -121,6 +126,11 @@ def is_host_settings_route(method, path):
                 and re.fullmatch(r"/api/v1/credentials/[^/]+/status", path)
             )
             or (method == "DELETE" and re.fullmatch(r"/api/v1/credentials/[^/]+", path))
+            or (method in {"GET", "POST"} and path == SAVED_CREDENTIALS_PATH)
+            or (
+                method in {"PATCH", "DELETE"}
+                and re.fullmatch(SAVED_CREDENTIALS_PATH + r"/[a-z0-9-]{1,64}", path)
+            )
         )
     )
 
@@ -223,6 +233,11 @@ class HostSettings:
 
     def _routes(self):
         app, auth = self.app, [Depends(self._authorized)]
+        mount_saved_credential_routes(
+            app,
+            SavedCredentialService(self.store, self.credentials),
+            dependencies=auth,
+        )
 
         @app.get(
             "/api/v1/memory-budgets/jobs/{job_id}",
@@ -608,6 +623,8 @@ class HostSettings:
             ("/api/v1/memory-budgets/jobs/{job_id}/apply", ["POST"]),
             ("/api/v1/credentials", ["POST"]),
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),
+            (SAVED_CREDENTIALS_PATH, ["GET", "POST"]),
+            (SAVED_CREDENTIALS_PATH + "/{name}", ["PATCH", "DELETE"]),
             (LIBRARY_INGEST_PATH, ["POST"]),
             ("/api/v1/library/items/{item_id}/reindex", ["POST"]),
             ("/api/v1/library/items/{item_id}", ["DELETE"]),

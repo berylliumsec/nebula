@@ -41,7 +41,7 @@ _PROJECT_SETTING = re.compile(
 _GLOBAL_SETTINGS = re.compile(
     r"^/api/v1/(?:"
     r"providers|provider-catalog|harnesses|mcp-servers|ssh-environments|"
-    r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|skills|"
+    r"runner-profiles|vpn-profiles|operator-profiles|credentials/(?:vault|[A-Za-z0-9_.~:-]+/status)|saved-credentials|skills|"
     r"integrations|automation/runtime|diagnostics/(?:settings|performance)|voice/settings|butler/(?:instructions|check-interval)|"
     r"hooks|project-instructions|runtime-usage|host-load|host-pressure|host-cpu-budget|memory-budgets|setup|release"
     r")(?:/[A-Za-z0-9_.~%:-]+)*$"
@@ -79,6 +79,11 @@ _BROWSER_OWNED_OPERATIONS = (
     ("DELETE", re.compile(r"^/api/v1/integrations/typesafe$"), "typesafe"),
     ("POST", re.compile(r"^/api/v1/vpn-profiles$"), "vpn-egress"),
     ("DELETE", re.compile(r"^/api/v1/vpn-profiles/[^/]+$"), "vpn-egress"),
+    # Saved passwords: the value, the servers allowed to receive it, and its
+    # removal are all the operator's to decide in the browser.
+    ("POST", re.compile(r"^/api/v1/saved-credentials$"), "saved-credentials"),
+    ("PATCH", re.compile(r"^/api/v1/saved-credentials/[^/]+$"), "saved-credentials"),
+    ("DELETE", re.compile(r"^/api/v1/saved-credentials/[^/]+$"), "saved-credentials"),
 )
 _REDACT_KEYS = {
     "secret",
