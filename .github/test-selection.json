@@ -1,26 +1,34 @@
 {
-  "change_digest": "ebf2b68e2de62701188c9d098cbc0b1e2fc6349728cefd78497e742f5fb433c5",
-  "reviewed_by": "Claude: harness gateway keeps project hook denial reasons",
-  "reason": "HarnessRuntimeService._gateway_oci_call caught the broker's PolicyDenied (including ProjectHookPolicyDenied) and flattened it to {status: denied, detail}; _gateway_call then rebuilt a bare PermissionError, so tool_failure took its generic 'denied by an access or approval rule' branch and the hook's stderr, route_to and policy_rule never reached the harness model. The gateway now classifies the real exception with tool_failure (FAILURE_SCHEMA), which _gateway_call passes through unchanged. New tests drive _gateway_oci_call with a hook-denying broker (with and without route_to) and fail on origin/main.",
-  "exclusions": "tests/v3/test_harnesses.py ran locally (141 passed, 2 failed); the 2 failures (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) fail identically on origin/main 702cc77, so the file is not selected. No frontend, native or Playwright layer: the change is backend-only and adds no UI. No LAN real-Core harness journey was run: it needs a live vendor harness session.",
+  "change_digest": "73ba1089c421ead377aae21edd6bc625bfae46e8f496120e39e88918bb70cd27",
+  "reviewed_by": "Claude: Butler mode Markdown tables",
+  "reason": "Butler mode's thread transcript, its live answer and the chat pop-up passed answers to bare ReactMarkdown, so GFM tables used browser defaults (centred headers, no borders) and inherited overflow-wrap:anywhere, which collapsed columns and split short values. A shared ButlerMarkdown component wraps each table in a focusable, bordered scroll region with start-aligned headers, row dividers, normal word wrapping, a minimum Item column and minimum short columns, plus code/pre/list styling. The butler-mode Playwright area now also covers ButlerChatPopup and ButlerMarkdown.",
+  "exclusions": "No Core change, so no Python tests. Other Butler surfaces (side panel NebulaControlAssistant, Ask Nebula) already style tables or are untouched. Playwright runs the butler-mode real-Core journey on desktop, compact, Chromium 390 and WebKit 390; the 320/430 profiles add no table-specific geometry beyond 390.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 41,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 35,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
-  "python": [
-    "tests/v3/test_hook_denial_routing.py",
-    "tests/v3/test_blocking_hook_feedback.py",
-    "tests/v3/test_tool_failures.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ButlerMarkdown.test.tsx",
+    "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/pages/ButlerChatPopup.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "butler-mode/assistant-real-desktop",
+    "butler-mode/assistant-real-compact",
+    "butler-mode/assistant-real-chromium-390",
+    "butler-mode/assistant-real-webkit-390"
+  ],
+  "checks": [
+    "frontend-audit"
+  ]
 }

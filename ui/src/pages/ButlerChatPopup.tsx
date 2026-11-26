@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ExternalLink, X } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
 import type { PersistedChatMessage } from "../api/types";
 import { startVisiblePoll } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
 import styles from "./ButlerChatPopup.module.css";
+import { ButlerMarkdown } from "../components/ButlerMarkdown";
 
 const PAGE = 60;
 
@@ -134,7 +133,7 @@ export function ButlerChatPopup({ api, sessionId, title, live, onClose, onOpenFu
         {error && <p className={styles.error} role="alert">{error}</p>}
         {messages && shown.length === 0 && <p className={styles.muted}>No messages yet.</p>}
         {shown.map((message) => <div key={message.id} className={message.role === "user" ? styles.question : styles.answer}>
-          {message.role === "user" ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
+          {message.role === "user" ? message.content : <ButlerMarkdown content={message.content} />}
         </div>)}
       </div>
     </section>

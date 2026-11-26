@@ -12,8 +12,6 @@ import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromNative } from "../components/activityLedgerModel";
 import { activityFromEvent, activityFromPendingTurn, activityFromSavedResults, ledgerStatus, type ThreadActivity } from "./butlerThreadActivity";
 import { startVisiblePoll } from "../api/visiblePoll";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { useConfirmation } from "../components/DialogSystem";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { isNebulaShell, useCompactLayout } from "../hooks/useCompactLayout";
@@ -22,6 +20,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { askAboutTarget, butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
 import { ButlerProjectPicker } from "./ButlerProjectPicker";
 import styles from "./ButlerModePage.module.css";
+import { ButlerMarkdown } from "../components/ButlerMarkdown";
 import { useButlerColumns } from "./useButlerColumns";
 // Already in the main bundle with the Butler panel.
 import { MicrophoneIcon } from "../components/NebulaVoice";
@@ -1177,7 +1176,7 @@ export function ButlerModePage() {
         const steps = message.role === "assistant" ? activityFromSavedResults(message.id, message.toolResults) : [];
         return <div key={message.id ?? index} className={message.role === "user" ? styles.question : styles.answer}>
           {steps.length > 0 && <ActivityLedger model={activityLedgerFromNative("Butler's steps", "complete", steps)} />}
-          {message.role === "user" ? message.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>}
+          {message.role === "user" ? message.content : <ButlerMarkdown content={message.content} />}
         </div>;
       })}
       {pendingSend && (pendingSend.threadId ? pendingSend.threadId === openThreadId : !openThreadId) && <>
@@ -1186,7 +1185,7 @@ export function ButlerModePage() {
       </>}
       {openLive && !threadMessages.some((message) => message.role === "user" && message.content.endsWith(openLive.prompt)) && <div className={styles.question}>{openLive.prompt}</div>}
       {openThreadId && openActivity && <ActivityLedger model={activityLedgerFromNative("Butler's steps", ledgerStatus(openActivity), openActivity.cards)} liveStatus={openActivity.detail} />}
-      {openLive && (openLive.text ? <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{openLive.text}</ReactMarkdown></div> : !openLive.error && !openActivity && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
+      {openLive && (openLive.text ? <div className={styles.answer}><ButlerMarkdown content={openLive.text} /></div> : !openLive.error && !openActivity && <p className={styles.working}><i className={styles.dot} data-state="working" aria-hidden="true" /> Butler is working on this…</p>)}
       {openThreadId && threadProposals[openThreadId]?.map((proposal) => <ProposalCard key={proposal.sessionId} proposal={proposal} note={actionNote[proposal.sessionId]} actions={proposal.kind === "goal_chat_proposal" ? proposalActions(proposal.sessionId, proposal.title) : null} onOpenBrief={() => openBrief(proposal.sessionId)} />)}
       {openLive?.browserAction && <p className={styles.note}>Butler asked this device to finish a step in the browser (for example a picker or setting). Open the Butler panel to complete it there.</p>}
       {openLive?.error && <div className={styles.error} role="alert">{openLive.error}</div>}

@@ -131,6 +131,13 @@ const ANSWERS = {
   about: "Fuzz parser is still running.",
 };
 
+/** A status table like Butler's real Work summaries: long item names beside short status and date columns. */
+const RESULTS_TABLE = `| Item | Status | Last update |
+| --- | --- | --- |
+| Sample parser fixture: long synthetic description of a fuzzing target and its harness (\`a1b2c3d4\`) | review | Nov 26 |
+| Sample upload form: retry handling (\`e5f6a7b8\`) | in progress | no updates since created Nov 24 |
+| Sample report draft: wording pass for the summary section (\`c9d0e1f2\`) | in progress | Nov 22 |`;
+
 /**
  * OpenAI-compatible local model. The held thread and the ordinary chat wait
  * for their release; every other prompt answers at once.
@@ -184,7 +191,7 @@ async function startModelStub(holdThread: Promise<void>, holdWork: Promise<void>
       return;
     }
     response.end(completion({content: prompt.includes(PROMPTS.held) ? ANSWERS.held
-      : prompt.includes(PROMPTS.quick) ? ANSWERS.quick
+      : prompt.includes(PROMPTS.quick) ? `${ANSWERS.quick}\n\n${RESULTS_TABLE}`
       : prompt.includes(PROMPTS.about) ? ANSWERS.about : "Done."}, "stop"));
   });
   await new Promise<void>((resolve, reject) => {
@@ -477,6 +484,33 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await startThread(page, PROMPTS.quick);
       const conversation = page.getByRole("log", {name: "Butler thread messages"});
       await expect(conversation.getByText(ANSWERS.quick)).toBeVisible({timeout: 90_000});
+      // Butler's Markdown tables read as tables: a bordered region as wide as the answer, start-aligned headers, unsplit words.
+      const resultsTable = conversation.getByRole("region", {name: "Butler response table"});
+      await expect(resultsTable.getByRole("columnheader")).toHaveText(["Item", "Status", "Last update"]);
+      const tableLayout = await resultsTable.evaluate(region => {
+        const table = region.querySelector("table")!;
+        const header = table.querySelector("th")!;
+        // The status text's own box: a cell is as tall as its row, so its height would count the Item column's lines.
+        const status = table.querySelector("tbody tr:nth-child(2) td:nth-child(2)")!;
+        const statusText = document.createRange();
+        statusText.selectNodeContents(status);
+        return {
+          answerWidth: region.parentElement!.getBoundingClientRect().width,
+          regionWidth: region.getBoundingClientRect().width,
+          tableWidth: table.getBoundingClientRect().width,
+          headerAlign: getComputedStyle(header).textAlign,
+          border: getComputedStyle(region).borderTopStyle,
+          statusText: status.textContent,
+          statusLines: Math.ceil(statusText.getBoundingClientRect().height / parseFloat(getComputedStyle(status).lineHeight)),
+        };
+      });
+      expect(tableLayout.headerAlign).toMatch(/^(start|left)$/);
+      expect(tableLayout.border).toBe("solid");
+      expect(tableLayout.regionWidth).toBeGreaterThanOrEqual(tableLayout.answerWidth - 1);
+      expect(tableLayout.tableWidth).toBeGreaterThanOrEqual(tableLayout.regionWidth - 2);
+      expect(tableLayout.statusText).toBe("in progress");
+      expect(tableLayout.statusLines).toBe(1);
+      await resultsTable.screenshot({path: testInfo.outputPath("butler-mode-table.png")});
       // Once Butler has answered the thread a question started, the composer replies in it.
       await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
       await page.screenshot({path: testInfo.outputPath("butler-mode-threads.png")});
@@ -793,7 +827,7 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await expect(page.getByRole("heading", {name: "Butler", exact: true})).toBeVisible();
       await testInfo.attach("butler-mode-lan", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name,
         viewport: page.viewportSize(), asset: entry, assetSha256: build.assets[entry!],
-        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; Stage beside Group listed Recon and No stage with counts, narrowed the board through Core to the Recon chat with Hold and Resume scoped to it, kept the filter across a reload, and Clear stage filter restored every chat; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the proposed goal had no checkbox, a ticked paused card resumed through Resume 1, and Resume all idle confirmed and resumed it again while leaving the proposal a draft; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core; All projects opened the Projects page and Back returned to Butler mode."}), contentType: "application/json"});
+        result: "The Butler launcher opened Butler mode; the board, grouped by project, listed only goal chats in Active, Idle and a collapsed Completed with per-section counts and distinct dots, and Completed stayed open across a reload once opened; a card opened its brief and its transcript pop-up closed with Esc; Oversight, Settings and the project thread opened in place; the board listed another project's running chat and its search beside Group filtered it as typed; Stage beside Group listed Recon and No stage with counts, narrowed the board through Core to the Recon chat with Hold and Resume scoped to it, kept the filter across a reload, and Clear stage filter restored every chat; the project picker found a project by typing and opened it with Enter; two Butler threads ran at once and the second answered while the first worked; its answer's Markdown table showed in a bordered, answer-wide region with start-aligned headers and one-line status cells; the open thread survived a reload; Ask Butler about this started a thread in the card's project with the chat named, and asking again quoted the chat into that open thread; Stop ended the chat's response, which paused its goal, and the board moved the card from Active to Idle after Core reported it; the proposed goal had no checkbox, a ticked paused card resumed through Resume 1, and Resume all idle confirmed and resumed it again while leaving the proposal a draft; the working thread showed the chat Activity card, live and again from Core after a reload, with Stop in place of Send; the held thread then showed its answer; Archive removed it from Butler mode and Core kept it as an archived chat; Delete asked first, Cancel kept the thread, and Delete thread removed it from Core; All projects opened the Projects page and Back returned to Butler mode."}), contentType: "application/json"});
     } finally {
       await api.dispose();
     }
