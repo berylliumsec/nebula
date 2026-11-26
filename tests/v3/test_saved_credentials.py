@@ -1,4 +1,4 @@
-"""Saved passwords: encrypted at rest, entered into MCP tools, never shown to models."""
+"""Saved passwords: encrypted at rest, entered through any tool, never shown to models."""
 
 from __future__ import annotations
 
@@ -20,9 +20,18 @@ from nebula.v3.credential_file_store import (
     CredentialFileError,
     EncryptedCredentialFiles,
 )
-from nebula.v3.credential_placeholders import find_placeholders, scrub, substitute
+from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.credential_placeholders import (
+    environment_name,
+    find_placeholders,
+    scrub,
+    scrub_bytes,
+    substitute,
+    to_environment_references,
+)
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.domain import (
+    McpApprovalMode,
     McpCapabilitySnapshot,
     McpServerProfile,
     McpToolSnapshot,
@@ -37,7 +46,22 @@ from nebula.v3.saved_credentials import (
 )
 from nebula.v3.settings_assistant_api import _browser_owned_destination
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tools import GuidedToolError
+from nebula.v3.policy import PolicyEngine
+from nebula.v3.sandbox import AnalysisOnlyRunner
+from nebula.v3.domain import ScopePolicy, ToolCall as StoredCall
+from nebula.v3.tools import (
+    AnalysisTool,
+    GuidedToolError,
+    IdempotencyBehavior,
+    RiskClass,
+    StoreToolEvidenceRecorder,
+    StoreToolLedger,
+    ToolBroker,
+    ToolBrokerError,
+    ToolInvocation,
+    ToolRegistry,
+    ToolSpec,
+)
 
 SECRET = "correct horse battery staple"
 
@@ -142,17 +166,120 @@ def test_placeholders_substitute_and_scrub_nested_values():
     }
 
 
-async def _mac_profile(store, name="mac-control") -> McpServerProfile:
-    return await store.create(
+@pytest.fixture
+def saved_root(tmp_path, monkeypatch):
+    """Point this process's encrypted credential files at a temp data root."""
+
+    import nebula.v3.credential_file_store as files
+
+    monkeypatch.setattr(files, "_configured_root", tmp_path / "data" / "credentials")
+    return CredentialStore(NoKeyring())
+
+
+async def _save(store, credentials, name="mac-login", secret=SECRET):
+    await SavedCredentialService(store, credentials).create(
+        SavedCredentialCreate(name=name, secret=SecretStr(secret))
+    )
+
+
+def _broker(store, tmp_path, *plugins):
+    registry = ToolRegistry()
+    for plugin in plugins:
+        registry.register(plugin)
+    return ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store, enforce_run_budget=False),
+        workspace_resolver=lambda _: tmp_path,
+        evidence_recorder=StoreToolEvidenceRecorder(
+            store, ArtifactStore(tmp_path / "artifacts")
+        ),
+    )
+
+
+def _invocation(tmp_path, tool, arguments, call_id="call-1"):
+    return ToolInvocation(
+        id=call_id,
+        engagement_id="project",
+        run_id="run-1",
+        tool_name=tool,
+        arguments=arguments,
+        workspace=tmp_path,
+    )
+
+
+def _echo_tool(received):
+    async def run(arguments):
+        received.append(arguments)
+        return {"typed": arguments["text"], "note": f"echo {arguments['text']}"}
+
+    return AnalysisTool(
+        ToolSpec(
+            name="echo.type",
+            description="Type text.",
+            input_schema={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            idempotency=IdempotencyBehavior.SAFE,
+        ),
+        run,
+    )
+
+
+async def test_any_broker_tool_receives_value_while_records_keep_placeholder(
+    tmp_path, saved_root
+):
+    store = NebulaStore(tmp_path / "saved.db")
+    await _save(store, saved_root)
+    received: list[dict] = []
+    broker = _broker(store, tmp_path, _echo_tool(received))
+    invocation = _invocation(
+        tmp_path, "echo.type", {"text": "{{credential:mac-login}}"}
+    )
+
+    result = await broker.execute(invocation, ScopePolicy(engagement_id="project"))
+
+    assert received == [{"text": SECRET}]
+    assert invocation.arguments == {"text": "{{credential:mac-login}}"}
+    assert result.output == {
+        "typed": "{{credential:mac-login}}",
+        "note": "echo {{credential:mac-login}}",
+    }
+    call = await store.get(StoredCall, "call-1")
+    assert SECRET not in json.dumps(call.model_dump(mode="json"))
+    assert "{{credential:mac-login}}" in json.dumps(call.arguments)
+
+    # An unknown name refuses the call before the tool runs.
+    with pytest.raises(GuidedToolError) as refused:
+        await broker.execute(
+            _invocation(tmp_path, "echo.type", {"text": "{{credential:nope}}"}, "c2"),
+            ScopePolicy(engagement_id="project"),
+        )
+    assert refused.value.code == "saved_credential_refused"
+    assert len(received) == 1
+
+
+async def test_mcp_tools_get_the_value_through_the_broker(tmp_path, saved_root):
+    store = NebulaStore(tmp_path / "saved.db")
+    await _save(store, saved_root)
+    profile = await store.create(
         McpServerProfile(
-            name=name,
+            name="mac-control",
             transport=McpTransport.STREAMABLE_HTTP,
             url="http://127.0.0.1:1/mcp",
             enabled=True,
+            default_approval=McpApprovalMode.ALLOW,
             capabilities=McpCapabilitySnapshot(
                 tools=[
                     McpToolSnapshot(
                         name="type_text",
+                        open_world=False,
                         input_schema={
                             "type": "object",
                             "properties": {"text": {"type": "string"}},
@@ -163,121 +290,85 @@ async def _mac_profile(store, name="mac-control") -> McpServerProfile:
             ),
         )
     )
-
-
-async def test_mcp_call_receives_value_while_model_sees_only_placeholder(tmp_path):
-    store = NebulaStore(tmp_path / "saved.db")
-    credentials = _credentials(tmp_path)
-    mac = await _mac_profile(store)
-    web = await _mac_profile(store, "web-fetch")
-    saved = SavedCredentialService(store, credentials)
-    await saved.create(
-        SavedCredentialCreate(
-            name="mac-login",
-            description="Mac login password",
-            secret=SecretStr(SECRET),
-            allowed_mcp_server_ids=[mac.id],
-        )
-    )
     service = McpProbeService(
-        store, credential_store=credentials, workspace_resolver=lambda _: tmp_path
+        store, credential_store=saved_root, workspace_resolver=lambda _: tmp_path
     )
     sent: list[dict] = []
 
     async def echo(profile, *, engagement_id, tool_name, arguments):
         sent.append(arguments)
+        if arguments["text"] == "fail":
+            raise RuntimeError("boom")
         return {
             "content": [{"type": "text", "text": f"typed {arguments['text']}"}],
             "structuredContent": {"typed": arguments["text"]},
         }
 
     service.call_tool = echo
-    [mac_tool] = await build_mcp_tool_plugins(service, (mac,))
-    [web_tool] = await build_mcp_tool_plugins(service, (web,))
-    invocation = SimpleNamespace(
-        engagement_id="project", arguments={"text": "{{credential:mac-login}}"}
+    [plugin] = await build_mcp_tool_plugins(service, (profile,))
+    broker = _broker(store, tmp_path, plugin)
+
+    result = await broker.execute(
+        _invocation(tmp_path, plugin.spec.name, {"text": "{{credential:mac-login}}"}),
+        ScopePolicy(engagement_id="project"),
     )
 
-    result = await mac_tool.execute(invocation, None)
-
     assert sent == [{"text": SECRET}]
-    assert invocation.arguments == {"text": "{{credential:mac-login}}"}
-    assert result.exit_code == 0
-    rendered = json.dumps(result.mcp_content_blocks)
+    rendered = json.dumps(result.model_result()) + json.dumps(result.mcp_content_blocks)
     assert SECRET not in rendered
     assert "{{credential:mac-login}}" in rendered
 
-    # A server the operator did not allow never receives the value.
-    refused = await web_tool.execute(invocation, None)
-    assert len(sent) == 1
-    assert isinstance(refused.failure_error, GuidedToolError)
-    assert refused.failure_error.code == "saved_credential_refused"
 
-    unknown = SimpleNamespace(
-        engagement_id="project", arguments={"text": "{{credential:nope}}"}
-    )
-    missing = await mac_tool.execute(unknown, None)
-    assert missing.failure_error.code == "saved_credential_refused"
-    assert len(sent) == 1
-
-
-async def test_upstream_errors_never_carry_the_substituted_value(tmp_path):
+async def test_errors_never_carry_the_substituted_value(tmp_path, saved_root):
     store = NebulaStore(tmp_path / "saved.db")
-    credentials = _credentials(tmp_path)
-    mac = await _mac_profile(store)
-    await SavedCredentialService(store, credentials).create(
-        SavedCredentialCreate(
-            name="mac-login", secret=SecretStr(SECRET), allowed_mcp_server_ids=[mac.id]
+    await _save(store, saved_root)
+
+    async def leak(arguments):
+        raise ToolBrokerError(f"{arguments['text']!r} does not match pattern")
+
+    tool = AnalysisTool(_echo_tool([]).spec, leak)
+    broker = _broker(store, tmp_path, tool)
+    with pytest.raises(ToolBrokerError) as caught:
+        await broker.execute(
+            _invocation(tmp_path, "echo.type", {"text": "{{credential:mac-login}}"}),
+            ScopePolicy(engagement_id="project"),
         )
+    assert SECRET not in str(caught.value)
+    assert "{{credential:mac-login}}" in str(caught.value)
+    call = await store.get(StoredCall, "call-1")
+    assert SECRET not in (call.error or "")
+
+
+def test_commands_read_saved_passwords_from_environment_variables():
+    assert environment_name("mac-login") == "NEBULA_CREDENTIAL_MAC_LOGIN"
+    assert (
+        to_environment_references(
+            'printf "%s" "{{credential:mac-login}}" | sudo -S true'
+        )
+        == 'printf "%s" "${NEBULA_CREDENTIAL_MAC_LOGIN}" | sudo -S true'
     )
-    service = McpProbeService(
-        store, credential_store=credentials, workspace_resolver=lambda _: tmp_path
+    assert (
+        scrub_bytes(b"pw=" + SECRET.encode(), {"mac-login": SECRET})
+        == b"pw={{credential:mac-login}}"
     )
 
-    async def fail(profile, *, engagement_id, tool_name, arguments):
-        raise RuntimeError(f"{arguments['text']!r} does not match pattern")
 
-    service.call_tool = fail
-    [tool] = await build_mcp_tool_plugins(service, (mac,))
-    result = await tool.execute(
-        SimpleNamespace(
-            engagement_id="project", arguments={"text": "{{credential:mac-login}}"}
-        ),
-        None,
-    )
-    assert result.exit_code == 1
-    assert SECRET not in str(result.failure_error)
-    assert "{{credential:mac-login}}" in str(result.failure_error)
-
-
-async def test_list_tool_names_only_passwords_for_selected_servers(tmp_path):
+async def test_list_tool_names_every_saved_password(tmp_path, saved_root):
     store = NebulaStore(tmp_path / "saved.db")
-    credentials = _credentials(tmp_path)
-    mac = await _mac_profile(store)
-    other = await _mac_profile(store, "other")
-    saved = SavedCredentialService(store, credentials)
-    for name, server in (("mac-login", mac.id), ("other-login", other.id)):
-        await saved.create(
-            SavedCredentialCreate(
-                name=name, secret=SecretStr(SECRET), allowed_mcp_server_ids=[server]
-            )
-        )
+    for name in ("mac-login", "sudo-admin"):
+        await _save(store, saved_root, name)
 
-    assert await saved_credential_list_tool(store, ()) is None
-    tool = await saved_credential_list_tool(store, (mac,))
-    assert tool is not None and tool.spec.name == "credentials.list"
+    tool = saved_credential_list_tool(store)
+    assert tool.spec.name == "credentials.list"
     listed = await tool.execute(SimpleNamespace(arguments={}), None)
 
-    assert listed.output == {
-        "credentials": [
-            {
-                "name": "mac-login",
-                "placeholder": "{{credential:mac-login}}",
-                "description": "",
-                "allowed_servers": ["mac-control"],
-            }
-        ]
-    }
+    assert [item["name"] for item in listed.output["credentials"]] == [
+        "mac-login",
+        "sudo-admin",
+    ]
+    assert listed.output["credentials"][0]["placeholder"] == (
+        "{{credential:mac-login}}"
+    )
     assert SECRET not in json.dumps(listed.output)
 
 
@@ -298,7 +389,6 @@ async def test_saved_credential_api_never_returns_or_persists_values(tmp_path):
                 "name": "mac-login",
                 "description": "Mac login",
                 "secret": SECRET,
-                "allowed_mcp_server_ids": ["server-a"],
             },
         )
         assert created.status_code == 201, created.text
@@ -320,10 +410,10 @@ async def test_saved_credential_api_never_returns_or_persists_values(tmp_path):
         updated = await client.patch(
             "/api/v1/saved-credentials/mac-login",
             headers=auth,
-            json={"secret": "rotated", "allowed_mcp_server_ids": ["server-b"]},
+            json={"secret": "rotated", "description": "Rotated"},
         )
         assert updated.status_code == 200, updated.text
-        assert updated.json()["allowed_mcp_server_ids"] == ["server-b"]
+        assert updated.json()["description"] == "Rotated"
         assert credentials.status(reference).state == "missing"
 
         current = (

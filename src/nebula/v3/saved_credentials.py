@@ -2,8 +2,9 @@
 
 The operator saves a password once in Settings. Core keeps the value in its
 encrypted credential files and stores only a ``store:`` reference here. Agents
-list the names and put ``{{credential:<name>}}`` in an MCP tool argument; Core
-substitutes the value only for the MCP servers the operator allowed.
+list the names and put ``{{credential:<name>}}`` in any tool argument; the tool
+brokers substitute the value only in what they hand the tool and put the
+placeholder back wherever the value is echoed.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response
@@ -22,17 +24,22 @@ from .credentials import (
     CredentialStore,
     CredentialUnavailableError,
 )
-from .credential_placeholders import placeholder
+from .credential_placeholders import find_placeholders, placeholder, scrub, scrub_bytes
 from .diagnostics import record_caught_exception
 from .domain import (
     SAVED_CREDENTIAL_NAME_PATTERN,
-    McpServerProfile,
     NebulaModel,
     SavedCredential,
 )
 from .runtime_credential_access import resolve_credential_async
 from .storage import NebulaStore, NotFoundError
-from .tools import AnalysisTool, IdempotencyBehavior, RiskClass, ToolSpec
+from .tools import (
+    AnalysisTool,
+    GuidedToolError,
+    IdempotencyBehavior,
+    RiskClass,
+    ToolSpec,
+)
 
 SAVED_CREDENTIALS_PATH = "/api/v1/saved-credentials"
 MAX_SAVED_CREDENTIALS = 200
@@ -42,18 +49,10 @@ def saved_credential_id(name: str) -> str:
     return f"saved-credential:{name}"
 
 
-def _server_ids(value: list[str]) -> list[str]:
-    cleaned = sorted({item.strip() for item in value if item.strip()})
-    if any(len(item) > 200 for item in cleaned):
-        raise ValueError("MCP server IDs must contain at most 200 characters")
-    return cleaned
-
-
 class SavedCredentialCreate(NebulaModel):
     name: str = Field(pattern=SAVED_CREDENTIAL_NAME_PATTERN)
     description: str = Field(default="", max_length=500)
     secret: SecretStr
-    allowed_mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
 
     @field_validator("secret")
     @classmethod
@@ -62,17 +61,11 @@ class SavedCredentialCreate(NebulaModel):
             raise ValueError("password must contain 1 to 16384 characters")
         return value
 
-    @field_validator("allowed_mcp_server_ids")
-    @classmethod
-    def _servers(cls, value: list[str]) -> list[str]:
-        return _server_ids(value)
-
 
 class SavedCredentialUpdate(NebulaModel):
     description: str | None = Field(default=None, max_length=500)
     # A new value replaces the old encrypted file; omit to keep the value.
     secret: SecretStr | None = None
-    allowed_mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     expected_revision: int | None = Field(default=None, ge=1)
 
     @field_validator("secret")
@@ -82,11 +75,6 @@ class SavedCredentialUpdate(NebulaModel):
             raise ValueError("password must contain 1 to 16384 characters")
         return value
 
-    @field_validator("allowed_mcp_server_ids")
-    @classmethod
-    def _servers(cls, value: list[str] | None) -> list[str] | None:
-        return None if value is None else _server_ids(value)
-
 
 class SavedCredentialView(NebulaModel):
     """What the operator and agents see. Never the value."""
@@ -94,7 +82,6 @@ class SavedCredentialView(NebulaModel):
     name: str
     description: str
     placeholder: str
-    allowed_mcp_server_ids: list[str]
     available: bool
     revision: int
     created_at: datetime
@@ -102,7 +89,7 @@ class SavedCredentialView(NebulaModel):
 
 
 class SavedCredentialRefused(CredentialError):
-    """A placeholder named a credential the tool may not receive."""
+    """A placeholder named a saved password that does not exist."""
 
 
 class SavedCredentialService:
@@ -116,7 +103,6 @@ class SavedCredentialService:
             name=item.name,
             description=item.description,
             placeholder=placeholder(item.name),
-            allowed_mcp_server_ids=list(item.allowed_mcp_server_ids),
             available=status.available,
             revision=item.revision,
             created_at=item.created_at,
@@ -156,7 +142,6 @@ class SavedCredentialService:
                     name=body.name,
                     description=body.description.strip(),
                     reference=status.reference,
-                    allowed_mcp_server_ids=body.allowed_mcp_server_ids,
                 )
             )
         except Exception:
@@ -172,8 +157,6 @@ class SavedCredentialService:
         changes: dict[str, Any] = {}
         if body.description is not None:
             changes["description"] = body.description.strip()
-        if body.allowed_mcp_server_ids is not None:
-            changes["allowed_mcp_server_ids"] = body.allowed_mcp_server_ids
         replaced: str | None = None
         if body.secret is not None:
             status = await asyncio.to_thread(
@@ -204,10 +187,8 @@ class SavedCredentialService:
         )
         await asyncio.to_thread(self.credentials.delete, current.reference)
 
-    async def resolve_for_mcp(
-        self, names: Iterable[str], profile: McpServerProfile
-    ) -> dict[str, str]:
-        """Resolve each named value for one MCP server, or refuse the call."""
+    async def resolve(self, names: Iterable[str]) -> dict[str, str]:
+        """Each named value, or a refusal naming the first unknown one."""
 
         resolved: dict[str, str] = {}
         for name in sorted(set(names)):
@@ -218,12 +199,6 @@ class SavedCredentialService:
                     f"No saved password is named {name!r}. List saved passwords "
                     "with credentials.list and use one of those names."
                 ) from None
-            if profile.id not in item.allowed_mcp_server_ids:
-                raise SavedCredentialRefused(
-                    f"The saved password {name!r} is not allowed for the MCP "
-                    f"server {profile.name!r}. The operator can allow it in "
-                    "Settings > Saved passwords."
-                )
             secret = await resolve_credential_async(
                 self.credentials, item.reference, purpose="saved_credential"
             )
@@ -231,36 +206,100 @@ class SavedCredentialService:
         return resolved
 
 
+async def saved_credentials_in(
+    store: NebulaStore, credentials: CredentialStore | None, arguments: Any
+) -> dict[str, str]:
+    """The saved passwords a tool call's arguments name, resolved for this call.
+
+    Raises a model-safe ``GuidedToolError`` before execution when a name is
+    unknown or the encrypted store cannot be read.
+    """
+
+    names = find_placeholders(arguments)
+    if not names:
+        return {}
+    try:
+        return await SavedCredentialService(
+            store, credentials or CredentialStore()
+        ).resolve(names)
+    except SavedCredentialRefused as exc:
+        raise GuidedToolError(
+            str(exc),
+            code="saved_credential_refused",
+            category="invalid_arguments",
+            problem=str(exc),
+            next_action=(
+                "Call credentials.list to see the saved passwords. Do not ask "
+                "for or guess the password."
+            ),
+            before_execution=True,
+        ) from exc
+    except CredentialError as exc:
+        raise GuidedToolError(
+            "saved password could not be read",
+            code="saved_credential_unavailable",
+            category="unavailable_resource",
+            problem="Nebula could not read the saved password from its encrypted store.",
+            next_action=(
+                "Tell the operator the saved password is unavailable and ask "
+                "them to save it again in Settings > Saved passwords."
+            ),
+            before_execution=True,
+        ) from exc
+
+
+def _scrub_file(path: Path | None, secrets: dict[str, str]) -> None:
+    if path is None or not path.is_file():
+        return
+    raw = path.read_bytes()
+    clean = scrub_bytes(raw, secrets)
+    if clean != raw:
+        path.write_bytes(clean)
+
+
+def scrub_tool_result(result: Any, secrets: dict[str, str]) -> Any:
+    """A ``ToolExecutionResult`` with every substituted value put back."""
+
+    if not secrets:
+        return result
+    for path in (result.stdout_artifact_path, result.stderr_artifact_path):
+        _scrub_file(path, secrets)
+    failure = result.failure_error
+    if failure is not None and not isinstance(failure, GuidedToolError):
+        text = str(failure)
+        if scrub(text, secrets) != text:
+            failure = RuntimeError(scrub(text, secrets))
+    return result.model_copy(
+        update={
+            "output": scrub(result.output, secrets),
+            "stdout": scrub(result.stdout, secrets),
+            "stderr": scrub(result.stderr, secrets),
+            "artifacts": scrub(result.artifacts, secrets),
+            "mcp_content_blocks": scrub(result.mcp_content_blocks, secrets),
+            "parser_error": scrub(result.parser_error, secrets),
+            "failure_error": failure,
+        }
+    )
+
+
 SAVED_CREDENTIAL_LIST_TOOL = "credentials.list"
 _LIST_DESCRIPTION = (
     "List the passwords the operator saved for you to enter, without their "
     "values. To enter one, put its placeholder, for example "
-    "{{credential:mac-login}}, in the text argument of an MCP tool that types "
-    "or pastes text, such as into a password dialog. Nebula substitutes the "
-    "value only when that tool's MCP server is in the password's "
-    "allowed_servers, and puts the placeholder back wherever the value is "
-    "echoed. You never see the value: do not ask the operator for it, guess "
+    "{{credential:mac-login}}, in the argument where the password belongs: "
+    "text an MCP tool types or pastes into a password dialog, a run_command "
+    "command (Nebula passes it as an environment variable, so keep it inside "
+    "double quotes or unquoted, never single quotes, e.g. "
+    "printf '%s\\n' \"{{credential:mac-login}}\" | sudo -S true), process_io "
+    "input, or any other tool's argument. Nebula substitutes the value only "
+    "in what it hands the tool and puts the placeholder back wherever the value "
+    "is echoed. You never see the value: do not ask the operator for it, guess "
     "it, or try to reveal it, and enter it only into the prompt it is for."
 )
 
 
-async def saved_credential_list_tool(
-    store: NebulaStore, profiles: Iterable[McpServerProfile]
-) -> AnalysisTool | None:
-    """The discovery tool for a chat whose selected MCP servers can use one."""
-
-    selected = {profile.id: profile.name for profile in profiles}
-    if not selected:
-        return None
-    usable = [
-        item
-        for item in await store.list_entities(
-            SavedCredential, limit=MAX_SAVED_CREDENTIALS
-        )
-        if selected.keys() & set(item.allowed_mcp_server_ids)
-    ]
-    if not usable:
-        return None
+def saved_credential_list_tool(store: NebulaStore) -> AnalysisTool:
+    """The discovery tool offered to every chat and Butler turn with tools."""
 
     async def run(_arguments: dict[str, Any]) -> dict[str, Any]:
         current = await store.list_entities(
@@ -272,14 +311,8 @@ async def saved_credential_list_tool(
                     "name": item.name,
                     "placeholder": placeholder(item.name),
                     "description": item.description,
-                    "allowed_servers": [
-                        selected[server]
-                        for server in item.allowed_mcp_server_ids
-                        if server in selected
-                    ],
                 }
                 for item in sorted(current, key=lambda entry: entry.name)
-                if selected.keys() & set(item.allowed_mcp_server_ids)
             ]
         }
 
@@ -382,6 +415,8 @@ __all__ = [
     "SAVED_CREDENTIALS_PATH",
     "SAVED_CREDENTIAL_LIST_TOOL",
     "saved_credential_list_tool",
+    "saved_credentials_in",
+    "scrub_tool_result",
     "SavedCredentialCreate",
     "SavedCredentialRefused",
     "SavedCredentialService",

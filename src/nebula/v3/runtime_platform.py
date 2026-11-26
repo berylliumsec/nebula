@@ -339,7 +339,7 @@ def conversation_search_components(
 def notes_components(
     store: NebulaStore, scope: ScopePolicy, workspace: Path
 ) -> RuntimeToolComponents:
-    """``notes.write`` for any provider chat turn that has tools.
+    """``notes.write`` and ``credentials.list`` for any chat turn that has tools.
 
     Like the dashboard, the components are built from the caller's resolved
     scope and workspace and carry no runtime digest, so a turn recorded
@@ -350,6 +350,9 @@ def notes_components(
 
     registry = ToolRegistry()
     registry.register(WriteNotesTool(store))
+    # Saved passwords can go into any tool's arguments, so every turn that has
+    # tools can list their names (never their values).
+    registry.register(saved_credential_list_tool(store))
     broker = ToolBroker(
         registry=registry,
         policy_engine=PolicyEngine(),
@@ -610,9 +613,6 @@ class RuntimePlatform:
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc
-            listing = await saved_credential_list_tool(self.store, mcp_profiles)
-            if listing is not None:
-                registry.register(listing)
         for plugin in build_ssh_tool_plugins(
             ssh_environments, memory_compute=self.memory_compute
         ):

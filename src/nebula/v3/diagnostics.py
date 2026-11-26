@@ -8,6 +8,7 @@ and application records must remain in their purpose-built stores.
 from __future__ import annotations
 
 from .async_utils import async_done_callback
+from .credential_placeholders import scrub_active
 
 import asyncio
 import contextlib
@@ -2289,7 +2290,7 @@ def record_caught_exception(
     operator_detail: str | None = None
     exception_module = type(exception).__module__
     if exception_module.startswith("nebula."):
-        detail = _safe_text(str(exception)).strip()
+        detail = scrub_active(_safe_text(str(exception))).strip()
         if detail:
             operator_detail = detail
     emergency_error_id = new_error_id() if level in {"error", "critical"} else None

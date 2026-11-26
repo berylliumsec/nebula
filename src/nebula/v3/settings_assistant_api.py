@@ -79,8 +79,8 @@ _BROWSER_OWNED_OPERATIONS = (
     ("DELETE", re.compile(r"^/api/v1/integrations/typesafe$"), "typesafe"),
     ("POST", re.compile(r"^/api/v1/vpn-profiles$"), "vpn-egress"),
     ("DELETE", re.compile(r"^/api/v1/vpn-profiles/[^/]+$"), "vpn-egress"),
-    # Saved passwords: the value, the servers allowed to receive it, and its
-    # removal are all the operator's to decide in the browser.
+    # Saved passwords: the value and its removal are the operator's to decide
+    # in the browser.
     ("POST", re.compile(r"^/api/v1/saved-credentials$"), "saved-credentials"),
     ("PATCH", re.compile(r"^/api/v1/saved-credentials/[^/]+$"), "saved-credentials"),
     ("DELETE", re.compile(r"^/api/v1/saved-credentials/[^/]+$"), "saved-credentials"),
