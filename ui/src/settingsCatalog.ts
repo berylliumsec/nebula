@@ -142,6 +142,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["storage", "storage integration", "storage source", "enroll source", "rotate token", "revoke token", "reporting interval", "callback settings", "webhook", "capacity", "volume", "NAS", "disk alert", "low storage", "source action", "preview effects", "approve plan", "reconcile action", "retry dispatch"],
   },
   {
+    id: "settings.saved-credentials",
+    label: "Saved passwords",
+    description: "Save passwords agents can type into prompts through an allowed MCP server, without models seeing them",
+    category: "Integrations",
+    scope: "Security",
+    target: "saved-credential-settings",
+    keywords: ["password", "saved password", "credential", "secret", "login", "keychain", "sudo", "mac password", "password dialog", "credential placeholder", "enter password"],
+  },
+  {
     id: "settings.typesafe",
     label: "TypeSafe API key",
     description: "Enter, replace or remove the tool-suggestions key on this device",

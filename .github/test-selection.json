@@ -1,30 +1,37 @@
 {
-  "change_digest": "5140e27f1fa58b0b1d36fb14ec15362df1d7be48dea7dc4cb09d9af6a08ebade",
-  "reviewed_by": "Claude: Claude harness advertises and sends reasoning effort",
-  "reason": "Prod refused every Butler goal on the Claude harness with 422 \"reasoning effort 'high' is not advertised for 'claude-opus-5-5'\": the Claude probe listed models but no model_options, so create_session's effort check had an empty allowed set, and the adapter never passed an effort to the SDK anyway. The probe now lists the SDK's EffortLevel values (low, medium, high, xhigh, max) for every advertised model with no default, and ClaudeAgentSdkAdapter.open passes the session's runtime_options reasoning_effort as ClaudeAgentOptions.effort. Python selects the harness adapter, harness runtime, Claude harness, harness goal, goal routing, Butler capabilities and harness leftovers suites, which cover the probe, session creation, goal creation and Butler routing over harness model options.",
-  "exclusions": "No UI change: Settings and Butler already render efforts from model_options generically, so frontend and Playwright suites are not selected. No setting is added or renamed, so the settings catalog, settings-assistant doc and product knowledge index are unchanged. No default effort is set, so existing Claude sessions keep the CLI default and are not recreated. Native code is untouched. Three selected tests already fail on origin/main 0a59618 (test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_harnesses.py::test_browser_attachment_refreshes_catalog_without_replacing_native_thread, test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings) and are unrelated to this change.",
+  "change_digest": "6d310559bffd50d59fcd3cb2ad20eee2ac563cccf383087f362aad99723d0f58",
+  "reviewed_by": "Claude: encrypted saved passwords for agents",
+  "reason": "Adds an AES-256-GCM credential file store (store: refs, 0600 key under the Core data root), a SavedCredential entity and /api/v1/saved-credentials routes (host settings + kernel), {{credential:<name>}} substitution and echo scrubbing inside McpToolPlugin.execute with a per-password MCP server allow list, a credentials.list tool for chats/Butler whose selected servers can use one, Butler read access with browser-owned writes, and a Settings > Saved passwords section. Python selects the new saved-credential tests plus the credential, MCP inline-output, settings-assistant API, host-settings and runtime-bundle suites it touches. Frontend selects the assistant action tests (catalog discovery + open_setting) and the new component test. Playwright runs universal settings search at desktop and narrow width.",
+  "exclusions": "test_tolerant_entity_readers.py::test_a_new_entity_field_needs_a_reviewed_addition_flag, test_settings_assistant_tools.py (2 count assertions) and test_butler_capabilities.py::test_scheduled_butler_can_edit_all_assistant_settings fail identically on origin/main and are not selected. No native change. Real-Core journey (save via browser, chat lists and enters a password through a stdio MCP echo server, other server refused, no plaintext in the data root) was run on a disposable LAN Core instead of a Playwright real-Core spec.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 352,
-    "frontend": 0,
+    "python": 121,
+    "frontend": 43,
     "native": 0,
-    "playwright": 0
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_butler_claude_harness.py",
-    "tests/v3/test_harness_chat_goals.py",
-    "tests/v3/test_goal_runtime_routing.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_butler_capabilities.py",
-    "tests/v3/test_harness_leftovers.py"
+    "tests/v3/test_saved_credentials.py",
+    "tests/v3/test_credentials.py",
+    "tests/v3/test_mcp_inline_output.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_runtime_host_settings.py",
+    "tests/v3/test_runtime_bundle.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/SavedCredentialsSettings.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "checks": []
+  "playwright": [
+    "entry:settings-search/desktop",
+    "entry:settings-search/narrow"
+  ],
+  "checks": [
+    "frontend-audit"
+  ]
 }

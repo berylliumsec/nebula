@@ -10,6 +10,7 @@ from pathlib import Path
 
 from starlette.responses import JSONResponse
 
+from .credential_file_store import configure_credential_file_root
 from .async_utils import ServiceCleanupError, finish_cleanup
 from .database import Database, transient_database_error
 from .database_pool import PoolSettings
@@ -98,6 +99,8 @@ async def project_application(context, lease) -> AsyncIterator[object]:
     if bootstrap.operator_token is None:
         raise RuntimeIpcError("Execution requires the private operator bootstrap")
     root = Path(bootstrap.data_root)
+    # Saved credentials resolve in this worker from the shared data root.
+    configure_credential_file_root(root)
     controllers = root / "runtime" / "workers" / bootstrap.identity.runtime_id
     controllers.mkdir(parents=True, exist_ok=True, mode=0o700)
     client = host_service_client(bootstrap, context.secret)

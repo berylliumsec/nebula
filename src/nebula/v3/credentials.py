@@ -1,4 +1,4 @@
-"""Write-only provider credentials backed by the OS vault or process memory."""
+"""Write-only credentials backed by the OS vault, encrypted files, or process memory."""
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ import keyring
 from keyring.backends.SecretService import Keyring
 from pydantic import SecretStr, field_validator
 
+from .credential_file_store import (
+    CredentialFileError,
+    EncryptedCredentialFiles,
+    credential_file_root,
+)
 from .domain import NebulaModel
 from .vault_probe import (
     VaultState,
@@ -30,18 +35,19 @@ from .vault_probe import (
 from .vault_probe import vault_state as probe_vault_state
 
 _REFERENCE = re.compile(
-    r"^(?:env:[A-Za-z_][A-Za-z0-9_]*|systemd:[A-Za-z0-9_.-]{1,128}|(?:vault|session):[0-9a-f]{32})$"
+    r"^(?:env:[A-Za-z_][A-Za-z0-9_]*|systemd:[A-Za-z0-9_.-]{1,128}|(?:vault|session|store):[0-9a-f]{32})$"
 )
 _SERVICE_NAME = "io.berylliumsec.nebula.provider-credentials"
 _MAX_SECRET_BYTES = 16_384
 
 _VAULT_LOCKED_DETAIL = (
     "the operating-system credential vault is locked; unlock it on the Nebula "
-    "host, or use an environment reference or session-only credential"
+    "host, or use Nebula's encrypted store, an environment reference, or a "
+    "session-only credential"
 )
 _VAULT_UNAVAILABLE_DETAIL = (
     "the operating-system credential vault is unavailable; use an "
-    "environment reference or session-only credential"
+    "encrypted store, environment reference, or session-only credential"
 )
 
 
@@ -71,7 +77,7 @@ class KeyringBackend(Protocol):
 
 class CredentialCreateRequest(NebulaModel):
     secret: SecretStr
-    persistence: Literal["vault", "session"] = "vault"
+    persistence: Literal["vault", "store", "session"] = "vault"
 
     @field_validator("secret")
     @classmethod
@@ -84,7 +90,7 @@ class CredentialCreateRequest(NebulaModel):
 
 class CredentialStatus(NebulaModel):
     reference: str
-    persistence: Literal["environment", "systemd", "vault", "session"]
+    persistence: Literal["environment", "systemd", "vault", "store", "session"]
     available: bool
     state: Literal[
         "available",
@@ -122,6 +128,8 @@ async def vault_call(call: Callable[..., _T], *args: Any) -> _T:
 @dataclass
 class CredentialStore:
     keyring_backend: KeyringBackend | None = None
+    # Encrypted ``store:`` files; defaults to this process's Core data root.
+    file_root: Path | None = None
 
     def __post_init__(self) -> None:
         self._session: dict[str, SecretStr] = {}
@@ -142,6 +150,25 @@ class CredentialStore:
         # keyring hands out its chainer when several backends are viable;
         # Nebula talks to the trusted member, not the chain.
         self.keyring_backend = resolve_vault_backend(self.keyring_backend)
+        self._file_store: EncryptedCredentialFiles | None = None
+
+    def _files(self) -> EncryptedCredentialFiles:
+        root = self.file_root or credential_file_root()
+        if self._file_store is None or self._file_store.root != root.absolute():
+            try:
+                self._file_store = EncryptedCredentialFiles(root)
+            except (CredentialFileError, OSError) as exc:
+                record_caught_exception(
+                    "providers",
+                    "providers.credentials.file_store_unavailable",
+                    "Nebula's encrypted credential store could not be opened.",
+                    exc,
+                    stage="credentials",
+                )
+                raise CredentialUnavailableError(
+                    "Nebula's encrypted credential store is unavailable on this host"
+                ) from exc
+        return self._file_store
 
     @property
     def vault_state(self) -> VaultState:
@@ -187,6 +214,19 @@ class CredentialStore:
             return CredentialStatus(
                 reference=reference,
                 persistence="session",
+                available=True,
+                state="available",
+            )
+        if request.persistence == "store":
+            try:
+                identifier = self._files().write(value)
+            except CredentialFileError as exc:
+                raise CredentialUnavailableError(
+                    "Nebula's encrypted credential store could not save the credential"
+                ) from exc
+            return CredentialStatus(
+                reference=f"store:{identifier}",
+                persistence="store",
                 available=True,
                 state="available",
             )
@@ -247,6 +287,23 @@ class CredentialStore:
                 available=available,
                 state="available" if available else "session_expired",
             )
+        if reference.startswith("store:"):
+            try:
+                available = self._files().exists(reference.removeprefix("store:"))
+            except CredentialUnavailableError:
+                # diagnostic-expected: _files() already recorded why the store is unavailable.
+                return CredentialStatus(
+                    reference=reference,
+                    persistence="store",
+                    available=False,
+                    state="backend_unavailable",
+                )
+            return CredentialStatus(
+                reference=reference,
+                persistence="store",
+                available=available,
+                state="available" if available else "missing",
+            )
         vault_state = self.vault_state
         if vault_state == "locked":
             return CredentialStatus(
@@ -292,6 +349,18 @@ class CredentialStore:
                     f"provider service credential is unavailable: {reference}"
                 )
             return SecretStr(value)
+        if reference.startswith("store:"):
+            try:
+                stored = self._files().read(reference.removeprefix("store:"))
+            except CredentialFileError as exc:
+                raise CredentialUnavailableError(
+                    "the encrypted credential failed its integrity check; save it again"
+                ) from exc
+            if stored is None:
+                raise CredentialNotFoundError(
+                    f"credential reference is unavailable: {reference}"
+                )
+            return SecretStr(stored)
         value = self._vault_value(reference)
         if value is None:
             if self.vault_state == "locked":
@@ -312,6 +381,9 @@ class CredentialStore:
             )
         if reference.startswith("session:"):
             self._session.pop(reference, None)
+            return
+        if reference.startswith("store:"):
+            self._files().delete(reference.removeprefix("store:"))
             return
         state = self.vault_state
         if self.keyring_backend is None or state != "available":

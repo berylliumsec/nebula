@@ -28,6 +28,8 @@ import httpx
 from jsonschema import Draft202012Validator, SchemaError
 from pydantic import Field
 
+from .credential_placeholders import find_placeholders, scrub, substitute
+from .saved_credentials import SavedCredentialRefused, SavedCredentialService
 from .credentials import CredentialError, CredentialStore, vault_call
 from .domain import (
     McpAuthMode,
@@ -1131,14 +1133,30 @@ async def build_mcp_tool_plugins(
             started = utc_now()
             failure: Exception | None = None
             upstream: dict[str, Any] | None = None
+            # Saved passwords named as {{credential:<name>}} reach only the
+            # upstream copy of the arguments; the invocation keeps placeholders.
+            saved: dict[str, str] = {}
             try:
+                arguments = invocation.arguments
+                names = find_placeholders(arguments)
+                if names:
+                    saved = await _saved_credentials_for(service, names, self.profile)
+                    arguments = substitute(arguments, saved)
                 upstream = await service.call_tool(
                     self.profile,
                     engagement_id=invocation.engagement_id,
                     tool_name=self.snapshot.name,
-                    arguments=invocation.arguments,
+                    arguments=arguments,
                 )
             except Exception as exc:
+                if saved and not isinstance(exc, GuidedToolError):
+                    # Upstream errors (schema messages included) can quote an
+                    # argument; never let a substituted value travel with one.
+                    exc = McpProbeError(
+                        scrub(str(exc), saved),
+                        code=getattr(exc, "code", None),
+                        usage_reason=getattr(exc, "usage_reason", None),
+                    )
                 record_caught_exception(
                     "harnesses",
                     "harnesses.mcp.tool_call_failed",
@@ -1148,6 +1166,8 @@ async def build_mcp_tool_plugins(
                     metadata={"transport": "mcp", "operation": "call_tool"},
                 )
                 failure = exc
+            if saved and upstream is not None:
+                upstream = scrub(upstream, saved)
             completed = utc_now()
             blocks: list[dict[str, Any]] = []
             is_error = failure is not None
@@ -1187,6 +1207,41 @@ async def build_mcp_tool_plugins(
                     ),
                 },
             )
+
+    async def _saved_credentials_for(
+        service: McpProbeService,
+        names: set[str],
+        profile: McpServerProfile,
+    ) -> dict[str, str]:
+        try:
+            return await SavedCredentialService(
+                service.store, service.credential_store
+            ).resolve_for_mcp(names, profile)
+        except SavedCredentialRefused as exc:
+            raise GuidedToolError(
+                str(exc),
+                code="saved_credential_refused",
+                category="policy_denied",
+                problem=str(exc),
+                next_action=(
+                    "Call credentials.list to see the saved passwords and the MCP "
+                    "servers each one is allowed for. Do not ask for or guess the "
+                    "password."
+                ),
+                before_execution=True,
+            ) from exc
+        except CredentialError as exc:
+            raise GuidedToolError(
+                "saved password could not be read",
+                code="saved_credential_unavailable",
+                category="unavailable_resource",
+                problem="Nebula could not read the saved password from its encrypted store.",
+                next_action=(
+                    "Tell the operator the saved password is unavailable and ask "
+                    "them to save it again in Settings > Saved passwords."
+                ),
+                before_execution=True,
+            ) from exc
 
     plugins: list[Any] = []
     for profile in profiles:

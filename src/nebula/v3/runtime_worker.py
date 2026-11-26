@@ -16,6 +16,7 @@ import uvicorn
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
+from .credential_file_store import configure_credential_file_root
 from .database import (
     Database,
     transient_database_error,
@@ -260,6 +261,7 @@ async def api_application(context: WorkerContext) -> AsyncIterator[Any]:
     # task-owned Session. A second Database for the same URL is a different
     # transaction owner and deadlocks SQLite's outer writer.
     store = NebulaStore(context.database)
+    configure_credential_file_root(bootstrap.data_root)
     routing = RuntimeRouting(
         context.coordinator.coordination,
         Path(bootstrap.credential_directory),

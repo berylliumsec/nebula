@@ -16,6 +16,7 @@ import webbrowser
 import uvicorn
 from sqlalchemy import inspect
 
+from .credential_file_store import configure_credential_file_root
 from .database import Base, Database
 from .database_pool import PoolSettings
 from .deployments import DeploymentCoordinator
@@ -309,6 +310,7 @@ async def serve_runtime(
     manifest = ReleaseStore.verify(bundle, expected_manifest_sha256=manifest_sha256)
     configure_retained_resources(bundle)
     configure_diagnostics(data_root, level_override=diagnostics_level)
+    configure_credential_file_root(data_root)
     install_exception_hooks()
     location = os.getenv("NEBULA_V3_DATABASE_URL") or data_root / "nebula.db"
     settings = runtime_pool_settings(location)

@@ -35,6 +35,7 @@ from .domain import (
 from .environments import build_ssh_tool_plugins
 from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .mcp import McpProbeService, build_mcp_tool_plugins
+from .saved_credentials import saved_credential_list_tool
 from .policy import PolicyEngine
 from .providers import ModelProvider
 from .sandbox import (
@@ -609,6 +610,9 @@ class RuntimePlatform:
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc
+            listing = await saved_credential_list_tool(self.store, mcp_profiles)
+            if listing is not None:
+                registry.register(listing)
         for plugin in build_ssh_tool_plugins(
             ssh_environments, memory_compute=self.memory_compute
         ):

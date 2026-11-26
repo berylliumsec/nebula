@@ -788,6 +788,22 @@ body:has(.settings-lens-backdrop) > .dialog-backdrop { z-index: 120; }
   .typesafe-actions, .typesafe-actions .button { width: 100%; }
   .typesafe-actions .button { flex: 1 1 0; min-height: var(--touch-target); }
 }
+/* Saved passwords: TypeSafe panel shell with a list of named passwords. */
+#saved-credential-settings > .section-heading > .button { flex: 0 0 auto; white-space: nowrap; }
+.saved-credential-hint { color: var(--muted); font-weight: var(--weight-regular); }
+.saved-credential-servers { display: grid; gap: 10px; margin: 0; padding: 0; border: 0; }
+.saved-credential-servers legend { margin-bottom: 6px; font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+.saved-credential-empty { margin: 0; color: var(--muted); font-size: var(--type-secondary); }
+.saved-credential-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.saved-credential-list > li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.saved-credential-list > li + li { border-top: 1px solid var(--border); }
+.saved-credential-list > li > svg { flex: 0 0 auto; color: var(--muted); }
+.saved-credential-list > li > div { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
+.saved-credential-list p { margin: 0; color: var(--muted); font-size: var(--type-secondary); overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .saved-credential-list > li { flex-wrap: wrap; }
+  .saved-credential-list .typesafe-actions { width: 100%; }
+}
 /* Local metasearch runtime: same shell as the TypeSafe panel, no key fields. */
 #web-search-runtime-settings > .section-heading > .icon-button {
   flex: 0 0 var(--touch-target);

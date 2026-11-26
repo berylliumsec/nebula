@@ -317,6 +317,7 @@ from .context import (
     memory_text,
     resolve_context_limits,
 )
+from .saved_credentials import SavedCredentialService, mount_saved_credential_routes
 from .credentials import (
     CredentialCreateRequest,
     CredentialError,
@@ -693,6 +694,8 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    # Saved-credential rows change only with their encrypted value.
+    "saved_credentials",
     "work_items",
     "work_updates",
     "notebook_runs",
@@ -10602,6 +10605,12 @@ def create_execution_kernel(
             )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
+
+    mount_saved_credential_routes(
+        app,
+        SavedCredentialService(store, credentials),
+        dependencies=[Depends(require_auth)],
+    )
 
     async def persist_provider_model_catalog(
         profile: ProviderProfile, health: ProviderHealth
