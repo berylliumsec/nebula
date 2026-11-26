@@ -486,6 +486,38 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       const rail = page.getByRole("navigation", {name: "Butler threads"});
       if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
       await expect(rail.getByRole("button", {name: /THREAD-A.*Working/})).toBeVisible({timeout: 30_000});
+      // On a wide screen the operator drags the dividers to size the threads
+      // list and the open thread; the widths stay on this device across a reload,
+      // and a double-click restores a divider's default.
+      const railHandle = page.getByRole("separator", {name: "Resize threads list"});
+      if (page.viewportSize()!.width <= 760) await expect(railHandle).toHaveCount(0);
+      else {
+        await expect(railHandle).toBeVisible();
+        const threadPane = page.getByRole("region", {name: /^Thread: /});
+        const drag = async (handle: typeof railHandle, by: number) => {
+          const at = (await handle.boundingBox())!;
+          await page.mouse.move(at.x + at.width / 2, at.y + at.height / 2);
+          await page.mouse.down();
+          await page.mouse.move(at.x + at.width / 2 + by / 2, at.y + at.height / 2, {steps: 4});
+          await page.mouse.move(at.x + at.width / 2 + by, at.y + at.height / 2, {steps: 4});
+          await page.mouse.up();
+        };
+        const railBefore = (await rail.boundingBox())!.width;
+        const threadBefore = (await threadPane.boundingBox())!.width;
+        await drag(railHandle, 40);
+        await drag(page.getByRole("separator", {name: "Resize open thread"}), -60);
+        const railAfter = (await rail.boundingBox())!.width;
+        const threadAfter = (await threadPane.boundingBox())!.width;
+        expect(Math.abs(railAfter - (railBefore + 40))).toBeLessThanOrEqual(2);
+        expect(Math.abs(threadAfter - (threadBefore - 60))).toBeLessThanOrEqual(2);
+        await page.reload();
+        await expect(threadPane).toBeVisible({timeout: 60_000});
+        expect(Math.abs((await rail.boundingBox())!.width - railAfter)).toBeLessThanOrEqual(2);
+        expect(Math.abs((await threadPane.boundingBox())!.width - threadAfter)).toBeLessThanOrEqual(2);
+        await page.screenshot({path: process.env.BUTLER_RESIZE_SHOT ?? testInfo.outputPath("butler-mode-resized.png")});
+        await railHandle.dblclick();
+        await expect.poll(async () => Math.round((await rail.boundingBox())!.width)).toBe(Math.round(railBefore));
+      }
       expect(stub.prompts().filter(prompt => prompt.includes(PROMPTS.held))).toHaveLength(1);
       type Threads = {items: Array<{session_id: string; title: string; state: string; project: {id: string}}>};
       const threads = await (await api.get("butler/threads")).json() as Threads;

@@ -22,6 +22,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { askAboutTarget, butlerQuestionAbout, butlerThreadRequest, butlerThreadReservation, butlerThreadRuntime, butlerThreadTitle, filterBoardItems, projectPickerGroups } from "./butlerThreads";
 import { ButlerProjectPicker } from "./ButlerProjectPicker";
 import styles from "./ButlerModePage.module.css";
+import { useButlerColumns } from "./useButlerColumns";
 // Already in the main bundle with the Butler panel.
 import { MicrophoneIcon } from "../components/NebulaVoice";
 import { ButlerOversight } from "../components/ButlerOversight";
@@ -97,6 +98,7 @@ export function ButlerModePage() {
   // The iPhone app has no full Nebula behind Butler mode: nothing to exit to, and chats open as popups.
   const nativeShell = isNebulaShell();
   const compact = useCompactLayout();
+  const columns = useButlerColumns(!compact, styles.columnHandle);
   const [params, setParams] = useSearchParams();
   const openThreadId = params.get("thread") ?? undefined;
   const phoneTab = params.get("tab") === "threads" ? "threads" : "board";
@@ -1201,7 +1203,7 @@ export function ButlerModePage() {
           {!nativeShell && <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>}
         </div>
       </div>}
-    </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body}>{threadsRail}{leftColumn}{workspace}</div>}
+    </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body} style={columns.style} data-resizing={columns.dragging ? "true" : undefined}>{threadsRail}{columns.railHandle}{leftColumn}{columns.middleHandle}{workspace}</div>}
     {popup && api && <Suspense fallback={null}><ButlerChatPopup api={api} sessionId={popup.sessionId} title={popup.title}
       live={allItems.some((item) => item.sessionId === popup.sessionId && (item.state === "working" || item.state === "waiting"))}
       onClose={() => setPopup(undefined)}

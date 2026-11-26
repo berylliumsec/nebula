@@ -34,7 +34,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 }));
 vi.mock("../state/ButlerPanelBridge", () => ({ useButlerPanelBridge: () => null }));
 vi.mock("../components/DialogSystem", () => ({ useConfirmation: () => vi.fn() }));
-vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => false }));
+vi.mock("../hooks/useCompactLayout", () => ({ useCompactLayout: () => false, isNebulaShell: () => false }));
 vi.mock("../components/NebulaVoice", () => ({ MicrophoneIcon: () => null }));
 vi.mock("../components/ButlerOversight", () => ({ ButlerOversight: () => null }));
 vi.mock("../components/ButlerMemory", () => ({ ButlerMemory: () => null }));
