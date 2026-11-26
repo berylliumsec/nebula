@@ -262,7 +262,7 @@ async def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
 class QueueWrite(BaseModel):
     expected_revision: int = Field(ge=0)
     action: str = Field(
-        pattern=r"^(enqueue|edit|remove|reorder|pause|resume|clear|retry)$"
+        pattern=r"^(enqueue|edit|remove|reorder|pause|resume|clear|retry|interrupt)$"
     )
     item_id: str | None = Field(default=None, max_length=200)
     idempotency_key: str | None = Field(default=None, max_length=200)
@@ -270,6 +270,9 @@ class QueueWrite(BaseModel):
     order: list[str] = Field(default_factory=list, max_length=20)
     paused: bool = False
     first: bool = False
+    # Send this follow-up next and move on from the response the operator is
+    # stopping, instead of holding the queue for review once it is cancelled.
+    interrupt: bool = False
     imported_uncertain: bool = False
 
 
@@ -461,15 +464,17 @@ class ChatQueueService:
                     "created_at": utc_now().isoformat(),
                     **payload,
                 }
-                if body.first:
+                if body.first or body.interrupt:
                     items.insert(0, item)
                 else:
                     items.append(item)
                 # A user explicitly enqueueing while idle authorizes moving on from a previous failure.
                 latest = await self.latest_turn(session_id)
-                if latest and latest.status in TERMINAL:
+                if latest and (latest.status in TERMINAL or body.interrupt):
                     changes["resume_after_turn_id"] = latest.id
-                if not present or body.paused or body.imported_uncertain:
+                if body.interrupt:
+                    changes["paused"] = False
+                elif not present or body.paused or body.imported_uncertain:
                     changes["paused"] = body.paused or body.imported_uncertain
                 if body.imported_uncertain:
                     item.update(
@@ -504,6 +509,21 @@ class ChatQueueService:
                             if item["status"] == "claiming"
                             else "This follow-up has already been dispatched"
                         )
+        elif body.action == "interrupt":
+            # "Send now" on a waiting follow-up: it goes first and the queue
+            # moves on from the response the operator stops for it.
+            item = next((item for item in items if item["id"] == body.item_id), None)
+            if item is None or item["status"] != "queued":
+                raise ConflictError("Only a waiting follow-up can be sent now")
+            items.remove(item)
+            first = next(
+                (index for index, row in enumerate(items) if row["status"] in EDITABLE),
+                len(items),
+            )
+            items.insert(first, item)
+            latest = await self.latest_turn(session_id)
+            changes["paused"] = False
+            changes["resume_after_turn_id"] = latest.id if latest else None
         elif body.action == "reorder":
             editable = [item for item in items if item["status"] in EDITABLE]
             if len(body.order) != len(editable) or set(body.order) != {
@@ -728,7 +748,13 @@ class ChatQueueService:
                             queue.id,
                             {
                                 "items": retire_settled_items(items),
-                                "paused": queue.paused or turn.status == "cancelled",
+                                # A stop the operator made to send the next
+                                # follow-up now does not hold the queue.
+                                "paused": queue.paused
+                                or (
+                                    turn.status == "cancelled"
+                                    and queue.resume_after_turn_id != turn.id
+                                ),
                             },
                             expected_revision=queue.revision,
                         )
