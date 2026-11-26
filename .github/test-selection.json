@@ -1,8 +1,8 @@
 {
-  "change_digest": "addda6ea6994fd3a0b2e33e86ce200aa80061c8e0bd69e424c8a9aae9619566c",
-  "reviewed_by": "Claude: ruff format fix",
-  "reason": "ruff format --check failed on main for tests/v3/test_harness_adapters.py (from #1331), which stopped the Python 3.12 job before any tests ran. Whitespace-only reformat.",
-  "exclusions": "Formatting only; no behavior change, so no tests are selected beyond the formatting check itself.",
+  "change_digest": "5b511c8c3ecce8002dc089de84ec5e628a90de5973da7090af21264f07b08794",
+  "reviewed_by": "Claude: Butler mode reply target fix",
+  "reason": "Butler mode left the composer on 'New thread' after a question started a thread (and when a thread opened from the URL), so the operator's follow-up started another thread. The fix switches the composer to Reply once that thread's answer settles and when ?thread= changes outside openThread. Selected: the Butler mode page unit tests (send + board) and the butler-mode real-Core LAN journey on desktop and compact, which now sends a follow-up in a reloaded thread and checks no new thread is created.",
+  "exclusions": "UI-only change to ButlerModePage composer state; no Core, Python, or native code changed, so those layers select nothing. Other Butler areas (panel, subagents, board-only journeys) do not use the Butler mode composer target.",
   "python_versions": [
     "3.12"
   ],
@@ -10,12 +10,17 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 28,
     "native": 0,
-    "playwright": 0
+    "playwright": 2
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/ButlerModePage.send.test.tsx",
+    "ui/src/pages/ButlerModePage.board.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:butler-mode"
+  ]
 }

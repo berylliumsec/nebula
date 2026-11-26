@@ -107,3 +107,47 @@ it("keeps what the operator typed meanwhile when the send fails", async () => {
   current.reject(new Error("Core is restarting."));
   await waitFor(() => expect(composer).toHaveValue("First question\n\nSecond thought"));
 });
+
+it("replies in the thread a question just started once Butler has answered it", async () => {
+  let threadState = "working";
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) {
+      return { value: { items: [{ session_id: "thread-1", title: "What needs me today?", project, state: threadState, updated_at: new Date().toISOString() }] }, etag: `"t-${threadState}"` };
+    }
+    return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
+  });
+  getControlAssistantSession.mockResolvedValue({ id: "butler" });
+  getOrCreateControlAssistantSession.mockResolvedValue({ id: "thread-1" });
+  const answer = deferred<void>();
+  streamChat.mockReturnValueOnce(answer.promise);
+  mount();
+  const composer = screen.getByRole("textbox", { name: "Message Butler" });
+  await userEvent.type(composer, "What needs me today?{Enter}");
+  await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+
+  // While Butler answers, the next question can still start its own thread.
+  expect(screen.getByRole("button", { name: "New thread" })).toHaveAttribute("aria-pressed", "true");
+
+  threadState = "idle";
+  answer.resolve();
+  // Once the answer settles, the composer continues the open thread.
+  await waitFor(() => expect(screen.getByRole("button", { name: "Reply in this thread" })).toHaveAttribute("aria-pressed", "true"), { timeout: 3000 });
+  await userEvent.type(composer, "And tomorrow?{Enter}");
+  await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2));
+  expect(getOrCreateControlAssistantSession).toHaveBeenCalledTimes(1);
+  expect(streamChat.mock.calls[1][0]).toMatchObject({ sessionId: "thread-1", messages: [{ role: "user", content: "And tomorrow?" }] });
+});
+
+it("replies in a thread opened from the address, such as after a reload", async () => {
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [{ session_id: "thread-1", title: "Earlier", project, state: "idle", updated_at: new Date().toISOString() }] }, etag: '"t"' };
+    return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
+  });
+  getControlAssistantSession.mockResolvedValue({ id: "butler" });
+  render(<MemoryRouter initialEntries={["/butler?project=p1&thread=thread-1"]}><ButlerModePage /></MemoryRouter>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Reply in this thread" })).toHaveAttribute("aria-pressed", "true"));
+  await userEvent.type(screen.getByRole("textbox", { name: "Message Butler" }), "Still there?{Enter}");
+  await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+  expect(getOrCreateControlAssistantSession).not.toHaveBeenCalled();
+  expect(streamChat.mock.calls[0][0]).toMatchObject({ sessionId: "thread-1" });
+});

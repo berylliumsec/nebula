@@ -477,11 +477,25 @@ test("assistant upgrade Butler mode runs parallel threads beside every project's
       await startThread(page, PROMPTS.quick);
       const conversation = page.getByRole("log", {name: "Butler thread messages"});
       await expect(conversation.getByText(ANSWERS.quick)).toBeVisible({timeout: 90_000});
+      // Once Butler has answered the thread a question started, the composer replies in it.
+      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
       await page.screenshot({path: testInfo.outputPath("butler-mode-threads.png")});
       // Threads are Core's: the open thread (in the URL) and its answer survive a reload.
       expect(new URL(page.url()).searchParams.get("thread")).toBeTruthy();
       await page.reload();
       await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText(ANSWERS.quick)).toBeVisible({timeout: 60_000});
+      // A thread reopened from its URL also replies in place: the follow-up stays in that thread.
+      const quickThread = new URL(page.url()).searchParams.get("thread");
+      await expect(page.getByRole("button", {name: "Reply in this thread"})).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+      const followUp = page.getByRole("textbox", {name: "Message Butler"});
+      await followUp.fill("THREAD-B-FOLLOW-UP And last week?");
+      await followUp.press("End");
+      await page.getByRole("button", {name: "Send reply"}).click();
+      await expect(page.getByRole("log", {name: "Butler thread messages"}).getByText("THREAD-B-FOLLOW-UP And last week?", {exact: true})).toBeVisible({timeout: 30_000});
+      await expect.poll(stub.prompts, {timeout: 60_000}).toContain("THREAD-B-FOLLOW-UP And last week?");
+      expect(new URL(page.url()).searchParams.get("thread")).toBe(quickThread);
+      type ThreadList = {items: Array<{session_id: string; project: {id: string}}>};
+      await expect.poll(async () => ((await (await api.get("butler/threads")).json()) as ThreadList).items.filter(item => item.project.id === research).length, {timeout: 30_000}).toBe(2);
       await showThreads(page);
       const rail = page.getByRole("navigation", {name: "Butler threads"});
       if (!await rail.isVisible()) await page.getByRole("button", {name: "Back to threads"}).click();
