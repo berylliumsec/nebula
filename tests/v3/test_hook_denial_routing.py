@@ -10,6 +10,7 @@ from tests.v3.async_test_support import (
     close_database_handles as close_database_handles,
 )
 
+import json
 from datetime import UTC, datetime
 
 from nebula.v3.domain import (
@@ -249,3 +250,112 @@ async def test_one_denial_then_the_routed_tool_continues(tmp_path):
         "denied",
     ]
     assert len(_turn_requests(provider)) == 7
+
+
+class _DenyingGatewayBroker:
+    """The command broker as a harness gateway sees it, blocked by a hook."""
+
+    def __init__(self, denial):
+        self.denial = denial
+        self.calls = []
+
+    async def execute(self, invocation, scope, *, approval=None):
+        del scope, approval
+        self.calls.append(invocation)
+        raise self.denial
+
+
+async def test_harness_gateway_command_keeps_the_hooks_reason(tmp_path):
+    """A hook block in a harness chat reaches the model with the hook's words.
+
+    The gateway used to flatten the denial to a ``denied`` status, so the
+    model saw only "denied by an access or approval rule" and no next step.
+    """
+
+    from types import SimpleNamespace
+
+    from nebula.v3.domain import HarnessSession
+    from nebula.v3.tool_failures import FAILURE_SCHEMA
+    from tests.v3.test_harnesses import _runtime
+
+    store, engagement, profile, _mcp, _, runtime = await _runtime(tmp_path)
+    _chat, _chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Search the repository",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    broker = _DenyingGatewayBroker(_denial(route_to=()))
+    runtime._gateway_oci_components[session.id] = SimpleNamespace(
+        specs={"run_command": _run_command_spec()},
+        broker=broker,
+        scope=None,
+        workspace=tmp_path,
+    )
+    try:
+        result = await runtime._gateway_oci_call(
+            session,
+            turn,
+            "runtime_fixture_run_command",
+            "run_command",
+            {"command": "find . -name '*.md'"},
+        )
+    finally:
+        await runtime.shutdown()
+
+    assert broker.calls
+    failure = result["structuredContent"]
+    assert result["isError"] is True
+    # The gateway wrapper passes a classified failure through unchanged.
+    assert failure["schema"] == FAILURE_SCHEMA
+    assert failure["category"] == "permission_denied"
+    assert failure["problem"] == (
+        "A required project hook blocked the command before it ran."
+    )
+    assert failure["policy_rule"] == "project_native_hook"
+    assert failure["hook_output"]["hook_id"] == SEARCH_HOOK
+    assert "shell search is routed" in failure["hook_output"]["stderr"]
+    assert json.loads(result["content"][0]["text"]) == failure
+
+
+async def test_harness_gateway_command_names_the_hooks_routed_tool(tmp_path):
+    from types import SimpleNamespace
+
+    from nebula.v3.domain import HarnessSession
+    from tests.v3.test_harnesses import _runtime
+
+    store, engagement, profile, _mcp, _, runtime = await _runtime(tmp_path)
+    _chat, _chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Search the repository",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    runtime._gateway_oci_components[session.id] = SimpleNamespace(
+        specs={"run_command": _run_command_spec()},
+        broker=_DenyingGatewayBroker(_denial(route_to=("workspace.search",))),
+        scope=None,
+        workspace=tmp_path,
+    )
+    try:
+        result = await runtime._gateway_oci_call(
+            session,
+            turn,
+            "runtime_fixture_run_command",
+            "run_command",
+            {"command": "grep -R needle ."},
+        )
+    finally:
+        await runtime.shutdown()
+
+    failure = result["structuredContent"]
+    assert failure["use_instead"] == ["workspace.search"]
+    assert failure["next_action"].startswith("Call workspace.search instead.")

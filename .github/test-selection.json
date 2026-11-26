@@ -1,38 +1,26 @@
 {
-  "change_digest": "6591de2cd159cf8edd9fd77162cb2be323d85d0cac6c2b43be233289a1657338",
-  "reviewed_by": "Claude: saved passwords usable by any tool",
-  "reason": "Saved passwords are no longer scoped to MCP servers. ToolBroker.execute substitutes {{credential:<name>}} into a copy of the invocation for any plugin (MCP, SSH, browser, analysis), marks the values active for diagnostics, and scrubs results, artifact files, cancellation partials and exception text before the ledger/evidence see them. AutomationBroker run_command rewrites placeholders to ${NEBULA_CREDENTIAL_<NAME>} environment references (stored command keeps the placeholder) and passes values only in the process environment; process_io substitutes only the bytes written. Captured stdout/stderr are scrubbed in poll results and in stored artifacts (a scrubbed copy, so live capture offsets hold). credentials.list joins notes.write for every chat, Butler and harness turn with tools. API/UI drop the server allow list (entity field kept, unused).",
-  "exclusions": "Failures identical on origin/main and not selected: test_automation_runtime.py host/search-hook cases (4), test_chat.py restart-recovery capacity cases (2), test_harnesses.py gateway catalog refresh (2), test_universal_agent_tools.py (17). Real-Core journey (command-only chat lists credentials; run_command receives the value via env while the stored stdout artifact shows the placeholder; MCP typing; unknown name refused; no plaintext in the data root) was run on a disposable LAN Core with the host memory runner.",
+  "change_digest": "ebf2b68e2de62701188c9d098cbc0b1e2fc6349728cefd78497e742f5fb433c5",
+  "reviewed_by": "Claude: harness gateway keeps project hook denial reasons",
+  "reason": "HarnessRuntimeService._gateway_oci_call caught the broker's PolicyDenied (including ProjectHookPolicyDenied) and flattened it to {status: denied, detail}; _gateway_call then rebuilt a bare PermissionError, so tool_failure took its generic 'denied by an access or approval rule' branch and the hook's stderr, route_to and policy_rule never reached the harness model. The gateway now classifies the real exception with tool_failure (FAILURE_SCHEMA), which _gateway_call passes through unchanged. New tests drive _gateway_oci_call with a hook-denying broker (with and without route_to) and fail on origin/main.",
+  "exclusions": "tests/v3/test_harnesses.py ran locally (141 passed, 2 failed); the 2 failures (test_knowledge_access_change_refreshes_fixed_gateway_catalog, test_browser_attachment_refreshes_catalog_without_replacing_native_thread) fail identically on origin/main 702cc77, so the file is not selected. No frontend, native or Playwright layer: the change is backend-only and adds no UI. No LAN real-Core harness journey was run: it needs a live vendor harness session.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 262,
-    "frontend": 43,
+    "python": 41,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_saved_credentials.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_mcp_inline_output.py",
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_settings_assistant_api.py",
-    "tests/v3/test_diagnostics.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_turn_tool_bookkeeping.py",
-    "tests/v3/test_structured_results.py"
+    "tests/v3/test_hook_denial_routing.py",
+    "tests/v3/test_blocking_hook_feedback.py",
+    "tests/v3/test_tool_failures.py"
   ],
-  "frontend": [
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/SavedCredentialsSettings.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
-  "checks": [
-    "frontend-audit"
-  ]
+  "checks": []
 }
