@@ -497,7 +497,16 @@ async def test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_runnin
                 await asyncio.sleep(0.01)
         else:
             raise AssertionError("the reclaimed turn never settled")
-        await service.step((await service.get("s")))
+        # Core's own queue loop (started above) may settle the item before
+        # this step does; a step from a stale read then loses the race.
+        for _ in range(100):
+            settled = await service.get("s")
+            if settled.items[0]["status"] != "sending":
+                break
+            try:
+                await service.step(settled)
+            except ConflictError:
+                await asyncio.sleep(0.01)
         settled = await service.get("s")
         assert settled.items[0]["status"] == "complete"
         assert not settled.paused
