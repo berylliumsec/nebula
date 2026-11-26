@@ -932,20 +932,25 @@ control and use Core's public status to verify any later saved result.
 ### Saved passwords
 
 Settings › Integrations › Saved passwords (`setting_id=saved-credentials`,
-section `saved-credential-settings`) holds named passwords that agents can type
-into prompts, such as a macOS password dialog, through an MCP server the
-operator allows. Core encrypts each value with AES-256-GCM under a 0600 key
-file in its data directory (`store:` references), so it works on a headless
-Linux Core whose OS keyring stays locked. The database holds only the name,
-description, reference and allowed MCP server IDs.
+section `saved-credential-settings`) holds named passwords that agents can
+enter through any Nebula tool: typing into a macOS password dialog through an
+MCP server, piping to `sudo -S` with `run_command`, writing to a waiting
+process with `process_io`, or any other tool argument. Core encrypts each value
+with AES-256-GCM under a 0600 key file in its data directory (`store:`
+references), so it works on a headless Linux Core whose OS keyring stays
+locked. The database holds only the name, description and reference.
 
-A chat or Butler conversation whose selected MCP servers can use a saved
-password gets the `credentials.list` tool. It returns names, placeholders and
-allowed servers, never values. The model writes `{{credential:<name>}}` in an
-MCP tool argument; Core substitutes the value only in the copy sent to an
-allowed server, refuses any other server, and puts the placeholder back
-wherever the value is echoed in results or errors. Tool-call records, approval
-cards and provider history keep the placeholder.
+Every chat, Butler and harness turn that has tools gets `credentials.list`,
+which returns names and placeholders, never values. The model writes
+`{{credential:<name>}}` in a tool argument. The tool brokers substitute the
+value only in the copy handed to the tool and put the placeholder back
+wherever the value is echoed in results, errors, captured output artifacts and
+diagnostics. Tool-call records, approval cards, hooks and provider history keep
+the placeholder. In `run_command` the placeholder becomes an environment
+variable reference (`${NEBULA_CREDENTIAL_<NAME>}`) that only that process
+receives, so the stored command never contains the value; it must sit inside
+double quotes or unquoted, not single quotes. An unknown name refuses the call
+before it runs.
 
 Butler reads `GET saved-credentials` through `nebula.settings.api_request`.
 Saving, replacing, changing allowed servers and deleting are browser-owned:

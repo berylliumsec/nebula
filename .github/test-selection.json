@@ -1,25 +1,38 @@
 {
-  "change_digest": "d636a08658e6827e38f658ee858637d2dea147c83b9051ab1dec18eccc761df9",
-  "reviewed_by": "Claude: Butler mode stop on harness threads",
-  "reason": "Butler mode's Stop sent a harness turn ID to the chat-turn cancel route (404) once a harness-backed thread ran a tool, because harness tool frames carry only harness_turn_id. The thread activity reducer now keeps the chat turn from queued/admitted/started frames. Selected the reducer unit tests and the Butler mode page tests, including a new send-then-stop journey.",
-  "exclusions": "No Core, parser or other-surface change: SessionsPage, the Butler panel and Ask Nebula read their turn IDs elsewhere and are untouched. No Python, native or Playwright coverage applies to this UI reducer change.",
+  "change_digest": "d271e0b444f654eaa3934305a1dbecd9400f9586ac27d0a2d47c4a990201e5d3",
+  "reviewed_by": "Claude: saved passwords usable by any tool",
+  "reason": "Saved passwords are no longer scoped to MCP servers. ToolBroker.execute substitutes {{credential:<name>}} into a copy of the invocation for any plugin (MCP, SSH, browser, analysis), marks the values active for diagnostics, and scrubs results, artifact files, cancellation partials and exception text before the ledger/evidence see them. AutomationBroker run_command rewrites placeholders to ${NEBULA_CREDENTIAL_<NAME>} environment references (stored command keeps the placeholder) and passes values only in the process environment; process_io substitutes only the bytes written. Captured stdout/stderr are scrubbed in poll results and in stored artifacts (a scrubbed copy, so live capture offsets hold). credentials.list joins notes.write for every chat, Butler and harness turn with tools. API/UI drop the server allow list (entity field kept, unused).",
+  "exclusions": "Failures identical on origin/main and not selected: test_automation_runtime.py host/search-hook cases (4), test_chat.py restart-recovery capacity cases (2), test_harnesses.py gateway catalog refresh (2), test_universal_agent_tools.py (17). Real-Core journey (command-only chat lists credentials; run_command receives the value via env while the stored stdout artifact shows the placeholder; MCP typing; unknown name refused; no plaintext in the data root) was run on a disposable LAN Core with the host memory runner.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 33,
+    "python": 262,
+    "frontend": 43,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_saved_credentials.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_mcp_inline_output.py",
+    "tests/v3/test_credentials.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_diagnostics.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_turn_tool_bookkeeping.py",
+    "tests/v3/test_structured_results.py"
+  ],
   "frontend": [
-    "ui/src/pages/butlerThreadActivity.test.ts",
-    "ui/src/pages/ButlerModePage.send.test.tsx",
-    "ui/src/pages/ButlerModePage.board.test.tsx"
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/components/SavedCredentialsSettings.test.tsx"
   ],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "checks": [
+    "frontend-audit"
+  ]
 }
