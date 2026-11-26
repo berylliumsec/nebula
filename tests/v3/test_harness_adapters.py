@@ -1465,6 +1465,65 @@ async def test_claude_probe_offers_stable_model_aliases(monkeypatch):
         "sonnet",
         "opus",
     ]
+    # Every advertised model lists the SDK's effort levels, so an explicit
+    # effort (Butler's goal creation sends one) passes Core's session check.
+    assert [option.model for option in health.capabilities.model_options] == (
+        health.capabilities.models
+    )
+    for option in health.capabilities.model_options:
+        assert [item.id for item in option.reasoning_efforts] == [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ]
+        assert option.default_reasoning_effort is None
+
+
+async def test_claude_sdk_receives_the_session_reasoning_effort(
+    tmp_path, monkeypatch
+):
+    sdk = SimpleNamespace(
+        ClaudeAgentOptions=FakeClaudeOptions,
+        ClaudeSDKClient=FakeClaudeClient,
+        HookMatcher=FakeHookMatcher,
+        PermissionResultAllow=PermissionResultAllow,
+    )
+    monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+    profile = HarnessProfile(
+        id="claude-a",
+        name="Claude",
+        kind=HarnessKind.CLAUDE_AGENT_SDK,
+        default_model="claude-opus-5-5",
+    )
+
+    async def permission(request):
+        raise AssertionError("no tool permission is requested")
+
+    observed: dict[str | None, Any] = {}
+    for effort in ("high", None, "unknown-level"):
+        session = HarnessSession(
+            id="session-a",
+            engagement_id="eng-a",
+            harness_profile_id=profile.id,
+            model="claude-opus-5-5",
+            metadata={"runtime_options": {"reasoning_effort": effort}},
+        )
+        await ClaudeAgentSdkAdapter().open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=permission,
+            )
+        )
+        observed[effort] = FakeClaudeClient.latest.options.kwargs.get("effort")
+
+    # Only an effort the SDK accepts reaches it; none keeps the CLI default.
+    assert observed == {"high": "high", None: None, "unknown-level": None}
 
 
 async def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):

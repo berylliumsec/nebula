@@ -298,6 +298,17 @@ CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
 # current exact Claude id is listed here: without it a new profile could pick
 # only the moving ``sonnet``/``opus`` aliases.
 CLAUDE_ADVERTISED_MODELS = ("claude-opus-5-5", "sonnet", "opus")
+# Effort levels the Claude Agent SDK accepts (``ClaudeAgentOptions.effort``,
+# sent to the CLI as ``--effort``). Each advertised model lists them so Core's
+# session check accepts an explicit effort; none is a default, so a session
+# that names no effort keeps the CLI's own default.
+CLAUDE_REASONING_EFFORTS = (
+    ("low", "Low", "Minimal thinking, fastest responses."),
+    ("medium", "Medium", "Moderate thinking."),
+    ("high", "High", "Deep reasoning."),
+    ("xhigh", "Extra high", "Extended reasoning depth where the model supports it."),
+    ("max", "Max", "Maximum effort."),
+)
 CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
@@ -9286,6 +9297,27 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                             ]
                         )
                     ),
+                    model_options=[
+                        HarnessModelOptions(
+                            model=model,
+                            reasoning_efforts=[
+                                HarnessRuntimeOption(
+                                    id=effort, label=label, description=description
+                                )
+                                for effort, label, description in CLAUDE_REASONING_EFFORTS
+                            ],
+                        )
+                        for model in dict.fromkeys(
+                            [
+                                *(
+                                    [profile.default_model]
+                                    if profile.default_model
+                                    else []
+                                ),
+                                *CLAUDE_ADVERTISED_MODELS,
+                            ]
+                        )
+                    ],
                     supported_native_capabilities=_supported_native_capabilities(
                         self.kind
                     ),
@@ -9548,6 +9580,13 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             options_kwargs["env"]["ANTHROPIC_API_KEY"] = _resolve_secret(
                 request.credential_store, request.profile.secret_ref
             )
+        raw_runtime_options = request.session.metadata.get("runtime_options")
+        runtime_options = (
+            raw_runtime_options if isinstance(raw_runtime_options, dict) else {}
+        )
+        reasoning_effort = runtime_options.get("reasoning_effort")
+        if reasoning_effort in {item[0] for item in CLAUDE_REASONING_EFFORTS}:
+            options_kwargs["effort"] = reasoning_effort
         if request.profile.executable:
             options_kwargs["cli_path"] = request.profile.executable
         resume_stderr: deque[str] = deque(maxlen=20)
