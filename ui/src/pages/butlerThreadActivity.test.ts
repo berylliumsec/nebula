@@ -29,6 +29,17 @@ describe("Butler thread activity", () => {
     expect(ledger.entries).toHaveLength(1);
   });
 
+  it("keeps the chat turn Stop cancels while a harness's tool frames name the harness turn", () => {
+    let activity = activityFromEvent(undefined, event({ type: "started", turnId: "chat-turn", harnessTurnId: "harness-turn", model: "claude" }));
+    expect(activity?.turnId).toBe("chat-turn");
+    activity = activityFromEvent(activity, event({ type: "tool_started", turnId: "harness-turn", toolCallId: "call-1", capability: "Read", arguments: {}, step: 0 }));
+    activity = activityFromEvent(activity, event({ type: "tool_completed", turnId: "harness-turn", toolCallId: "call-1", capability: "Read", status: "succeeded", summary: "" }));
+    expect(activity).toMatchObject({ turnId: "chat-turn", state: "running" });
+    expect(activity!.cards.map((item) => [item.toolCallId, item.status])).toEqual([["call-1", "succeeded"]]);
+    // Tool frames alone never invent a turn for Stop; it falls back to Core's pending turn.
+    expect(activityFromEvent(undefined, event({ type: "tool_started", turnId: "harness-turn", toolCallId: "call-2", capability: "Read", arguments: {}, step: 0 }))?.turnId).toBeUndefined();
+  });
+
   it("restores a reloaded or resumed turn's steps and queue position from Core", () => {
     expect(activityFromPendingTurn(turn({ status: "queued", queuePosition: 1, admissionReason: "Resumed after Core restarted" })))
       .toMatchObject({ state: "queued", detail: "Resumed after Core restarted · position 1" });

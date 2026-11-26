@@ -27,7 +27,9 @@ const getChatAssistantConfig = vi.fn();
 const getOrCreateControlAssistantSession = vi.fn();
 const streamChat = vi.fn();
 const listChatMessages = vi.fn();
-const api = { requestIfChanged, getControlAssistantSession, getChatAssistantConfig, getOrCreateControlAssistantSession, streamChat, listChatMessages };
+const cancelChatTurn = vi.fn();
+const getPendingChatTurn = vi.fn();
+const api = { requestIfChanged, getControlAssistantSession, getChatAssistantConfig, getOrCreateControlAssistantSession, streamChat, listChatMessages, cancelChatTurn, getPendingChatTurn };
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: project, engagements: [project], providers: [provider], harnesses: [], selectEngagement: vi.fn() }),
@@ -150,4 +152,30 @@ it("replies in a thread opened from the address, such as after a reload", async 
   await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
   expect(getOrCreateControlAssistantSession).not.toHaveBeenCalled();
   expect(streamChat.mock.calls[0][0]).toMatchObject({ sessionId: "thread-1" });
+});
+
+it("stops a harness-backed thread by its chat turn after a tool step ran", async () => {
+  getControlAssistantSession.mockResolvedValue({ id: "butler" });
+  getOrCreateControlAssistantSession.mockResolvedValue({ id: "thread-1" });
+  cancelChatTurn.mockResolvedValue({ id: "chat-turn", status: "cancelled" });
+  const thread = { session_id: "thread-1", title: "Check the fuzzers", project, state: "working", turn_id: null, updated_at: "2026-11-26T00:00:00Z" };
+  requestIfChanged.mockImplementation(async (path: string) => {
+    if (path.startsWith("butler/threads")) return { value: { items: [thread] }, etag: '"t1"' };
+    return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
+  });
+  // A harness names its chat turn only on "started"; its tool frames carry the harness turn.
+  streamChat.mockImplementation((_request: unknown, onEvent: (event: unknown) => void) => {
+    onEvent({ type: "started", turnId: "chat-turn", harnessTurnId: "harness-turn", model: "claude" });
+    onEvent({ type: "tool_started", turnId: "harness-turn", toolCallId: "call-1", capability: "Read", arguments: {}, step: 0 });
+    return new Promise(() => undefined);
+  });
+  mount();
+  await userEvent.type(screen.getByRole("textbox", { name: "Message Butler" }), "Check the fuzzers{Enter}");
+  await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+  await userEvent.click(await screen.findByRole("button", { name: "Reply in this thread" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Stop response" }));
+
+  await waitFor(() => expect(cancelChatTurn).toHaveBeenCalledWith("chat-turn"));
+  expect(cancelChatTurn).not.toHaveBeenCalledWith("harness-turn");
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });

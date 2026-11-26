@@ -1,8 +1,8 @@
 {
-  "change_digest": "5b511c8c3ecce8002dc089de84ec5e628a90de5973da7090af21264f07b08794",
-  "reviewed_by": "Claude: Butler mode reply target fix",
-  "reason": "Butler mode left the composer on 'New thread' after a question started a thread (and when a thread opened from the URL), so the operator's follow-up started another thread. The fix switches the composer to Reply once that thread's answer settles and when ?thread= changes outside openThread. Selected: the Butler mode page unit tests (send + board) and the butler-mode real-Core LAN journey on desktop and compact, which now sends a follow-up in a reloaded thread and checks no new thread is created.",
-  "exclusions": "UI-only change to ButlerModePage composer state; no Core, Python, or native code changed, so those layers select nothing. Other Butler areas (panel, subagents, board-only journeys) do not use the Butler mode composer target.",
+  "change_digest": "d636a08658e6827e38f658ee858637d2dea147c83b9051ab1dec18eccc761df9",
+  "reviewed_by": "Claude: Butler mode stop on harness threads",
+  "reason": "Butler mode's Stop sent a harness turn ID to the chat-turn cancel route (404) once a harness-backed thread ran a tool, because harness tool frames carry only harness_turn_id. The thread activity reducer now keeps the chat turn from queued/admitted/started frames. Selected the reducer unit tests and the Butler mode page tests, including a new send-then-stop journey.",
+  "exclusions": "No Core, parser or other-surface change: SessionsPage, the Butler panel and Ask Nebula read their turn IDs elsewhere and are untouched. No Python, native or Playwright coverage applies to this UI reducer change.",
   "python_versions": [
     "3.12"
   ],
@@ -10,17 +10,16 @@
   "python_node": false,
   "expected_tests": {
     "python": 0,
-    "frontend": 28,
+    "frontend": 33,
     "native": 0,
-    "playwright": 2
+    "playwright": 0
   },
   "python": [],
   "frontend": [
+    "ui/src/pages/butlerThreadActivity.test.ts",
     "ui/src/pages/ButlerModePage.send.test.tsx",
     "ui/src/pages/ButlerModePage.board.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "area:butler-mode"
-  ]
+  "playwright": []
 }

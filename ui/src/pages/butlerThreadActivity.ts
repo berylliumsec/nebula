@@ -25,7 +25,11 @@ function queuedDetail(reason: string | undefined, position: number | undefined):
   return `${reason || "Waiting for Core capacity"}${position ? ` · position ${position}` : ""}`;
 }
 
-/** Advance a thread's activity from one stream event; unrelated events keep it unchanged. */
+/**
+ * Advance a thread's activity from one stream event; unrelated events keep it unchanged.
+ * `turnId` is always the chat turn: a harness's tool frames name the harness
+ * turn instead, so they never replace it.
+ */
 export function activityFromEvent(current: ThreadActivity | undefined, event: ChatStreamEvent): ThreadActivity | undefined {
   const base: ThreadActivity = current ?? { state: "running", cards: [] };
   switch (event.type) {
@@ -33,16 +37,20 @@ export function activityFromEvent(current: ThreadActivity | undefined, event: Ch
       return { ...base, turnId: event.turnId, state: "queued", detail: queuedDetail(event.detail, event.queuePosition) };
     case "admitted":
       return { ...base, turnId: event.turnId, state: "running", detail: undefined };
+    case "started":
+      // A harness turn starts without queued/admitted frames; this is the one
+      // frame that names its chat turn, which is what Stop cancels.
+      return event.turnId && event.turnId !== base.turnId ? { ...base, turnId: event.turnId } : current;
     case "tool_started": {
       const started = card(event.toolCallId, event.capability, "running", { displayName: event.displayName, arguments: event.arguments });
       const known = base.cards.some((item) => item.toolCallId === event.toolCallId);
-      return { ...base, turnId: event.turnId, state: "running", detail: undefined,
+      return { ...base, state: "running", detail: undefined,
         cards: known ? base.cards.map((item) => item.toolCallId === event.toolCallId ? { ...item, ...started } : item) : [...base.cards, started] };
     }
     case "tool_completed": {
       const done = card(event.toolCallId, event.capability, event.status, { displayName: event.displayName, summary: event.summary });
       const known = base.cards.some((item) => item.toolCallId === event.toolCallId);
-      return { ...base, turnId: event.turnId, cards: known
+      return { ...base, cards: known
         ? base.cards.map((item) => item.toolCallId === event.toolCallId ? { ...item, ...done, arguments: item.arguments } : item)
         : [...base.cards, done] };
     }
