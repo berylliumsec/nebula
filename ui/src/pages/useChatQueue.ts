@@ -105,11 +105,11 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
       return false;
     } finally {locked.current = false; setBusy(false);}
   };
-  const enqueue = async (request: ChatCompletionRequest, options: {paused?: boolean; first?: boolean; key?: string; uncertain?: boolean} = {}) => {
+  const enqueue = async (request: ChatCompletionRequest, options: {paused?: boolean; first?: boolean; interrupt?: boolean; key?: string; uncertain?: boolean} = {}) => {
     const wire = chatRequestBody(request, true);
     const content = JSON.stringify(wire);
     if (pending.current?.content !== content) pending.current = {content, key: `queue-${Date.now()}-${Math.random().toString(36).slice(2)}`};
-    const accepted = await mutate({action: "enqueue", request: wire, idempotency_key: options.key ?? pending.current.key, paused: options.paused, first: options.first, imported_uncertain: options.uncertain});
+    const accepted = await mutate({action: "enqueue", request: wire, idempotency_key: options.key ?? pending.current.key, paused: options.paused, first: options.first, interrupt: options.interrupt, imported_uncertain: options.uncertain});
     if (accepted) pending.current = undefined;
     return accepted;
   };

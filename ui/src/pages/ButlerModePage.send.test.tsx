@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -29,7 +29,15 @@ const streamChat = vi.fn();
 const listChatMessages = vi.fn();
 const cancelChatTurn = vi.fn();
 const getPendingChatTurn = vi.fn();
-const api = { requestIfChanged, getControlAssistantSession, getChatAssistantConfig, getOrCreateControlAssistantSession, streamChat, listChatMessages, cancelChatTurn, getPendingChatTurn };
+const request = vi.fn();
+const api = { requestIfChanged, request, getControlAssistantSession, getChatAssistantConfig, getOrCreateControlAssistantSession, streamChat, listChatMessages, cancelChatTurn, getPendingChatTurn };
+
+// Core's follow-up queue for the open thread, as the page reads and writes it.
+let threadQueue: { revision: number; paused: boolean; items: Array<Record<string, unknown>> };
+const queueWrites: Array<Record<string, unknown>> = [];
+function queueAnswer(path: string) {
+  return path.includes("/queue") ? { value: threadQueue, etag: `"q${threadQueue.revision}"` } : undefined;
+}
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({ api, coreState: "online", engagement: project, engagements: [project], providers: [provider], harnesses: [], selectEngagement: vi.fn() }),
@@ -45,7 +53,22 @@ vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  threadQueue = { revision: 0, paused: false, items: [] };
+  queueWrites.length = 0;
+  request.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+    if (!path.includes("/queue")) throw new Error(`unexpected request ${path}`);
+    if (init?.method === "POST") {
+      const body = JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+      queueWrites.push(body);
+      const request = body.request as { messages: unknown[] };
+      const item = { id: `item-${queueWrites.length}`, key: body.idempotency_key, status: "queued", request };
+      threadQueue = { revision: threadQueue.revision + 1, paused: false, items: body.interrupt ? [item, ...threadQueue.items] : [...threadQueue.items, item] };
+    }
+    return threadQueue;
+  });
   requestIfChanged.mockImplementation(async (path: string) => {
+    const queued = queueAnswer(path);
+    if (queued) return queued;
     if (path.startsWith("butler/threads")) return { value: { items: [] }, etag: '"t"' };
     return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
   });
@@ -160,6 +183,8 @@ it("stops a harness-backed thread by its chat turn after a tool step ran", async
   cancelChatTurn.mockResolvedValue({ id: "chat-turn", status: "cancelled" });
   const thread = { session_id: "thread-1", title: "Check the fuzzers", project, state: "working", turn_id: null, updated_at: "2026-11-26T00:00:00Z" };
   requestIfChanged.mockImplementation(async (path: string) => {
+    const queued = queueAnswer(path);
+    if (queued) return queued;
     if (path.startsWith("butler/threads")) return { value: { items: [thread] }, etag: '"t1"' };
     return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
   });
@@ -179,3 +204,92 @@ it("stops a harness-backed thread by its chat turn after a tool step ran", async
   expect(cancelChatTurn).not.toHaveBeenCalledWith("harness-turn");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
+
+let finishStream: () => void = () => undefined;
+/** A thread Butler is still answering, opened and set to reply. */
+async function answeringThread() {
+  getControlAssistantSession.mockResolvedValue({ id: "butler" });
+  getOrCreateControlAssistantSession.mockResolvedValue({ id: "thread-1" });
+  cancelChatTurn.mockResolvedValue({ id: "chat-turn", status: "cancelled" });
+  const thread = { session_id: "thread-1", title: "Check the fuzzers", project, state: "working", turn_id: "chat-turn", updated_at: "2026-11-26T00:00:00Z" };
+  requestIfChanged.mockImplementation(async (path: string) => {
+    const queued = queueAnswer(path);
+    if (queued) return queued;
+    if (path.startsWith("butler/threads")) return { value: { items: [thread] }, etag: '"t1"' };
+    return { value: { counts: { active: 0, idle: 0, completed: 0 }, states: { waiting: 0, working: 0, failed: 0 }, projects: [], items: [], next_offset: null, truncated: false }, etag: '"b"' };
+  });
+  streamChat.mockImplementation((_request: unknown, onEvent: (event: unknown) => void) => {
+    onEvent({ type: "started", turnId: "chat-turn", model: "m" });
+    return new Promise((resolve) => { finishStream = () => resolve(undefined); });
+  });
+  mount();
+  await userEvent.type(screen.getByRole("textbox", { name: "Message Butler" }), "Check the fuzzers{Enter}");
+  await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1));
+  await userEvent.click(await screen.findByRole("button", { name: "Reply in this thread" }));
+  return screen.getByRole("textbox", { name: "Message Butler" });
+}
+
+it("queues a reply in Core while Butler is still answering the thread", async () => {
+  const composer = await answeringThread();
+  // Nothing typed: the only action is Stop.
+  expect(screen.getByRole("button", { name: "Stop response" })).toBeVisible();
+  await userEvent.type(composer, "Also check the parser goal{Enter}");
+
+  await waitFor(() => expect(queueWrites).toHaveLength(1));
+  expect(queueWrites[0]).toMatchObject({ action: "enqueue", interrupt: false, request: { session_id: "thread-1", control_assistant: true, messages: [{ role: "user", content: "Also check the parser goal" }] } });
+  expect(composer).toHaveValue("");
+  const queue = await screen.findByRole("region", { name: "Thread queue" });
+  expect(within(queue).getByText("Also check the parser goal")).toBeVisible();
+  expect(within(queue).getByRole("status")).toHaveTextContent("1 queued · sent in order when Butler finishes this answer");
+  // Queueing does not stop the running answer, and nothing else starts.
+  expect(cancelChatTurn).not.toHaveBeenCalled();
+  expect(streamChat).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("sends a reply now by putting it first in Core's queue and stopping the answer", async () => {
+  const composer = await answeringThread();
+  await userEvent.type(composer, "Stop, look at auth instead");
+  expect(screen.getByRole("button", { name: "Queue reply" })).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+  await waitFor(() => expect(cancelChatTurn).toHaveBeenCalledWith("chat-turn"));
+  expect(queueWrites[0]).toMatchObject({ action: "enqueue", interrupt: true });
+  // The stop follows the enqueue, so Core already knows to send this next.
+  expect(request.mock.invocationCallOrder.at(-1)!).toBeLessThan(cancelChatTurn.mock.invocationCallOrder[0]);
+  expect(composer).toHaveValue("");
+});
+
+it("sends a reply now from the keyboard with the send-now shortcut", async () => {
+  const composer = await answeringThread();
+  await userEvent.type(composer, "Urgent change{Control>}{Enter}{/Control}");
+  await waitFor(() => expect(cancelChatTurn).toHaveBeenCalledWith("chat-turn"));
+  expect(queueWrites[0]).toMatchObject({ action: "enqueue", interrupt: true, request: { messages: [{ content: "Urgent change" }] } });
+});
+
+it("sends a queued reply now from the thread queue", async () => {
+  const composer = await answeringThread();
+  await userEvent.type(composer, "First follow-up{Enter}");
+  const queue = await screen.findByRole("region", { name: "Thread queue" });
+  await userEvent.click(within(queue).getByRole("button", { name: "Send queued message 1 now" }));
+  await waitFor(() => expect(queueWrites.at(-1)).toMatchObject({ action: "interrupt", item_id: "item-1" }));
+  await waitFor(() => expect(cancelChatTurn).toHaveBeenCalledWith("chat-turn"));
+});
+
+it("reads the thread again when Core sends a queued reply, even if the thread list never saw it working", async () => {
+  const composer = await answeringThread();
+  await userEvent.type(composer, "Queued follow-up{Enter}");
+  await screen.findByRole("region", { name: "Thread queue" });
+  // The answer this device streamed ends (it was stopped, say).
+  await act(async () => { finishStream(); });
+  const reads = listChatMessages.mock.calls.length;
+  // Core sends and finishes the reply between two reads of the thread list.
+  threadQueue = { revision: threadQueue.revision + 1, paused: false, items: [{ ...threadQueue.items[0], status: "complete", turn_id: "queued-turn" }] };
+  listChatMessages.mockResolvedValue([
+    { id: "u1", role: "user", content: "Check the fuzzers" },
+    { id: "u2", role: "user", content: "Queued follow-up" },
+    { id: "a2", role: "assistant", content: "Queued answer arrived." },
+  ]);
+  await waitFor(() => expect(listChatMessages.mock.calls.length).toBeGreaterThan(reads), { timeout: 15_000 });
+  expect(await within(log()).findByText("Queued answer arrived.")).toBeVisible();
+}, 30_000);

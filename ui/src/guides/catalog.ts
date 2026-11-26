@@ -177,17 +177,17 @@ export const guideCatalog: GuideDefinition[] = [
   {
     id: "queue-and-steer",
     title: "Keep talking while the assistant works",
-    summary: "Queue follow-ups, stop and send, or guide a running harness.",
+    summary: "Queue follow-ups, send one now, or guide a running harness.",
     category: "assistant",
     pages: ["workbench"],
-    keywords: "queue follow-up stop send steer guide interrupt busy running later",
+    keywords: "queue follow-up send now stop and send steer guide interrupt busy running later butler mode thread reply",
     steps: [
       {
         title: "Type while a response runs",
         body: [
-          "While an answer is running you can keep typing. Queue follow-up message sends it next; Stop and send interrupts the current answer and sends yours now. Queue for later saves a message without sending it.",
-          "Harnesses that support steering show Guide current turn instead, which adds your guidance to the turn already running.",
-          "Queued messages wait in the follow-up queue above the message box, where you can edit, reorder, pause or clear them.",
+          "While an answer is running you can keep typing. Enter queues your message to send after the answer; Send now (⌘↵ or Ctrl+↵) stops the answer and sends yours next. Queue for later saves a message without sending it.",
+          "Harnesses that support steering use Enter to Guide current turn instead, which adds your guidance to the turn already running; Queue stays beside it.",
+          "Queued messages wait in a list above the message box, where you can send one now, edit, reorder, remove, pause or clear them. Core keeps sending them in order after you close the tab. The Butler panel and Butler mode threads work the same way.",
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "composer",

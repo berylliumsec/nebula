@@ -50,7 +50,7 @@ async function installCoreQueueFixture(page: Page) {
     if (route.request().method() === "POST") {
       const body = route.request().postDataJSON(); actions.push(body.action);
       if (body.expected_revision !== queue.revision) {await route.fulfill({status: 409, json: {detail: "Queue changed"}}); return;}
-      if (body.action === "enqueue") {const item = {id: String(queue.items.length + 1), key: body.idempotency_key, status: "queued", request: body.request}; if (body.first) queue.items.unshift(item); else queue.items.push(item); if (body.paused) queue.paused = true;}
+      if (body.action === "enqueue") {const item = {id: String(queue.items.length + 1), key: body.idempotency_key, status: "queued", request: body.request}; if (body.first || body.interrupt) queue.items.unshift(item); else queue.items.push(item); if (body.paused) queue.paused = true; if (body.interrupt) {queue.paused = false; actions.push("interrupt");}}
       if (body.action === "pause" || body.action === "resume") queue.paused = body.action === "pause";
       queue.revision++;
     }
@@ -5818,7 +5818,6 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   const subagents = page.getByRole("status", {name: "Subagents"}).or(page.getByRole("region", {name: "Subagents", exact: true}));
   await expect(subagents).toBeVisible();
   expect(await queue.evaluate(element => element.parentElement?.classList.contains("chat-composer"))).toBe(true);
-  await queue.locator("summary").click();
   const pauseQueue = queue.getByRole("button", { name: "Pause queue" });
   await expect(pauseQueue).toBeVisible();
   await expect(pauseQueue).toBeInViewport();
@@ -5831,13 +5830,13 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   }));
   expect(queueGeometry.scrollWidth).toBeLessThanOrEqual(queueGeometry.clientWidth + 1);
   expect(queueGeometry.clientWidth).toBeLessThanOrEqual(queueGeometry.viewportWidth + 1);
-  const queueAccessibility = await new AxeBuilder({ page }).include(".chat-follow-up-queue").analyze();
+  const queueAccessibility = await new AxeBuilder({ page }).include(".queued-messages").analyze();
   expect(queueAccessibility.violations).toEqual([]);
 
   expect(durable.queue.items.map(item => item.request.messages[0].content)).toEqual(["First queued follow-up.", "Second queued follow-up."]);
   await expect(page.getByRole("button", {name: "Stop response"})).toHaveCount(0, {timeout: 15000});
   expect(await page.evaluate(() => (globalThis as typeof globalThis & {__queueChatRequests?: unknown[]}).__queueChatRequests?.length)).toBe(1);
-  await expect(queue).toContainText("continues after all browser tabs close");
+  await expect(queue).toContainText("2 queued · sent in order after this response");
 
   durable.queue.items[0].status = "sending";
   durable.queue.items[0].turn_id = "accepted-follow-up-turn";
@@ -5850,22 +5849,21 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   durable.queue.revision += 1;
   await expect(queue.locator("li")).toHaveCount(2, {timeout: 10_000});
   await expect(queue).toContainText("First queued follow-up.");
-  await expect(queue).toContainText("Needs attention");
-  const disclosure = queue.locator("details");
-  const summary = queue.locator("summary");
-  await expect(disclosure).toHaveAttribute("open", "");
-  const openHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  await expect(queue).toContainText("needs attention");
+  const summary = queue.locator("button[aria-expanded]");
+  await expect(summary).toHaveAttribute("aria-expanded", "true");
+  const openHeight = await queue.evaluate(element => element.getBoundingClientRect().height);
   if (testInfo.project.name.startsWith("mobile-")) await summary.tap();
   else await summary.click();
-  await expect(disclosure).not.toHaveAttribute("open", "");
-  const collapsedHeight = await disclosure.evaluate(element => element.getBoundingClientRect().height);
+  await expect(summary).toHaveAttribute("aria-expanded", "false");
+  const collapsedHeight = await queue.evaluate(element => element.getBoundingClientRect().height);
   expect(collapsedHeight).toBeLessThan(openHeight);
-  expect(collapsedHeight).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
-  await expect(summary).toContainText("Needs attention");
+  expect(await summary.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(testInfo.project.use.hasTouch ? MIN_TOUCH_TARGET : 32);
+  await expect(summary).toContainText("needs attention");
   await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeHidden();
   await summary.focus();
   await page.keyboard.press("Enter");
-  await expect(disclosure).toHaveAttribute("open", "");
+  await expect(summary).toHaveAttribute("aria-expanded", "true");
   await expect(queue.getByRole("button", {name: "Retry as new message"})).toBeVisible();
 });
 
@@ -6092,17 +6090,18 @@ test("assistant live guidance exposes interruption as stop and Core queue priori
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByText("Working on the original request.")).toBeVisible();
 
-  const activeComposer = page.getByPlaceholder("Queue a follow-up or send it now…");
+  const activeComposer = page.getByPlaceholder(/^Queue a follow-up, or (⌘↵|Ctrl\+↵) to send it now…$/);
   await activeComposer.fill("Keep this ordinary follow-up queued.");
   await activeComposer.press("Enter");
   await expect(page.getByRole("region", {name: "Core follow-up queue"})).toContainText("Keep this ordinary follow-up queued.");
   await expect(activeComposer).toHaveValue("");
   await activeComposer.fill("Handle the urgent direction instead.");
   await expect(page.getByRole("button", { name: "Queue follow-up message" })).toBeVisible();
-  await page.getByRole("button", { name: "Stop and send" }).click();
+  await page.getByRole("button", { name: "Send now" }).click();
 
   await expect.poll(() => stopped).toBe(true);
-  await expect.poll(() => durable.actions.at(-1)).toBe("resume");
+  // One Core write puts the message first and keeps the queue moving; no pause/resume dance.
+  expect(durable.actions).toEqual(["enqueue", "enqueue", "interrupt"]);
   expect(durable.queue.items.map(item => item.request.messages[0].content)).toEqual(["Handle the urgent direction instead.", "Keep this ordinary follow-up queued."]);
   expect(durable.queue.paused).toBe(false);
   expect(await page.evaluate(() => (globalThis as typeof globalThis & {__grokSendNowRequests?: unknown[]}).__grokSendNowRequests?.length)).toBe(1);

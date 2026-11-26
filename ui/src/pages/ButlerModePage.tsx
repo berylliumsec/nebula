@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, PanelLeft, PanelRight, Pause, Play, Plus, Search, SlidersHorizontal, Workflow, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, ListTodo, MoreHorizontal, PanelLeft, PanelRight, Pause, Play, Plus, Search, SlidersHorizontal, Workflow, Send, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { butlerCaseStage } from "../butlerStage";
 import { chatStageName } from "./workStages";
@@ -22,6 +22,9 @@ import { ButlerProjectPicker } from "./ButlerProjectPicker";
 import styles from "./ButlerModePage.module.css";
 import { ButlerMarkdown } from "../components/ButlerMarkdown";
 import { useButlerColumns } from "./useButlerColumns";
+import { useChatQueue } from "./useChatQueue";
+import { QueuedMessages } from "../components/QueuedMessages";
+import { isSendNowShortcut, sendNowShortcutLabel } from "../components/composerShortcuts";
 // Already in the main bundle with the Butler panel.
 import { MicrophoneIcon } from "../components/NebulaVoice";
 import { ButlerOversight } from "../components/ButlerOversight";
@@ -214,6 +217,9 @@ export function ButlerModePage() {
   const streams = useRef(new Map<string, AbortController>());
   const previousThreadState = useRef(new Map<string, string>());
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // The open thread's follow-ups: replies typed while Butler answers it. Core
+  // sends them in order, even after this page closes.
+  const threadQueue = useChatQueue(api, openThreadId && typeof api?.requestIfChanged === "function" ? openThreadId : "");
   const [clock, setClock] = useState(() => Date.now());
 
   useEffect(() => { const timer = window.setTimeout(() => setQuery(search), 300); return () => window.clearTimeout(timer); }, [search]);
@@ -303,6 +309,7 @@ export function ButlerModePage() {
     if (!api || !openThreadId || !openThreadWorking) return;
     const sessionId = openThreadId;
     const controller = new AbortController();
+    let seenTurn: string | undefined;
     startVisiblePoll({
       intervalMs: 3000,
       maxIntervalMs: 15_000,
@@ -311,6 +318,10 @@ export function ButlerModePage() {
         if (streams.current.has(sessionId)) return "idle";
         try {
           const turn = await api.getPendingChatTurn(sessionId, signal);
+          // Core started another response, such as a queued reply: show the
+          // message it answers.
+          if (turn && seenTurn !== undefined && turn.id !== seenTurn) void loadMessages(sessionId);
+          if (turn) seenTurn = turn.id;
           setActivity((current) => {
             if (!turn) { if (!current[sessionId]) return current; const next = { ...current }; delete next[sessionId]; return next; }
             return { ...current, [sessionId]: activityFromPendingTurn(turn) };
@@ -324,7 +335,22 @@ export function ButlerModePage() {
       },
     });
     return () => controller.abort();
-  }, [api, openThreadId, openThreadWorking]);
+  }, [api, openThreadId, openThreadWorking, loadMessages]);
+
+  // Core moved one of the open thread's queued replies (sent it, or settled
+  // it): read the thread again. A quick answer can start and finish between
+  // two reads of the thread list, so its state alone may never change.
+  const queueSignature = threadQueue.queue?.items.map((item) => `${item.id}:${item.status}:${item.turn_id ?? ""}`).join("|") ?? "";
+  const seenQueue = useRef({ sessionId: "", signature: "" });
+  useEffect(() => {
+    if (!openThreadId || !threadQueue.queue) return;
+    const seen = seenQueue.current;
+    seenQueue.current = { sessionId: openThreadId, signature: queueSignature };
+    if (seen.sessionId !== openThreadId || seen.signature === queueSignature || streams.current.has(openThreadId)) return;
+    void loadMessages(openThreadId);
+    threadsEtag.current = undefined;
+    threadsPoll.current?.poke();
+  }, [openThreadId, queueSignature, threadQueue.queue, loadMessages]);
 
   // A thread Core finished (on this device or another) shows its saved answer.
   useEffect(() => {
@@ -891,14 +917,56 @@ export function ButlerModePage() {
     }
   };
 
-  const send = async (event?: FormEvent) => {
+  /**
+   * A reply to a thread Butler is still answering waits in Core's queue for
+   * that thread. Send now puts it first and stops the current answer; Core
+   * then sends it, even if this page has closed.
+   */
+  /** The runtime Butler answers a conversation with, from its saved settings. */
+  const readThreadRuntime = async (sessionId: string | undefined) => {
+    const config = sessionId && api ? (await api.getChatAssistantConfig(sessionId)).settings : undefined;
+    return butlerThreadRuntime(config, providers, harnesses);
+  };
+
+  const queueReply = async (thread: ButlerThread, prompt: string, interrupt: boolean) => {
+    if (!api) return;
+    setStarting(true);
+    const sentAbout = about;
+    const sentDrafts = [...butlerDrafts];
+    setDraft("");
+    setAbout(undefined);
+    const restore = (message: string) => {
+      setComposerError(message);
+      setDraft((typed) => typed.trim() ? `${prompt}\n\n${typed}` : prompt);
+      setAbout((current) => current ?? sentAbout);
+    };
+    try {
+      // A follow-up must match the thread's own runtime, so read the thread's settings.
+      const runtime = await readThreadRuntime(thread.sessionId);
+      if (!runtime.ok) { restore(runtime.error); return; }
+      const content = withSelectedContext(butlerQuestionAbout(sentAbout?.project.id === thread.project.id ? sentAbout : undefined, prompt), sentDrafts);
+      if (!await threadQueue.enqueue(butlerThreadRequest(thread.project.id, thread.sessionId, runtime, harnesses, content), { interrupt })) {
+        restore("Your reply was not queued. It is back in the box; retry when Core answers.");
+        return;
+      }
+      if (sentDrafts.length) drafts?.consumeButlerDrafts(sentDrafts);
+      if (interrupt) await stopOpenThread();
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.butler_mode.reply_queue_failed", "Butler mode could not queue a reply.", caught, "butler_mode");
+      restore(`${caught instanceof Error ? caught.message : "Core could not queue this reply."} Your message is back in the box.`);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const send = async (event?: FormEvent, interrupt = false) => {
     event?.preventDefault();
     const prompt = draft.trim();
     if (!api || !prompt || starting) return;
     setComposerError("");
     const replyThread = target === "reply" ? openThreadSummary : undefined;
     if (target === "reply" && !replyThread) { setComposerError("Choose a thread to reply to, or start a new thread."); return; }
-    if (replyThread && (replyThread.state !== "idle" || streams.current.has(replyThread.sessionId))) { setComposerError("Butler is still answering this thread. Start a new thread to ask something else now."); return; }
+    if (replyThread && (replyThread.state !== "idle" || streams.current.has(replyThread.sessionId) || (live[replyThread.sessionId] && !live[replyThread.sessionId].error))) { await queueReply(replyThread, prompt, interrupt); return; }
     const projectId = replyThread?.project.id ?? newThreadProject ?? engagement?.id;
     if (!projectId) { setComposerError("Choose the project Butler should work in."); return; }
     setStarting(true);
@@ -917,8 +985,7 @@ export function ButlerModePage() {
     };
     try {
       const current = await api.getControlAssistantSession(projectId);
-      const config = current ? (await api.getChatAssistantConfig(current.id)).settings : undefined;
-      const runtime = butlerThreadRuntime(config, providers, harnesses);
+      const runtime = await readThreadRuntime(current?.id);
       if (!runtime.ok) { restore(runtime.error); return; }
       const sentDrafts = [...butlerDrafts];
       // The quoted chat goes with the question whether it starts a thread or replies in one.
@@ -946,6 +1013,7 @@ export function ButlerModePage() {
   };
 
   const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isSendNowShortcut(event)) { event.preventDefault(); void send(undefined, replyQueues); return; }
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
   };
 
@@ -1117,9 +1185,11 @@ export function ButlerModePage() {
 
   const openLive = openThreadId ? live[openThreadId] : undefined;
   const openActivity = openThreadId ? activity[openThreadId] : undefined;
-  // Replying to a thread Butler is still answering: the send button stops it.
+  // Replying to a thread Butler is still answering: with nothing typed the
+  // button stops it; a typed reply queues, or Send now interrupts.
   const openAnswering = Boolean(openThreadSummary && (openThreadSummary.state === "working" || streams.current.has(openThreadSummary.sessionId) || (openLive && !openLive.error)));
-  const showStop = target === "reply" && openAnswering;
+  const replyQueues = target === "reply" && openAnswering;
+  const showStop = replyQueues && !draft.trim();
   const stopOpenThread = async () => {
     if (!api || !openThreadSummary || stopping) return;
     const sessionId = openThreadSummary.sessionId;
@@ -1199,11 +1269,14 @@ export function ButlerModePage() {
         <span className={styles.muted}>Sent with your next message</span>
       </div>}
       {about && <div className={styles.about}><span className={styles.muted}>About</span><span className={styles.chip}><i className={styles.dot} data-state={about.state} aria-hidden="true" />{about.title}<button type="button" className={styles.chipClose} aria-label={`Stop asking about ${about.title}`} title="Remove" onClick={() => setAbout(undefined)}><X size={12} aria-hidden="true" /></button></span></div>}
+      {openThreadId && <QueuedMessages queue={threadQueue} label="Thread queue" sentWhen="when Butler finishes this answer" className={styles.threadQueue} interrupts={openAnswering} onSendNow={(item) => void (async () => { if (await threadQueue.mutate({ action: "interrupt", item_id: item.id }) && openAnswering) await stopOpenThread(); })()} />}
       {composerError && <div className={styles.error} role="alert">{composerError}</div>}
       <div className={styles.inputRow}>
-        <textarea ref={composerRef} rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} aria-label="Message Butler" placeholder={target === "reply" && openThreadSummary ? "Reply in this thread" : "Ask Butler anything — each question runs as its own thread"} />
+        <textarea ref={composerRef} rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} aria-label="Message Butler" placeholder={replyQueues ? `Queue a reply, or ${sendNowShortcutLabel()} to send it now` : target === "reply" && openThreadSummary ? "Reply in this thread" : "Ask Butler anything — each question runs as its own thread"} />
+        {replyQueues && draft.trim() && <button type="button" className={styles.sendNow} aria-label="Send now" aria-keyshortcuts={sendNowShortcutLabel() === "⌘↵" ? "Meta+Enter" : "Control+Enter"} title={`Stop Butler's answer and send this now (${sendNowShortcutLabel()})`} disabled={starting || stopping || !api} onClick={() => void send(undefined, true)}><Send size={14} aria-hidden="true" /><span>Send now</span></button>}
         {showStop
           ? <button type="button" className={`${styles.send} ${styles.stop}`} aria-label="Stop response" title="Stop Butler's response in this thread" disabled={stopping || !api} onClick={() => void stopOpenThread()}><Square size={14} aria-hidden="true" /></button>
+          : replyQueues ? <button type="submit" className={styles.send} aria-label="Queue reply" title="Send after Butler's current answer (↵)" disabled={!draft.trim() || starting || !api}><ListTodo size={16} aria-hidden="true" /></button>
           : <button type="submit" className={styles.send} aria-label={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} title={target === "reply" && openThreadSummary ? "Send reply" : "Start thread"} disabled={!draft.trim() || starting || !api}><ArrowUp size={16} aria-hidden="true" /></button>}
       </div>
       <div className={styles.targets}>

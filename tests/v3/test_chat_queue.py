@@ -497,7 +497,16 @@ async def test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_runnin
                 await asyncio.sleep(0.01)
         else:
             raise AssertionError("the reclaimed turn never settled")
-        await service.step((await service.get("s")))
+        # Core's own queue loop (started above) may settle the item before
+        # this step does; a step from a stale read then loses the race.
+        for _ in range(100):
+            settled = await service.get("s")
+            if settled.items[0]["status"] != "sending":
+                break
+            try:
+                await service.step(settled)
+            except ConflictError:
+                await asyncio.sleep(0.01)
         settled = await service.get("s")
         assert settled.items[0]["status"] == "complete"
         assert not settled.paused
@@ -945,3 +954,167 @@ async def test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching(
 
 
 pytestmark = pytest.mark.anyio
+
+
+async def _settle(service, done):
+    for _ in range(100):
+        await service.step((await service.get("s")))
+        if done(await service.get("s")):
+            return await service.get("s")
+        await asyncio.sleep(0.01)
+    return await service.get("s")
+
+
+async def test_interrupting_follow_up_runs_next_after_the_stopped_response(tmp_path):
+    store, service, request = await setup_queue(tmp_path)
+
+    async def run():
+        queue = await enqueue(service, request, key="later")
+        running = await store.create(
+            ChatTurn(
+                engagement_id="p",
+                session_id="s",
+                model="model-a",
+                provider_profile_id="provider-a",
+                status="routing",
+            )
+        )
+        queue = await enqueue(service, request, queue.revision, "now", interrupt=True)
+        assert [item["key"] for item in queue.items] == ["now", "later"]
+        assert not queue.paused and queue.resume_after_turn_id == running.id
+        # Nothing is sent while the stopped response is still ending.
+        await service.step(queue)
+        assert (await store.count(ChatTurn)) == 1
+        (
+            await store.update(
+                ChatTurn,
+                running.id,
+                {"status": "cancelled"},
+                expected_revision=running.revision,
+            )
+        )
+        queue = await _settle(
+            service, lambda q: q.items and q.items[0]["status"] == "complete"
+        )
+        assert queue.items[0]["key"] == "now" and queue.items[0]["status"] == "complete"
+        assert not queue.paused
+        await service.chat.shutdown()
+
+    (await run())
+
+
+async def test_stopping_a_queued_response_to_send_now_keeps_the_queue_moving(
+    tmp_path,
+):
+    store, service, request = await setup_queue(tmp_path)
+
+    async def run():
+        queue = await enqueue(service, request, key="sending")
+        running = await store.create(
+            ChatTurn(
+                engagement_id="p",
+                session_id="s",
+                model="model-a",
+                provider_profile_id="provider-a",
+                status="routing",
+            )
+        )
+        items = [dict(item) for item in queue.items]
+        items[0].update(status="sending", turn_id=running.id)
+        queue = await store.update(
+            ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+        )
+        queue = await enqueue(service, request, queue.revision, "now", interrupt=True)
+        (
+            await store.update(
+                ChatTurn,
+                running.id,
+                {"status": "cancelled"},
+                expected_revision=running.revision,
+            )
+        )
+        await service.step((await service.get("s")))
+        queue = await service.get("s")
+        assert not queue.paused
+        assert {item["key"]: item["status"] for item in queue.items}["sending"] == (
+            "cancelled"
+        )
+        queue = await _settle(
+            service,
+            lambda q: any(
+                item["key"] == "now" and item["status"] == "complete"
+                for item in q.items
+            ),
+        )
+        assert any(
+            item["key"] == "now" and item["status"] == "complete"
+            for item in queue.items
+        ), queue.items
+        await service.chat.shutdown()
+
+    (await run())
+
+
+async def test_ordinary_stop_still_holds_the_queue_for_review(tmp_path):
+    store, service, request = await setup_queue(tmp_path)
+    queue = await enqueue(service, request, key="sending")
+    running = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            model="model-a",
+            provider_profile_id="provider-a",
+            status="routing",
+        )
+    )
+    queue = await enqueue(service, request, queue.revision, "next")
+    items = [dict(item) for item in queue.items]
+    items[0].update(status="sending", turn_id=running.id)
+    queue = await store.update(
+        ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+    )
+    (
+        await store.update(
+            ChatTurn,
+            running.id,
+            {"status": "cancelled"},
+            expected_revision=running.revision,
+        )
+    )
+    await service.step(queue)
+    assert (await service.get("s")).paused
+
+
+async def test_send_now_moves_a_waiting_follow_up_first_and_resumes(tmp_path):
+    store, service, request = await setup_queue(tmp_path)
+    queue = await enqueue(service, request, key="first", paused=True)
+    queue = await enqueue(service, request, queue.revision, "second")
+    running = await store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            model="model-a",
+            provider_profile_id="provider-a",
+            status="routing",
+        )
+    )
+    second = queue.items[1]["id"]
+    queue = await service.write(
+        "s",
+        QueueWrite(
+            action="interrupt", expected_revision=queue.revision, item_id=second
+        ),
+    )
+    assert [item["key"] for item in queue.items] == ["second", "first"]
+    assert not queue.paused and queue.resume_after_turn_id == running.id
+    with pytest.raises(ConflictError):
+        (
+            await service.write(
+                "s",
+                QueueWrite(
+                    action="interrupt",
+                    expected_revision=queue.revision,
+                    item_id="missing",
+                ),
+            )
+        )

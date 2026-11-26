@@ -28,7 +28,7 @@
     {"name":"butler-records","patterns":["src/nebula/v3/butler_records.py"],"areas":["butler-records"]},
     {"name":"butler-notes","patterns":["src/nebula/v3/butler_notes.py","ui/src/components/butlerNoteAction.ts","ui/tests/butler-notes.spec.ts"],"areas":["butler-notes"]},
     {"name":"butler-subagents","patterns":["ui/src/components/ButlerSubagentActivity.tsx","ui/tests/butler-subagents.spec.ts","src/nebula/v3/chat_assistant_config.py","src/nebula/v3/butler_sessions.py"],"areas":["butler-subagents"]},
-    {"name":"butler-queue","patterns":["ui/src/components/ButlerQueue.tsx","ui/src/pages/useChatQueue.ts","ui/tests/butler-queue.spec.ts","src/nebula/v3/chat_queue.py"],"areas":["butler-queue"]},
+    {"name":"butler-queue","patterns":["ui/src/components/ButlerQueue.tsx","ui/src/components/QueuedMessages.tsx","ui/src/components/QueuedMessages.module.css","ui/src/components/composerShortcuts.ts","ui/src/pages/useChatQueue.ts","ui/tests/butler-queue.spec.ts","src/nebula/v3/chat_queue.py","ui/src/pages/ButlerModePage.tsx"],"areas":["butler-queue","butler-send-now"]},
     {"name":"butler-mode","patterns":["ui/src/pages/ButlerModePage*","ui/src/pages/ButlerChatPopup*","ui/src/components/ButlerMarkdown*","ui/src/pages/butlerThreads.ts","ui/src/api/butlerBoard.ts","ui/tests/butler-mode.spec.ts","src/nebula/v3/butler_board.py","src/nebula/v3/butler_sessions.py"],"areas":["butler-mode"]},
     {"name":"manual-note-review","patterns":["ui/src/components/ExecutionInsightDialog.tsx","ui/src/api/noteTypes.ts","ui/tests/fixtures/manual_note_review_core.py"],"areas":["manual-note-review"]},
     {"name":"butler-integration-profiles","patterns":["src/nebula/v3/settings_assistant_api.py"],"areas":["butler-integration-profiles"]},
@@ -416,6 +416,16 @@
       {"area":"butler-queue","project":"assistant-real-webkit-320","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Butler queues messages while it works and follows them on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-queue","project":"assistant-real-webkit-390","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Butler queues messages while it works and follows them on production LAN Core","runtime":"real-core","shard":"1/1"},
       {"area":"butler-queue","project":"assistant-real-webkit-430","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Butler queues messages while it works and follows them on production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "butler-send-now": [
+      {"area":"butler-send-now","project":"assistant-real-desktop","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-compact","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-chromium-320","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-chromium-390","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-chromium-430","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-webkit-320","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-webkit-390","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"},
+      {"area":"butler-send-now","project":"assistant-real-webkit-430","test_match":"tests/butler-queue.spec.ts","grep":"assistant upgrade Send now interrupts Butler in a Butler mode thread on production LAN Core","runtime":"real-core","shard":"1/1"}
     ],
     "butler-mode": [
       {"area":"butler-mode","project":"assistant-real-desktop","test_match":"tests/butler-mode.spec.ts","grep":"assistant upgrade Butler mode runs parallel threads beside every project's chats on production LAN Core","runtime":"real-core","shard":"1/1"},
@@ -1521,9 +1531,9 @@
       {"area":"side-chat-panels","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade Chat tools menu creates a tab for every companion","runtime":"mock","shard":"1/1"}
     ],
     "chat-guidance-toolbar": [
-      {"area":"chat-guidance-toolbar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
-      {"area":"chat-guidance-toolbar","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
-      {"area":"chat-guidance-toolbar","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"}
+      {"area":"chat-guidance-toolbar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant live guidance (steers an active Codex turn with advertised steering capabilities|exposes interruption as stop and Core queue priority)","runtime":"mock","shard":"1/1"},
+      {"area":"chat-guidance-toolbar","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant live guidance (steers an active Codex turn with advertised steering capabilities|exposes interruption as stop and Core queue priority)","runtime":"mock","shard":"1/1"},
+      {"area":"chat-guidance-toolbar","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant live guidance (steers an active Codex turn with advertised steering capabilities|exposes interruption as stop and Core queue priority)","runtime":"mock","shard":"1/1"}
     ],
     "side-chat-active": [
       {"area":"side-chat-active","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat opens during a running Core turn with its saved question","runtime":"real-core","shard":"1/1"},
