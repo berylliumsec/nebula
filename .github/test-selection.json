@@ -1,37 +1,27 @@
 {
-  "change_digest": "6591de2cd159cf8edd9fd77162cb2be323d85d0cac6c2b43be233289a1657338",
-  "reviewed_by": "Claude: saved passwords usable by any tool",
-  "reason": "Saved passwords are no longer scoped to MCP servers. ToolBroker.execute substitutes {{credential:<name>}} into a copy of the invocation for any plugin (MCP, SSH, browser, analysis), marks the values active for diagnostics, and scrubs results, artifact files, cancellation partials and exception text before the ledger/evidence see them. AutomationBroker run_command rewrites placeholders to ${NEBULA_CREDENTIAL_<NAME>} environment references (stored command keeps the placeholder) and passes values only in the process environment; process_io substitutes only the bytes written. Captured stdout/stderr are scrubbed in poll results and in stored artifacts (a scrubbed copy, so live capture offsets hold). credentials.list joins notes.write for every chat, Butler and harness turn with tools. API/UI drop the server allow list (entity field kept, unused).",
-  "exclusions": "Failures identical on origin/main and not selected: test_automation_runtime.py host/search-hook cases (4), test_chat.py restart-recovery capacity cases (2), test_harnesses.py gateway catalog refresh (2), test_universal_agent_tools.py (17). Real-Core journey (command-only chat lists credentials; run_command receives the value via env while the stored stdout artifact shows the placeholder; MCP typing; unknown name refused; no plaintext in the data root) was run on a disposable LAN Core with the host memory runner.",
+  "change_digest": "596c4921d0a1162a1f2c32f3e55a33b575752cc8679fbf74f0721355f48959dc",
+  "reviewed_by": "Claude: Ask Nebula popup selection actions",
+  "reason": "AskNebulaPopup wrapped its whole body in data-selection-actions-disabled, so SelectionActionsProvider dropped every selection inside the popup. The attribute now covers only the header and composer, and the body names its selections as an Ask Nebula conversation. AskNebulaPopup.test.tsx covers answer selection -> toolbar -> Ask draft and composer suppression; the native-scope-status Playwright test now selects popup context text and checks the toolbar is visible and in the viewport.",
+  "exclusions": "Only the popup markup changed; SelectionActionsProvider, placement and WorkbenchDraftContext are unchanged (their suites passed locally, 64 tests, not selected). No Core, API or settings change, so no Python tests and no settings-assistant update.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 262,
-    "frontend": 43,
+    "python": 0,
+    "frontend": 20,
     "native": 0,
-    "playwright": 0
+    "playwright": 1
   },
-  "python": [
-    "tests/v3/test_saved_credentials.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_mcp_inline_output.py",
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_settings_assistant_api.py",
-    "tests/v3/test_diagnostics.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_turn_tool_bookkeeping.py",
-    "tests/v3/test_structured_results.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/components/SavedCredentialsSettings.test.tsx"
+    "ui/src/components/AskNebulaPopup.test.tsx"
   ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:native-scope-status"
+  ],
   "checks": [
     "frontend-audit"
   ]
