@@ -43,12 +43,19 @@ from .model_refusal import (
     settle_harness_model_refusal,
 )
 from .harness_commands import (
+    claude_commands,
+    claude_usage_reply,
     compatibility_commands,
     normalize_commands,
     parse_harness_command,
     usage_reply,
 )
 from .harness_quota import HarnessQuotaSnapshot, claude_quota_snapshot
+from .harness_quota_observations import (
+    TURN_REPORTED_SOURCES,
+    record_quota_observation,
+    reported_quota,
+)
 from .settings_assistant_api import SettingsAssistantApi
 
 import asyncio
@@ -7602,6 +7609,14 @@ def _connection_commands(connection: HarnessConnection) -> list[dict[str, str]]:
     return list(commands.values())
 
 
+def _profile_commands(kind: HarnessKind) -> list[dict[str, str]]:
+    if kind in {HarnessKind.GROK_ACP, HarnessKind.CODEX_APP_SERVER}:
+        return compatibility_commands()
+    if kind == HarnessKind.CLAUDE_AGENT_SDK:
+        return claude_commands()
+    return []
+
+
 async def _run_harness_command(
     connection: CodexAppServerConnection | GrokAcpConnection,
     command: tuple[str, str],
@@ -15086,10 +15101,23 @@ class HarnessRuntimeService:
                 command = (
                     _chat_harness_command(turn)
                     if isinstance(
-                        connection, (CodexAppServerConnection, GrokAcpConnection)
+                        connection,
+                        (
+                            CodexAppServerConnection,
+                            GrokAcpConnection,
+                            ClaudeAgentSdkConnection,
+                        ),
                     )
                     else None
                 )
+                if (
+                    command
+                    and isinstance(connection, ClaudeAgentSdkConnection)
+                    and command[0][1:]
+                    not in {item["name"] for item in claude_commands()}
+                ):
+                    # Claude's own slash text keeps going to Claude.
+                    command = None
                 if command and (
                     turn_options.get("images") or turn_options.get("skill")
                 ):
@@ -15097,7 +15125,9 @@ class HarnessRuntimeService:
                         "Send harness commands without images or a selected skill."
                     )
                 turn_events = (
-                    _run_harness_command(
+                    self._claude_command(turn, command)
+                    if command and isinstance(connection, ClaudeAgentSdkConnection)
+                    else _run_harness_command(
                         connection,
                         command,
                         model=session.model,
@@ -17462,12 +17492,11 @@ class HarnessRuntimeService:
                 _connection_commands(connection)
                 if isinstance(connection, (GrokAcpConnection, CodexAppServerConnection))
                 and self.connection_state(session.id) != "disconnected"
-                else compatibility_commands()
-                if (
-                    await self.store.get(HarnessProfile, session.harness_profile_id)
-                ).kind
-                in {HarnessKind.GROK_ACP, HarnessKind.CODEX_APP_SERVER}
-                else []
+                else _profile_commands(
+                    (
+                        await self.store.get(HarnessProfile, session.harness_profile_id)
+                    ).kind
+                )
             ),
             commands_discovered=(
                 isinstance(connection, GrokAcpConnection)
@@ -22251,6 +22280,27 @@ class HarnessRuntimeService:
                 payload,
             )
         self._wake_activity_followers(turn.id)
+        if (
+            event.quota_snapshot is not None
+            and event.quota_snapshot.source in TURN_REPORTED_SOURCES
+        ):
+            try:
+                # Claude reports plan windows only inside turns; keep the
+                # newest for /usage and Usage and credits.
+                await record_quota_observation(
+                    self.store,
+                    engagement_id=turn.engagement_id,
+                    profile_id=session.harness_profile_id,
+                    snapshot=event.quota_snapshot,
+                )
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.quota_observation_record_failed",
+                    "A reported harness plan window could not be saved for usage reads.",
+                    exc,
+                    stage="quota-observation",
+                )
         try:
             if event.quota_snapshot is not None and self._quota_snapshot_observer:
                 await call_async(
@@ -22381,6 +22431,59 @@ class HarnessRuntimeService:
             events=events,
             next_sequence=next_sequence,
         )
+
+    async def _claude_command(
+        self, turn: HarnessTurn, command: tuple[str, str]
+    ) -> AsyncIterator[HarnessEvent]:
+        """Answer a Nebula command in a Claude chat without a model turn."""
+
+        name, argument = command
+        if name != "/usage":
+            raise HarnessConfigurationError(
+                f"{name} is not available in this Claude session. Retry with /usage."
+            )
+        if argument:
+            raise HarnessConfigurationError(
+                "Use /usage without arguments to read this conversation's usage."
+            )
+        session = await self.store.get(HarnessSession, turn.harness_session_id)
+        # A conversation can span several vendor sessions (a model switch
+        # opens a new one), so count every turn of the Nebula conversation.
+        filters: dict[str, str] = (
+            {"chat_session_id": turn.chat_session_id}
+            if turn.chat_session_id
+            else {"harness_session_id": turn.harness_session_id}
+        )
+        input_tokens = output_tokens = total_tokens = turns = 0
+        async for item in self.store.iter_readable_entities(
+            HarnessTurn, filters, engagement_id=turn.engagement_id
+        ):
+            if item.id == turn.id or not item.usage.total_tokens:
+                continue
+            input_tokens += item.usage.input_tokens
+            output_tokens += item.usage.output_tokens
+            total_tokens += item.usage.total_tokens
+            turns += 1
+        quota = await reported_quota(
+            self.store, session.harness_profile_id, engagement_id=turn.engagement_id
+        )
+        reply = claude_usage_reply(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            turns=turns,
+            windows=quota.snapshots,
+            reset_windows=quota.reset_windows,
+        )
+        vendor = HarnessKind.CLAUDE_AGENT_SDK
+        # A usage reply is transcript text, never billable turn usage.
+        yield HarnessEvent(
+            type="started",
+            vendor=vendor,
+            external_session_id=session.external_session_id,
+        )
+        yield HarnessEvent(type="message_delta", vendor=vendor, delta=reply)
+        yield HarnessEvent(type="completed", vendor=vendor, message=reply)
 
     async def _turn_activity_state(self, turn: HarnessTurn) -> _TurnActivityState:
         """Return the turn's latest mode, plan and goal, reading only new rows.

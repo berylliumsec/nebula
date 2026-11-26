@@ -1,32 +1,49 @@
 {
-  "change_digest": "73ba1089c421ead377aae21edd6bc625bfae46e8f496120e39e88918bb70cd27",
-  "reviewed_by": "Claude: Butler mode Markdown tables",
-  "reason": "Butler mode's thread transcript, its live answer and the chat pop-up passed answers to bare ReactMarkdown, so GFM tables used browser defaults (centred headers, no borders) and inherited overflow-wrap:anywhere, which collapsed columns and split short values. A shared ButlerMarkdown component wraps each table in a focusable, bordered scroll region with start-aligned headers, row dividers, normal word wrapping, a minimum Item column and minimum short columns, plus code/pre/list styling. The butler-mode Playwright area now also covers ButlerChatPopup and ButlerMarkdown.",
-  "exclusions": "No Core change, so no Python tests. Other Butler surfaces (side panel NebulaControlAssistant, Ask Nebula) already style tables or are untouched. Playwright runs the butler-mode real-Core journey on desktop, compact, Chromium 390 and WebKit 390; the 320/430 profiles add no table-specific geometry beyond 390.",
+  "change_digest": "8672b687265accb2274e19039f61af69a1276c53eac57d59eb290bbcc876030b",
+  "reviewed_by": "Claude: Claude /usage and Claude plan limits in Usage and credits",
+  "reason": "Claude reports plan utilization only in an in-turn RateLimitEvent, so Core now keeps the newest report per project/profile/window (new harness_quota_observations entity, runtime-compatibility digest updated; entity-field-additions already declared). Runtime usage reads those reports for Claude profiles; a Claude chat's /usage is answered by Nebula (conversation token totals + last reported windows) without a model turn while other slash text still reaches Claude. UI: Claude usage card copy, /usage in the Claude composer picker, settings catalog keywords, docs and product-help index. Python covers storage, ordering, reset expiry, the runtime hook, the command, the usage API, registries and product help; frontend covers the card and assistant discovery; Playwright covers the command picker on 8 profiles and the mock usage page. Also fixes the python (3.12) type-check failing on main: ToolBroker.execute rebound a name an earlier except clause deletes (renamed to scrubbed); test_saved_credentials.py (which covers that scrubbed-exception handler) and test_tool_failures.py are selected for it.",
+  "exclusions": "Failures identical on origin/main and not selected: tests/v3/test_tolerant_entity_readers.py::test_a_new_entity_field_needs_a_reviewed_addition_flag (manifest already declares the flag) and tests/v3/test_product_knowledge.py::test_product_search_finds_headless_core_and_paired_butler_cli; the rest of those two files is unrelated. runtime-usage real-Core Playwright entries are not selected; the same journey was run on a disposable supervisor Core on a LAN address with synthetic profiles (desktop Chromium + iPhone 13 WebKit). /usage through a live Claude SDK connection was not exercised (needs a signed-in Claude account); the handler is covered at the runtime level. No native code changed.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 35,
+    "python": 158,
+    "frontend": 54,
     "native": 0,
-    "playwright": 4
+    "playwright": 32
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_claude_usage.py",
+    "tests/v3/test_harness_commands.py",
+    "tests/v3/test_harness_quota.py",
+    "tests/v3/test_runtime_usage.py",
+    "tests/v3/test_butler_harness_resources.py",
+    "tests/v3/test_domain.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_guidance_syncs_to_chroma_by_source_digest",
+    "tests/v3/test_product_knowledge.py::test_product_help_explains_claude_usage_and_plan_limits",
+    "tests/v3/test_saved_credentials.py",
+    "tests/v3/test_tool_failures.py"
+  ],
   "frontend": [
-    "ui/src/components/ButlerMarkdown.test.tsx",
-    "ui/src/pages/ButlerModePage.send.test.tsx",
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/pages/ButlerChatPopup.test.tsx"
+    "ui/src/components/RuntimeUsagePanel.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/pages/SettingsPage.runtime.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "butler-mode/assistant-real-desktop",
-    "butler-mode/assistant-real-compact",
-    "butler-mode/assistant-real-chromium-390",
-    "butler-mode/assistant-real-webkit-390"
+    "area:harness-commands",
+    "entry:runtime-usage/desktop",
+    "entry:runtime-usage/compact",
+    "entry:runtime-usage/mobile-chromium",
+    "entry:runtime-usage/mobile-chromium-small",
+    "entry:runtime-usage/mobile-chromium-wide",
+    "entry:runtime-usage/mobile-webkit",
+    "entry:runtime-usage/mobile-webkit-small",
+    "entry:runtime-usage/mobile-webkit-wide"
   ],
   "checks": [
     "frontend-audit"

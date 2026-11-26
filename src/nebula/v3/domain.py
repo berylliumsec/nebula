@@ -4247,6 +4247,26 @@ class ButlerHarnessQuota(Entity):
     threshold_state: Literal["above", "at_or_below"]
 
 
+class HarnessQuotaObservation(Entity):
+    """Latest plan window a harness reported during one project's turns.
+
+    Claude reports plan utilization only inside a turn, so Core keeps what it
+    last said for ``/usage`` and Usage and credits. One row per project,
+    profile and window; the newest across projects is the account's figure.
+    """
+
+    entity_kind: ClassVar[str] = "harness_quota_observations"
+    engagement_id: str = Field(min_length=1, max_length=200)
+    harness_profile_id: str = Field(min_length=1, max_length=200)
+    window_id: str = Field(min_length=1, max_length=160)
+    window_label: str = Field(min_length=1, max_length=160)
+    source: str = Field(min_length=1, max_length=100)
+    used_percent: float = Field(ge=0, le=100)
+    remaining_percent: float = Field(ge=0, le=100)
+    observed_at: datetime
+    resets_at: datetime | None = None
+
+
 class ChatGoalUsageCharge(Entity):
     """What one child turn has debited to its parent goal so far.
 
@@ -5528,6 +5548,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerAgentReport,
     ButlerAccountCredit,
     ButlerHarnessQuota,
+    HarnessQuotaObservation,
     ChatGoalUsageCharge,
     ChatBookmark,
     ChatWorkingNotes,

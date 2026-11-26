@@ -22,6 +22,7 @@ from .domain import (
     ChatTurn,
     ContextOwnerType,
     ContextSnapshot,
+    HarnessKind,
     HarnessProfile,
     HarnessSession,
     HarnessTurn,
@@ -34,6 +35,7 @@ from .harness_quota import (
     codex_quota_snapshots,
     grok_quota_snapshots,
 )
+from .harness_quota_observations import ReportedQuota, reported_quota
 from .storage import NebulaStore
 from .memory_policy import MemoryEnforcementUnavailable
 from .runtime_coordination import LeaseLost
@@ -322,6 +324,45 @@ def parse_grok_usage(payload: Any) -> VendorUsage:
     )
 
 
+def claude_reported_usage(quota: ReportedQuota) -> VendorUsage:
+    """Claude's last in-turn plan report; the SDK has no on-demand read."""
+
+    reset_note = (
+        f" {quota.reset_windows} window{'s have' if quota.reset_windows != 1 else ' has'}"
+        " reset since."
+        if quota.reset_windows
+        else ""
+    )
+    if not quota.snapshots:
+        return VendorUsage(
+            state="unavailable",
+            source="Claude plan limits",
+            detail=(
+                "Claude reports plan limits only during a turn, when a limit's status "
+                "changes, such as when you near a limit. None is current yet."
+                + reset_note
+            ),
+        )
+    return VendorUsage(
+        state="available",
+        source="Claude plan limits · last reported",
+        detail=(
+            "Last reported by Claude during a turn. Claude does not report between "
+            "turns, so usage since then is not shown." + reset_note
+        ),
+        checked_at=quota.observed_at,
+        windows=[
+            UsageWindow(
+                label=snapshot.window_label,
+                used_percent=round(snapshot.used_percent),
+                resets_at=snapshot.resets_at,
+            )
+            for snapshot in quota.snapshots[:8]
+        ],
+        quota_snapshots=quota.snapshots,
+    )
+
+
 def parse_openrouter_usage(payload: Any) -> VendorUsage:
     data = payload.get("data") if isinstance(payload, dict) else None
     if not isinstance(data, dict):
@@ -410,6 +451,12 @@ class RuntimeUsageService:
         cached = self._cache.get(key)
         if not refresh and cached and time.monotonic() - cached[0] < 120:
             return cached[1]
+        if (
+            isinstance(profile, HarnessProfile)
+            and profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+        ):
+            # Reads saved reports only, so it is never cached or refreshed.
+            return claude_reported_usage(await reported_quota(self.store, profile.id))
         if isinstance(profile, HarnessProfile) and profile.kind.value not in {
             "codex_app_server",
             "grok_acp",

@@ -2278,7 +2278,7 @@
     "area": "harness-commands",
     "project": "desktop",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2286,7 +2286,7 @@
     "area": "harness-commands",
     "project": "compact",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2294,7 +2294,7 @@
     "area": "harness-commands",
     "project": "mobile-chromium-small",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2302,7 +2302,7 @@
     "area": "harness-commands",
     "project": "mobile-chromium-ledger-390",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2310,7 +2310,7 @@
     "area": "harness-commands",
     "project": "mobile-chromium-wide",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2318,7 +2318,7 @@
     "area": "harness-commands",
     "project": "mobile-webkit-small",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2326,7 +2326,7 @@
     "area": "harness-commands",
     "project": "mobile-webkit",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   },
@@ -2334,7 +2334,7 @@
     "area": "harness-commands",
     "project": "mobile-webkit-wide",
     "test_match": "tests/interface.spec.ts",
-    "grep": "stabilization harness commands and thinking",
+    "grep": "stabilization harness commands",
     "runtime": "mock",
     "shard": "1/1"
   }

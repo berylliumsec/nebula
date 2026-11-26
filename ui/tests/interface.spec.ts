@@ -13748,6 +13748,43 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
   });
 }
 
+reloadTest("stabilization harness commands in a Claude chat offer /usage and pass other slash text to Claude", async ({ page }, info) => {
+  const chat = "chat-claude-usage", session = "session-claude-usage";
+  let activityCommands: unknown[] = [];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const json = (value: unknown) => route.fulfill({ json: value });
+    if (path.endsWith("/harnesses")) return json([{ ...entity, id: "harness-claude-usage", name: "Claude", kind: "claude_agent_sdk", connection_mode: "spawn", transport: "stdio", executable: "claude", auth_mode: "existing_session", default_model: "claude-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["claude-model"], checked_at: entity.updated_at, authentication_state: "verified" } }]);
+    if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: chat, engagement_id: "scratch-project", title: "Claude usage", backend: "harness", harness_profile_id: "harness-claude-usage", harness_session_id: session, model: "claude-model", metadata: {} }]);
+    if (path.endsWith(`/chat/sessions/${chat}/messages`)) return json([]);
+    if (path.endsWith(`/chat/sessions/${chat}/pending-turn`)) return json(null);
+    if (path.endsWith(`/harness-sessions/${session}/activity`)) return json({ session_id: session, session_status: "idle", busy: false, live: false, detail: "Ready", commands_discovered: false, commands: activityCommands });
+    await route.fallback();
+  });
+  await openWorkspace(page, `/?view=chat&session=${chat}`, "Workbench");
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  // Before Core reports the session's catalog, the Claude fallback still lists /usage.
+  await composer.fill("/");
+  const usage = page.getByRole("button", { name: "/usage Conversation tokens and Claude plan limits" });
+  await expect(usage).toBeVisible();
+  const box = await usage.boundingBox();
+  expectTouchTarget(box!.height);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  expect((await new AxeBuilder({ page }).include(".harness-command-hints").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath("claude-command-picker.png") });
+  await usage.click();
+  await expect(composer).toHaveValue("/usage ");
+  await expect(composer).toBeFocused();
+  // Claude's own commands are not Nebula's to refuse.
+  await composer.fill("/review");
+  await expect(page.getByLabel("Harness commands")).toHaveCount(0);
+  await expect(page.getByText("Command unavailable")).toHaveCount(0);
+  activityCommands = [{ name: "usage", description: "Conversation tokens and Claude plan limits", hint: "", source: "nebula" }];
+  await page.reload();
+  await composer.fill("/us");
+  await expect(page.getByRole("button", { name: "/usage Conversation tokens and Claude plan limits" })).toBeVisible();
+});
+
 test("stabilization transcript search has a compact field and usable filters", async ({ page }, testInfo) => {
   let requests = 0;
   await page.route("**/chat/projects/*/search?*", async route => {
