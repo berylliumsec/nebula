@@ -164,8 +164,144 @@ async def test_one_global_check_wakes_idle_projects_and_persists_across_restart(
     _write(tmp_path, "New operator instructions.")
     with pytest.raises(ButlerInstructionsError, match="changed"):
         (await agent._global_instructions(case))
+    # The first check is still open, so the due check waits for it.
+    assert not (await restarted.fire_global_periodic_check(anchor, worker_id))
+    (
+        await store.update(
+            ButlerRecoveryCase,
+            case.id,
+            {"status": "cancelled", "finished_at": utc_now()},
+            expected_revision=case.revision,
+        )
+    )
     assert await restarted.fire_global_periodic_check(anchor, worker_id)
     assert len((await store.replay_operation_events(project_stream_id(anchor)))) == 2
+
+
+async def _anchored_project(tmp_path):
+    """One Act project anchoring the Nebula-wide check, with a leased worker."""
+
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Anchor"))
+    provider = await store.create(
+        ProviderProfile(name="Fixture", provider_type="ollama", is_local=True)
+    )
+    policy = await store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(project.id), engagement_id=project.id, authority="act"
+        )
+    )
+    await store.create(
+        ButlerProjectState(
+            id=project_state_id(project.id),
+            engagement_id=project.id,
+            lease_owner="worker-1",
+            lease_expires_at=utc_now() + timedelta(minutes=10),
+        )
+    )
+    await store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Butler",
+            model="fixture-model",
+            provider_profile_id=provider.id,
+            metadata={"control_assistant": True},
+        )
+    )
+    _write(tmp_path)
+    return store, project, policy
+
+
+async def _rewind_clock(store, minutes: int = 6) -> None:
+    state = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    await store.update(
+        ButlerGlobalState,
+        GLOBAL_STATE_ID,
+        {"last_periodic_at": utc_now() - timedelta(minutes=minutes)},
+        expected_revision=state.revision,
+    )
+
+
+async def _set_status(store, case_id: str, status: str) -> None:
+    current = await store.get(ButlerRecoveryCase, case_id)
+    await store.update(
+        ButlerRecoveryCase,
+        case_id,
+        {"status": status},
+        expected_revision=current.revision,
+    )
+
+
+async def test_global_check_does_not_fire_while_the_last_one_is_open(
+    tmp_path, monkeypatch
+):
+    store, project, _ = await _anchored_project(tmp_path)
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert await recovery.fire_global_periodic_check(project.id, "worker-1")
+    assert (await recovery.capture_events(project.id, "worker-1")) == 1
+    (case,) = await store.find_entities(
+        ButlerRecoveryCase, {}, engagement_id=project.id
+    )
+    await _rewind_clock(store)
+    for status in ("observed", "investigating", "verifying"):
+        await _set_status(store, case.id, status)
+        assert not (await recovery.fire_global_periodic_check(project.id, "worker-1"))
+    # Skipping leaves the clock alone, so the check fires once the last one ends.
+    before = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    assert before.last_periodic_at < utc_now() - timedelta(minutes=5)
+    await _set_status(store, case.id, "resolved")
+    assert await recovery.fire_global_periodic_check(project.id, "worker-1")
+
+
+async def test_abandoned_open_check_does_not_hold_the_schedule(tmp_path, monkeypatch):
+    from nebula.v3 import butler_recovery
+
+    store, project, _ = await _anchored_project(tmp_path)
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert await recovery.fire_global_periodic_check(project.id, "worker-1")
+    (await recovery.capture_events(project.id, "worker-1"))
+    (case,) = await store.find_entities(
+        ButlerRecoveryCase, {}, engagement_id=project.id
+    )
+    await _set_status(store, case.id, "investigating")
+    await _rewind_clock(store)
+    assert not (await recovery.fire_global_periodic_check(project.id, "worker-1"))
+    # Every existing case is now older than the cutoff.
+    monkeypatch.setattr(butler_recovery, "STALE_OPEN_CHECK", timedelta(seconds=-60))
+    assert await recovery.fire_global_periodic_check(project.id, "worker-1")
+
+
+async def test_claim_waits_for_the_running_check_but_not_other_cases(tmp_path):
+    store, project, policy = await _anchored_project(tmp_path)
+
+    def make(event: str, signal: str, trigger: str) -> ButlerRecoveryCase:
+        return ButlerRecoveryCase(
+            id=f"case-{event}",
+            engagement_id=project.id,
+            trigger=trigger,
+            signal=signal,
+            source_event_id=event,
+            source_event_sequence=1,
+            authority_revision=policy.revision,
+            summary="Fixture case.",
+        )
+
+    running = await store.create(
+        make("first-check", "butler.global_periodic_check", "periodic")
+    )
+    await _set_status(store, running.id, "investigating")
+    waiting = await store.create(
+        make("second-check", "butler.global_periodic_check", "periodic")
+    )
+    blocked_goal = await store.create(make("goal", "goal.blocked", "immediate"))
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    claimed = await recovery._claim_case(project.id, "worker-1")
+    assert claimed is not None and claimed.id == blocked_goal.id
+    assert (await recovery._claim_case(project.id, "worker-1")) is None
+    assert (await store.get(ButlerRecoveryCase, waiting.id)).status == "observed"
+    await _set_status(store, running.id, "resolved")
+    claimed = await recovery._claim_case(project.id, "worker-1")
+    assert claimed is not None and claimed.id == waiting.id
 
 
 async def test_global_check_uses_saved_butler_harness_effort(tmp_path):
