@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, Pause, Play, Plus, Search, SlidersHorizontal, Workflow, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ChevronDown, ChevronUp, Columns3, Square, ChevronRight, ExternalLink, MoreHorizontal, PanelLeft, PanelRight, Pause, Play, Plus, Search, SlidersHorizontal, Workflow, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { butlerCaseStage } from "../butlerStage";
 import { chatStageName } from "./workStages";
@@ -42,6 +42,20 @@ const GROUPING_KEY = "nebula.butler-mode.grouping";
 // Which board sections are open on this device ("<project or all>:<section>").
 const SECTIONS_KEY = "nebula.butler-mode.sections";
 const STAGE_FILTER_KEY = "nebula.butler-mode.stage-filter";
+// Which desktop side columns the operator hid, leaving the Butler thread on its own.
+const HIDDEN_PANELS_KEY = "nebula.butler-mode.hidden-panels";
+type HiddenPanels = { rail: boolean; board: boolean };
+function parseHiddenPanels(value: string | null): HiddenPanels {
+  try {
+    const parsed = JSON.parse(value ?? "{}") as Partial<HiddenPanels>;
+    return { rail: parsed.rail === true, board: parsed.board === true };
+  } catch {
+    // diagnostic-expected: an unreadable saved layout shows both columns.
+    return { rail: false, board: false };
+  }
+}
+// How far above the newest message the thread may sit before Jump to latest appears.
+const LATEST_SLACK_PX = 80;
 const THREAD_STATE_LABEL = { waiting: "Needs you", working: "Working", idle: "Answered" } as const;
 
 type Section = "board" | "code" | "oversight" | "memory" | "settings";
@@ -99,6 +113,24 @@ export function ButlerModePage() {
   const nativeShell = isNebulaShell();
   const compact = useCompactLayout();
   const columns = useButlerColumns(!compact, styles.columnHandle);
+  const [hidden, setHiddenState] = useState<HiddenPanels>(() => parseHiddenPanels(readStorage(HIDDEN_PANELS_KEY)));
+  const setHidden = useCallback((update: (prior: HiddenPanels) => HiddenPanels) => setHiddenState((prior) => {
+    const next = update(prior);
+    writeStorage(HIDDEN_PANELS_KEY, JSON.stringify(next));
+    return next;
+  }), []);
+  const railHidden = !compact && hidden.rail;
+  const boardHidden = !compact && hidden.board;
+  const messagesRef = useRef<HTMLDivElement | null>(null);
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const measureLatest = useCallback(() => {
+    const element = messagesRef.current;
+    setAwayFromLatest(Boolean(element && element.scrollHeight - element.scrollTop - element.clientHeight > LATEST_SLACK_PX));
+  }, []);
+  const jumpToLatest = () => {
+    const element = messagesRef.current;
+    if (element) element.scrollTo({ top: element.scrollHeight });
+  };
   const [params, setParams] = useSearchParams();
   const openThreadId = params.get("thread") ?? undefined;
   const phoneTab = params.get("tab") === "threads" ? "threads" : "board";
@@ -312,7 +344,7 @@ export function ButlerModePage() {
   const setPhoneTab = (tab: "board" | "threads") => setParams((current) => { const next = new URLSearchParams(current); next.set("tab", tab); if (tab === "board") next.delete("thread"); return next; });
 
   const updateParams = useCallback((change: (next: URLSearchParams) => void) => setParams((current) => { const next = new URLSearchParams(current); change(next); return next; }), [setParams]);
-  const setSection = (value: Section) => { setMoreOpen(false); updateParams((next) => {
+  const setSection = (value: Section) => { setMoreOpen(false); if (value !== "code") setHidden((prior) => prior.board ? { ...prior, board: false } : prior); updateParams((next) => {
     if (value === "board") next.delete("section"); else next.set("section", value);
     next.delete("chat");
     if (value !== "code") next.delete("file");
@@ -379,18 +411,28 @@ export function ButlerModePage() {
   // project's archived chats; Butler mode lists only unarchived threads.
   const [confirmDelete, setConfirmDelete] = useState<string>();
   const [threadAction, setThreadAction] = useState<{ sessionId: string; busy?: "archive" | "delete"; error?: string }>();
+  // Threads ticked in the list for Archive or Delete together.
+  const [threadPicks, setThreadPicks] = useState<Set<string>>(() => new Set());
+  const [bulkBusy, setBulkBusy] = useState<"archive" | "delete">();
+  const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [bulkNote, setBulkNote] = useState<{ text: string; failed: boolean }>();
   useEffect(() => { setConfirmDelete(undefined); setThreadAction(undefined); }, [openThreadId]);
+  // Archives or deletes one thread in Core and drops it from Butler mode; throws when Core refuses.
+  const applyThreadRemoval = async (client: ApiClient, sessionId: string, action: "archive" | "delete") => {
+    if (action === "archive") await client.setChatSessionArchived(sessionId, true);
+    else await client.deleteChatSession(sessionId);
+    setThreads((current) => current.filter((item) => item.sessionId !== sessionId));
+    setMessages((current) => { const next = { ...current }; delete next[sessionId]; return next; });
+    setThreadPicks((current) => { if (!current.has(sessionId)) return current; const next = new Set(current); next.delete(sessionId); return next; });
+    if (openThreadId === sessionId) openThread(undefined);
+  };
   const removeThread = async (sessionId: string, action: "archive" | "delete") => {
     if (!api) return;
     setThreadAction({ sessionId, busy: action });
     try {
-      if (action === "archive") await api.setChatSessionArchived(sessionId, true);
-      else await api.deleteChatSession(sessionId);
-      setThreads((current) => current.filter((item) => item.sessionId !== sessionId));
-      setMessages((current) => { const next = { ...current }; delete next[sessionId]; return next; });
+      await applyThreadRemoval(api, sessionId, action);
       setConfirmDelete(undefined);
       setThreadAction(undefined);
-      if (openThreadId === sessionId) openThread(undefined);
       threadsEtag.current = undefined;
       threadsPoll.current?.poke();
     } catch (caught) {
@@ -399,6 +441,39 @@ export function ButlerModePage() {
     }
   };
   const runningThreads = threads.filter((item) => item.state === "working").length;
+  const threadRunning = (thread: ButlerThread) => thread.state === "working" || streams.current.has(thread.sessionId) || Boolean(live[thread.sessionId] && !live[thread.sessionId].error);
+  const pickableThreads = threads.filter((thread) => !threadRunning(thread));
+  const pickedThreads = pickableThreads.filter((thread) => threadPicks.has(thread.sessionId));
+  const toggleThreadPick = (sessionId: string) => {
+    setBulkNote(undefined);
+    setBulkConfirm(false);
+    setThreadPicks((current) => { const next = new Set(current); if (next.has(sessionId)) next.delete(sessionId); else next.add(sessionId); return next; });
+  };
+  // One request at a time so each thread reports its own result; the rest still run when one fails.
+  const removePickedThreads = async (action: "archive" | "delete") => {
+    if (!api || bulkBusy || pickedThreads.length === 0) return;
+    setBulkBusy(action);
+    setBulkNote(undefined);
+    let done = 0;
+    const failures: string[] = [];
+    for (const thread of pickedThreads) {
+      try {
+        await applyThreadRemoval(api, thread.sessionId, action);
+        done += 1;
+      } catch (caught) {
+        void logCaughtDiagnostic(action === "archive" ? "interface.butler_mode.thread_archive_failed" : "interface.butler_mode.thread_delete_failed", action === "archive" ? "Butler mode could not archive a selected thread." : "Butler mode could not delete a selected thread.", caught, "butler_mode");
+        failures.push(`${thread.title}: ${caught instanceof Error ? caught.message : "Core refused"}`);
+      }
+    }
+    const verb = action === "archive" ? "Archived" : "Deleted";
+    setBulkNote(failures.length
+      ? { failed: true, text: `${verb} ${done} of ${done + failures.length}. Unchanged — ${failures.join("; ")}` }
+      : { failed: false, text: `${verb} ${done} ${done === 1 ? "thread" : "threads"}.` });
+    setBulkConfirm(false);
+    setBulkBusy(undefined);
+    threadsEtag.current = undefined;
+    threadsPoll.current?.poke();
+  };
   const visibleProjects = useMemo(() => engagements.filter((item) => item.status !== "archived"), [engagements]);
 
   const toggleGroup = (key: string) => setCollapsed((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
@@ -977,9 +1052,30 @@ export function ButlerModePage() {
     </div>
     {threadsError && <div className={styles.error} role="alert">{threadsError}</div>}
     {threads.length === 0 && !threadsError && <p className={styles.empty}>Ask Butler something below. Each question runs as its own thread, so you can ask the next one right away.</p>}
+    {pickedThreads.length > 0 && <div className={styles.threadBulk} role="group" aria-label="Selected threads">
+      <span className={styles.threadBulkCount}>{pickedThreads.length} selected</span>
+      {pickedThreads.length < pickableThreads.length && <button type="button" className={styles.link} disabled={Boolean(bulkBusy)} onClick={() => setThreadPicks(new Set(pickableThreads.map((thread) => thread.sessionId)))}>Select all {pickableThreads.length}</button>}
+      <span className={styles.threadActions}>
+        <button type="button" className={styles.threadAction} disabled={Boolean(bulkBusy)} title="Hide the selected threads from Butler mode; they stay in their projects' archived chats" onClick={() => void removePickedThreads("archive")}>{bulkBusy === "archive" ? "Archiving…" : "Archive"}</button>
+        <button type="button" className={`${styles.threadAction} ${styles.threadDelete}`} disabled={Boolean(bulkBusy)} aria-expanded={bulkConfirm} onClick={() => setBulkConfirm(true)}>Delete</button>
+        <button type="button" className={styles.iconButton} disabled={Boolean(bulkBusy)} aria-label="Clear selection" title="Clear selection" onClick={() => { setThreadPicks(new Set()); setBulkConfirm(false); }}><X size={15} aria-hidden="true" /></button>
+      </span>
+      {bulkConfirm && <div className={styles.confirmDelete} role="group" aria-label="Confirm delete">
+        <p>Delete {pickedThreads.length} {pickedThreads.length === 1 ? "thread" : "threads"} and their messages? This can't be undone.</p>
+        <span className={styles.threadActions}>
+          <button type="button" className={styles.dangerButton} disabled={Boolean(bulkBusy)} onClick={() => void removePickedThreads("delete")}>{bulkBusy === "delete" ? "Deleting…" : `Delete ${pickedThreads.length}`}</button>
+          <button type="button" className={styles.threadAction} disabled={Boolean(bulkBusy)} onClick={() => setBulkConfirm(false)}>Cancel</button>
+        </span>
+      </div>}
+    </div>}
+    {bulkNote && <p className={bulkNote.failed ? styles.error : styles.muted} role={bulkNote.failed ? "alert" : "status"}>{bulkNote.text}</p>}
     <ul className={styles.threadList}>{threads.map((thread) => {
       const state = live[thread.sessionId] && !live[thread.sessionId].error ? "working" : thread.state;
-      return <li key={thread.sessionId}>
+      const running = threadRunning(thread);
+      return <li key={thread.sessionId} className={styles.threadRow} data-picked={threadPicks.has(thread.sessionId) && !running ? "true" : undefined}>
+        <label className={styles.threadPick} title={running ? "Butler is still answering this thread" : threadPicks.has(thread.sessionId) ? "Deselect" : "Select to archive or delete"}>
+          <input type="checkbox" checked={threadPicks.has(thread.sessionId) && !running} disabled={running || Boolean(bulkBusy)} onChange={() => toggleThreadPick(thread.sessionId)} aria-label={`Select ${thread.title}`} />
+        </label>
         <button type="button" className={styles.thread} aria-current={thread.sessionId === openThreadId ? "true" : undefined} onClick={() => openThread(thread.sessionId)}>
           <span className={styles.threadHead}><i className={styles.dot} data-state={state === "idle" ? "done" : state} aria-hidden="true" /><span className={styles.threadTitle}>{thread.title}</span><span className={styles.threadState} data-state={state}>{THREAD_STATE_LABEL[state]}</span></span>
           <span className={styles.muted}>{thread.project.name}</span>
@@ -1012,9 +1108,14 @@ export function ButlerModePage() {
     }
   };
   const threadMessages = openThreadId ? messages[openThreadId] ?? [] : [];
+  // Content grows while Butler answers, so recheck after each render whether the newest message is in view.
+  useLayoutEffect(measureLatest);
+  const railToggle = compact ? null : <button type="button" className={styles.iconButton} aria-label={railHidden ? "Show threads list" : "Hide threads list"} title={railHidden ? "Show threads list" : "Hide threads list"} aria-pressed={railHidden} onClick={() => setHidden((prior) => ({ ...prior, rail: !prior.rail }))}><PanelLeft size={16} aria-hidden="true" /></button>;
+  const boardToggle = compact ? null : <button type="button" className={`${styles.iconButton} ${styles.panelToggleEnd}`} aria-label={boardHidden ? "Show board" : "Hide board"} title={boardHidden ? "Show board" : "Hide board"} aria-pressed={boardHidden} onClick={() => setHidden((prior) => ({ ...prior, board: !prior.board }))}><PanelRight size={16} aria-hidden="true" /></button>;
   const conversation = <section className={styles.conversation} aria-label={openThreadSummary ? `Thread: ${openThreadSummary.title}` : "New Butler thread"}>
     <div className={styles.threadBar}>
       {compact && <button type="button" className={styles.iconButton} aria-label="Back to threads" title="Back to threads" onClick={() => openThread(undefined)}><ArrowLeft size={16} aria-hidden="true" /></button>}
+      {railToggle}
       <h2>{openThreadSummary?.title ?? "New thread"}</h2>
       {openThreadSummary && <span className={styles.muted}>{openThreadSummary.project.name}</span>}
       {openThreadSummary && (() => {
@@ -1026,6 +1127,7 @@ export function ButlerModePage() {
           <button type="button" className={`${styles.threadAction} ${styles.threadDelete}`} disabled={running || Boolean(busy)} title={why ?? "Delete this thread and its messages"} aria-expanded={confirmDelete === openThreadSummary.sessionId} onClick={() => setConfirmDelete(openThreadSummary.sessionId)}>Delete</button>
         </span>;
       })()}
+      {boardToggle}
     </div>
     {openThreadSummary && confirmDelete === openThreadSummary.sessionId && <div className={styles.confirmDelete} role="group" aria-label="Confirm delete">
       <p>Delete this thread and its messages? This can't be undone.</p>
@@ -1035,7 +1137,8 @@ export function ButlerModePage() {
       </span>
     </div>}
     {openThreadSummary && threadAction?.sessionId === openThreadSummary.sessionId && threadAction.error && <div className={styles.error} role="alert">{threadAction.error}</div>}
-    <div className={styles.messages} role="log" aria-label="Butler thread messages" aria-live="polite">
+    <div className={styles.messagesWrap}>
+    <div ref={messagesRef} className={styles.messages} role="log" aria-label="Butler thread messages" aria-live="polite" onScroll={measureLatest}>
       {!openThreadId && <p className={styles.empty}>Ask Butler about anything across your projects — what needs you, what's stuck, what to pause. Butler keeps working on each thread while you start the next.</p>}
       {openThreadId && threadError[openThreadId] && <div className={styles.error} role="alert">{threadError[openThreadId]} <button type="button" className={styles.link} onClick={() => void loadMessages(openThreadId)}>Retry</button></div>}
       {threadMessages.map((message, index) => {
@@ -1056,6 +1159,8 @@ export function ButlerModePage() {
       {openLive?.browserAction && <p className={styles.note}>Butler asked this device to finish a step in the browser (for example a picker or setting). Open the Butler panel to complete it there.</p>}
       {openLive?.error && <div className={styles.error} role="alert">{openLive.error}</div>}
       {openThreadSummary && !openLive && !openActivity && openThreadSummary.state !== "idle" && <p className={styles.working}><i className={styles.dot} data-state={openThreadSummary.state} aria-hidden="true" /> {openThreadSummary.state === "waiting" ? "Butler's answer is waiting for you. Open its conversation to approve or answer." : "Butler is working on this thread…"}</p>}
+    </div>
+    {awayFromLatest && <button type="button" className={styles.jumpLatest} aria-label="Jump to latest message" title="Jump to latest message" onClick={jumpToLatest}><ArrowDown size={16} aria-hidden="true" /></button>}
     </div>
     <form className={styles.composer} onSubmit={(event) => void send(event)}>
       {butlerDrafts.length > 0 && <div className={styles.contextPack} role="group" aria-label="Selected context for Butler">
@@ -1151,8 +1256,10 @@ export function ButlerModePage() {
   const projectThread = projectThreadId ? <section className={styles.conversation} aria-label={`Project thread: ${visibleProjects.find((item) => item.id === projectThreadId)?.name ?? "project"}`}>
     <div className={styles.threadBar}>
       {compact && <button type="button" className={styles.iconButton} aria-label="Back to threads" title="Back to threads" onClick={() => updateParams((next) => next.delete("pthread"))}><ArrowLeft size={16} aria-hidden="true" /></button>}
+      {railToggle}
       <h2>{visibleProjects.find((item) => item.id === projectThreadId)?.name ?? "Project"}</h2>
       <span className={styles.muted}>project thread</span>
+      {boardToggle}
     </div>
     {engagement?.id === projectThreadId ? <div ref={setChatHost} className={styles.embedHost} /> : loading}
   </section> : null;
@@ -1203,7 +1310,11 @@ export function ButlerModePage() {
           {!nativeShell && <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>}
         </div>
       </div>}
-    </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body} style={columns.style} data-resizing={columns.dragging ? "true" : undefined}>{threadsRail}{columns.railHandle}{leftColumn}{columns.middleHandle}{workspace}</div>}
+    </> : section === "code" ? <div className={styles.codeBody}>{codeSection}</div> : <div className={styles.body} style={columns.style} data-resizing={columns.dragging ? "true" : undefined} data-rail={railHidden ? "hidden" : undefined} data-board={boardHidden ? "hidden" : undefined}>
+      {!railHidden && <>{threadsRail}{columns.railHandle}</>}
+      {leftColumn}
+      {!boardHidden && <>{columns.middleHandle}{workspace}</>}
+    </div>}
     {popup && api && <Suspense fallback={null}><ButlerChatPopup api={api} sessionId={popup.sessionId} title={popup.title}
       live={allItems.some((item) => item.sessionId === popup.sessionId && (item.state === "working" || item.state === "waiting"))}
       onClose={() => setPopup(undefined)}
