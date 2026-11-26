@@ -2300,21 +2300,21 @@ class ToolBroker:
                     await self.ledger.transition(running, ToolCallStatus.CANCELLED)
                 raise
             except Exception as caught:
-                exc = _without_secrets(caught, secrets)
+                scrubbed = _without_secrets(caught, secrets)
                 record_caught_exception(
                     "runtime",
                     "runtime.tools.caught_failure_010",
                     "A handled runtime operation raised an exception.",
-                    exc,
+                    scrubbed,
                     stage="tools",
                 )
                 failed = await self.ledger.transition(
-                    running, ToolCallStatus.FAILED, error=str(exc)
+                    running, ToolCallStatus.FAILED, error=str(scrubbed)
                 )
-                await self._record_subagent_failure(failed, exc)
-                if exc is caught:
+                await self._record_subagent_failure(failed, scrubbed)
+                if scrubbed is caught:
                     raise
-                raise exc from None
+                raise scrubbed from None
             terminal_status = ToolCallStatus.COMPLETE
             terminal_error: str | None = None
             if result.receipt is not None and result.receipt.status in {
