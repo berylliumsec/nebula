@@ -3972,6 +3972,7 @@ async def test_model_question_uses_graph_without_command_or_browser_runtime(
         "model.get_updates",
         "model.transact",
         "notes.write",
+        "credentials.list",
         "plan.submit",
         "work_list",
         "work_get",

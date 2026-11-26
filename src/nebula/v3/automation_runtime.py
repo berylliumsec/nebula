@@ -75,7 +75,14 @@ from .domain import (
     WorkspaceChange,
     utc_now,
 )
+from .credential_placeholders import (
+    environment_name,
+    scrub_bytes,
+    substitute,
+    to_environment_references,
+)
 from .redaction import redact_text
+from .saved_credentials import saved_credentials_in
 from .sandbox import (
     ContainerEgressController,
     ContainerSandboxRunner,
@@ -1185,6 +1192,9 @@ class _ManagedProcess:
     drain_tasks: tuple[asyncio.Task[None], asyncio.Task[None]] | None = None
     final_task: asyncio.Task[CommandExecution] | None = None
     finalize_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Saved passwords this process received (as environment or input); its
+    # captured output has each one put back as a placeholder.
+    secrets: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -1919,6 +1929,8 @@ class AutomationRuntimeManager:
         chat_origin: bool = False,
         expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
+        # Resolved before anything starts: an unknown name refuses the call.
+        saved = await saved_credentials_in(self.store, None, request.command)
         try:
             managed = await self._get_or_create_session(
                 engagement_id=engagement_id,
@@ -1944,6 +1956,7 @@ class AutomationRuntimeManager:
                 chat_turn_id=chat_turn_id,
                 chat_origin=chat_origin,
                 expected_execution_mode=expected_execution_mode,
+                saved=saved,
             )
         finally:
             managed.active_uses -= 1
@@ -1963,7 +1976,9 @@ class AutomationRuntimeManager:
         chat_turn_id: str | None,
         chat_origin: bool,
         expected_execution_mode: Literal["docker", "host"] | None,
+        saved: dict[str, str] | None = None,
     ) -> CommandResult:
+        saved = saved or {}
         if (
             expected_execution_mode
             and managed.policy.execution_mode != expected_execution_mode
@@ -2101,9 +2116,18 @@ class AutomationRuntimeManager:
             if results_url and results_api_key
             else None
         )
+        command = request.command
+        if saved:
+            # The stored command keeps its placeholders; the shell reads each
+            # value from an environment variable only this process receives.
+            command = to_environment_references(command)
+            extra_env = {
+                **(extra_env or {}),
+                **{environment_name(name): value for name, value in saved.items()},
+            }
         try:
             backend = await managed.backend.run(
-                process_id, request.command, request.cwd, extra_env=extra_env
+                process_id, command, request.cwd, extra_env=extra_env
             )
         except Exception as exc:
             (
@@ -2128,6 +2152,7 @@ class AutomationRuntimeManager:
             stdout=_Capture(directory / "stdout"),
             stderr=_Capture(directory / "stderr"),
             capture_directory=directory,
+            secrets=dict(saved),
         )
         process.drain_tasks = (
             create_diagnostic_task(
@@ -2461,7 +2486,9 @@ class AutomationRuntimeManager:
             raise AutomationPolicyDenied("command process is unavailable")
         if request.action == "write":
             assert request.input is not None
-            data = request.input.encode("utf-8")
+            saved = await saved_credentials_in(self.store, None, request.input)
+            process.secrets.update(saved)
+            data = substitute(request.input, saved).encode("utf-8")
             if len(data) > MAX_PROCESS_INPUT_BYTES:
                 raise AutomationRuntimeError("process input exceeds 1048576 bytes")
             await process.backend.write(data)
@@ -3256,6 +3283,7 @@ class AutomationRuntimeManager:
                 filename=f"command-{process.execution.id}.stdout",
                 kind="stdout",
                 metadata=metadata,
+                secrets=process.secrets,
             )
             stderr, redacted_stderr = await self._store_stream_artifacts(
                 process.stderr.path,
@@ -3263,6 +3291,7 @@ class AutomationRuntimeManager:
                 filename=f"command-{process.execution.id}.stderr",
                 kind="stderr",
                 metadata=metadata,
+                secrets=process.secrets,
             )
             # A results post can save the record while the process's own
             # output is stored. The outcome is then decided again on the
@@ -3369,7 +3398,12 @@ class AutomationRuntimeManager:
         filename: str,
         kind: str,
         metadata: dict[str, Any],
+        secrets: dict[str, str] | None = None,
     ) -> tuple[Artifact, Artifact]:
+        if secrets:
+            # Even the "raw" artifact must not hold a saved password. The live
+            # capture keeps its byte offsets; a scrubbed copy is stored.
+            path = await asyncio.to_thread(_scrubbed_capture, path, secrets)
         # Up to MAX_CAPTURE_BYTES per stream: read and redact it once, off the
         # event loop, instead of three synchronous reads plus regex work on it.
         binary, visible = await asyncio.to_thread(_redacted_stream_copy, path)
@@ -3421,8 +3455,12 @@ class AutomationRuntimeManager:
         return self._result(
             managed,
             process,
-            stdout=redact_text(stdout.decode("utf-8", errors="replace")),
-            stderr=redact_text(stderr.decode("utf-8", errors="replace")),
+            stdout=redact_text(
+                scrub_bytes(stdout, process.secrets).decode("utf-8", errors="replace")
+            ),
+            stderr=redact_text(
+                scrub_bytes(stderr, process.secrets).decode("utf-8", errors="replace")
+            ),
         )
 
     @staticmethod
@@ -3493,6 +3531,14 @@ def _dedupe_rules(rules: list[EgressRule]) -> list[EgressRule]:
             seen.add(key)
             output.append(rule)
     return output
+
+
+def _scrubbed_capture(path: Path, secrets: dict[str, str]) -> Path:
+    """A copy of a captured stream with each saved password put back."""
+
+    copy = path.with_name(path.name + ".scrubbed")
+    copy.write_bytes(scrub_bytes(path.read_bytes() if path.is_file() else b"", secrets))
+    return copy
 
 
 def _redacted_stream_copy(path: Path) -> tuple[bool, bytes]:

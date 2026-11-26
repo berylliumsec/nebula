@@ -2974,7 +2974,6 @@ function mapSavedCredential(value: Record<string, unknown>): import("./types").S
     name: String(value.name),
     description: typeof value.description === "string" ? value.description : "",
     placeholder: String(value.placeholder),
-    allowedMcpServerIds: Array.isArray(value.allowed_mcp_server_ids) ? value.allowed_mcp_server_ids.map(String) : [],
     available: value.available === true,
     revision: Number(value.revision),
     updatedAt: String(value.updated_at),
@@ -6922,20 +6921,19 @@ export class ApiClient {
     return this.request<Record<string, unknown>[]>("saved-credentials").then((items) => items.map(mapSavedCredential));
   }
 
-  createSavedCredential(input: { name: string; description: string; secret: string; allowedMcpServerIds: string[] }): Promise<import("./types").SavedCredential> {
+  createSavedCredential(input: { name: string; description: string; secret: string }): Promise<import("./types").SavedCredential> {
     return this.request<Record<string, unknown>>("saved-credentials", {
       method: "POST",
-      body: JSON.stringify({ name: input.name, description: input.description, secret: input.secret, allowed_mcp_server_ids: input.allowedMcpServerIds }),
+      body: JSON.stringify({ name: input.name, description: input.description, secret: input.secret }),
     }).then(mapSavedCredential);
   }
 
-  updateSavedCredential(name: string, input: { description?: string; secret?: string; allowedMcpServerIds?: string[]; expectedRevision?: number }): Promise<import("./types").SavedCredential> {
+  updateSavedCredential(name: string, input: { description?: string; secret?: string; expectedRevision?: number }): Promise<import("./types").SavedCredential> {
     return this.request<Record<string, unknown>>(`saved-credentials/${encodeURIComponent(name)}`, {
       method: "PATCH",
       body: JSON.stringify({
         ...(input.description === undefined ? {} : { description: input.description }),
         ...(input.secret === undefined ? {} : { secret: input.secret }),
-        ...(input.allowedMcpServerIds === undefined ? {} : { allowed_mcp_server_ids: input.allowedMcpServerIds }),
         ...(input.expectedRevision === undefined ? {} : { expected_revision: input.expectedRevision }),
       }),
     }).then(mapSavedCredential);

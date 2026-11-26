@@ -6,6 +6,7 @@ from .async_utils import MaybeAsync
 
 from .async_utils import resolve_workspace
 
+from .credential_placeholders import scrub, substitute, substituted
 from .diagnostics import record_caught_exception
 
 import asyncio
@@ -77,6 +78,22 @@ from .tool_results import (
 
 
 WEB_SEARCH_TOOL_NAME = "web.search"
+
+
+def _without_secrets(error: Exception, secrets: dict[str, str]) -> Exception:
+    """``error``, or a copy without any substituted value in its message."""
+
+    if not secrets or isinstance(error, GuidedToolError):
+        return error
+    text = str(error)
+    clean = scrub(text, secrets)
+    if clean == text:
+        return error
+    replacement = ToolBrokerError(clean)
+    refused = getattr(error, "_nebula_before_execution", None)
+    if refused:
+        setattr(replacement, "_nebula_before_execution", True)
+    return replacement
 
 
 class ToolBrokerError(RuntimeError):
@@ -2184,11 +2201,32 @@ class ToolBroker:
             running = await self.ledger.transition(
                 prepared.call, ToolCallStatus.RUNNING
             )
+            # Saved passwords named as {{credential:<name>}} reach only the
+            # copy handed to the tool; the ledger, approvals, hooks and model
+            # history keep the placeholder, and echoes are put back below.
+            secrets: dict[str, str] = {}
             try:
                 from .memory_runtime import managed_compute
+                from .saved_credentials import saved_credentials_in, scrub_tool_result
 
-                with managed_compute(invocation.engagement_id, "tool", running.id):
-                    result = await plugin.execute(invocation, self.runner)
+                store = getattr(self.ledger, "store", None)
+                if store is not None:
+                    secrets = await saved_credentials_in(
+                        store, None, invocation.arguments
+                    )
+                call = (
+                    invocation.model_copy(
+                        update={"arguments": substitute(invocation.arguments, secrets)}
+                    )
+                    if secrets
+                    else invocation
+                )
+                with (
+                    managed_compute(invocation.engagement_id, "tool", running.id),
+                    substituted(secrets),
+                ):
+                    result = await plugin.execute(call, self.runner)
+                result = scrub_tool_result(result, secrets)
                 if not isinstance(plugin, AnalysisTool):
                     if self.evidence_recorder is None:
                         raise ToolBrokerError(
@@ -2224,6 +2262,10 @@ class ToolBroker:
                     stage="tools",
                 )
                 partial = getattr(caught_error, "result", None)
+                if isinstance(partial, ToolExecutionResult) and secrets:
+                    from .saved_credentials import scrub_tool_result
+
+                    partial = scrub_tool_result(partial, secrets)
                 if (
                     isinstance(partial, ToolExecutionResult)
                     and self.evidence_recorder is not None
@@ -2257,7 +2299,8 @@ class ToolBroker:
                 else:
                     await self.ledger.transition(running, ToolCallStatus.CANCELLED)
                 raise
-            except Exception as exc:
+            except Exception as caught:
+                exc = _without_secrets(caught, secrets)
                 record_caught_exception(
                     "runtime",
                     "runtime.tools.caught_failure_010",
@@ -2269,7 +2312,9 @@ class ToolBroker:
                     running, ToolCallStatus.FAILED, error=str(exc)
                 )
                 await self._record_subagent_failure(failed, exc)
-                raise
+                if exc is caught:
+                    raise
+                raise exc from None
             terminal_status = ToolCallStatus.COMPLETE
             terminal_error: str | None = None
             if result.receipt is not None and result.receipt.status in {

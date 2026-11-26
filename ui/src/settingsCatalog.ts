@@ -144,7 +144,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.saved-credentials",
     label: "Saved passwords",
-    description: "Save passwords agents can type into prompts through an allowed MCP server, without models seeing them",
+    description: "Save passwords agents can enter through any tool, such as Mac dialogs or sudo, without models seeing them",
     category: "Integrations",
     scope: "Security",
     target: "saved-credential-settings",
