@@ -311,8 +311,8 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
       </button>
     </div> :
     <div ref={panel} className={styles.popup} data-ask-nebula-popup role="dialog" aria-labelledby={titleId} style={{ left: position.x, top: position.y }}>
-    <div data-selection-actions-disabled>
-      <div className={styles.header}>
+    <div data-selection-source-kind="conversation" data-selection-source-label="Ask Nebula conversation">
+      <div className={styles.header} data-selection-actions-disabled>
         <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
           onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }}
           onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }}
@@ -338,7 +338,7 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
       {!api || !snapshot ? <p role="alert">Connect an assistant runtime to ask a question.</p> : !ready && !error ? <p role="status"><LoaderCircle size={14} className="spin" /> Preparing a temporary copy of the conversation…</p> : null}
       {error && <div role="alert" className={styles.error}>{error}{!ready && <button type="button" className="button quiet" onClick={() => setAttempt(value => value + 1)}>Try again</button>}</div>}
       {busy && <p role="status" className={styles.status}>{stopping ? "Stopping…" : needsAction.current ? "Action needed" : progress}</p>}
-      <form className={styles.composer} onSubmit={event => { event.preventDefault(); void ask(); }}>
+      <form className={styles.composer} data-selection-actions-disabled onSubmit={event => { event.preventDefault(); void ask(); }}>
         <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} disabled={busy || stopping} onInput={event => setQuestion(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
         {busy ? <button className="icon-button subtle" type="button" aria-label="Stop response" title="Stop response" disabled={stopping} onClick={() => void stop()}><Square size={17} /></button> : <button className="icon-button subtle" type="submit" aria-label="Ask question" title="Ask question" disabled={stopping || !ready || !question.trim()}><Send size={18} /></button>}
       </form>

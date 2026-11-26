@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { ChatStreamEvent } from "../api/types";
 import { AskNebulaPopup } from "./AskNebulaPopup";
-import { createSelectionDraft } from "./selection";
+import { createSelectionDraft, SelectionActionsProvider } from "./selection";
 
 const context = createSelectionDraft({ text: "Selected bytes", source: { kind: "conversation", id: "main", label: "Selected response" } })!;
 const snapshot = { engagementId: "project", sessionId: "main", providerId: "provider", model: "m" };
@@ -328,4 +328,33 @@ it("shows a completed private answer when a hidden response finishes", async () 
   await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
   expect(screen.getByText("The private answer is ready.")).toBeVisible();
   expect(api.createTemporaryChat).toHaveBeenCalledTimes(1);
+});
+
+it("offers the selected-text actions for an answer inside the popup, but not its composer", async () => {
+  const api = fixture(); const user = userEvent.setup(); const onAsk = vi.fn();
+  render(<SelectionActionsProvider onAsk={onAsk}>
+    <AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />
+  </SelectionActionsProvider>);
+  await waitFor(() => expect(api.createTemporaryChat).toHaveBeenCalled());
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "Explain this");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  const answer = await screen.findByText("A separate answer");
+  const range = document.createRange();
+  range.setStart(answer.firstChild as Text, 2);
+  range.setEnd(answer.firstChild as Text, 10);
+  document.getSelection()?.removeAllRanges();
+  document.getSelection()?.addRange(range);
+  fireEvent.pointerUp(answer);
+  expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Ask Nebula" }));
+  expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({
+    text: "separate",
+    source: expect.objectContaining({ kind: "conversation", label: "Ask Nebula conversation" }),
+  }));
+
+  const composer = screen.getByRole("textbox", { name: "Question for Nebula" }) as HTMLTextAreaElement;
+  fireEvent.input(composer, { target: { value: "Draft follow-up" } });
+  composer.setSelectionRange(0, 5);
+  fireEvent.select(composer);
+  expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull();
 });
