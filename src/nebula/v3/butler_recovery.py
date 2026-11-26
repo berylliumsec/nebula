@@ -108,6 +108,18 @@ PERIODIC_EVENTS = frozenset(
         "goal.read_only_tool_failures_repeated",
     }
 )
+# Scheduled checks run one at a time: a check is not fired, claimed or retried
+# while an earlier check of the same signal is still open. The interval clock
+# is stamped when a check fires, so a check longer than the interval would
+# otherwise start a second Butler turn beside the first.
+SCHEDULED_CHECK_SIGNALS = frozenset(
+    {"butler.periodic_check", "butler.global_periodic_check"}
+)
+OPEN_CHECK_STATUSES = ("observed", "investigating", "verifying")
+RUNNING_CHECK_STATUSES = ("investigating", "verifying")
+# An open check untouched this long is treated as abandoned so it cannot hold
+# the schedule; interrupted-case recovery settles it separately.
+STALE_OPEN_CHECK = timedelta(hours=3)
 LEASE_RENEW_INTERVAL_SECONDS = 15
 
 
@@ -1357,6 +1369,42 @@ class ButlerRecoveryService:
             else None
         )
 
+    async def _open_scheduled_check(
+        self,
+        signal: str,
+        *,
+        engagement_id: str | None = None,
+        statuses: tuple[str, ...] = OPEN_CHECK_STATUSES,
+        exclude_id: str | None = None,
+    ) -> ButlerRecoveryCase | None:
+        """An earlier scheduled check of ``signal`` that is still open, if any."""
+
+        cutoff = utc_now() - STALE_OPEN_CHECK
+        for case in await self.store.find_entities(
+            ButlerRecoveryCase,
+            {"signal": signal, "status": list(statuses)},
+            engagement_id=engagement_id,
+        ):
+            if case.id != exclude_id and case.updated_at >= cutoff:
+                return case
+        return None
+
+    async def _scheduled_check_running(self, case: ButlerRecoveryCase) -> bool:
+        """Whether another check of this scheduled case's signal is running."""
+
+        if case.signal not in SCHEDULED_CHECK_SIGNALS:
+            return False
+        return (
+            await self._open_scheduled_check(
+                case.signal,
+                # Nebula-wide checks live on the anchor project, so a project
+                # scoped read also serves workers that see only their projects.
+                engagement_id=case.engagement_id,
+                statuses=RUNNING_CHECK_STATUSES,
+                exclude_id=case.id,
+            )
+        ) is not None
+
     async def fire_global_periodic_check(self, project_id: str, worker_id: str) -> bool:
         if self.instructions_root is None:
             return False
@@ -1365,6 +1413,11 @@ class ButlerRecoveryService:
             return False
         policy = await self._current_act(project_id, worker_id)
         if policy is None:
+            return False
+        # The clock is left alone, so the next check fires once this one closes.
+        if await self._open_scheduled_check(
+            "butler.global_periodic_check", engagement_id=project_id
+        ):
             return False
         now = utc_now()
         async with self.store.transaction(immediate=True) as transaction:
@@ -1611,6 +1664,10 @@ class ButlerRecoveryService:
         )
         if not running:
             return False
+        if await self._open_scheduled_check(
+            "butler.periodic_check", engagement_id=project_id
+        ):
+            return False
         now = utc_now()
         async with self.store.transaction(immediate=True) as transaction:
             state = await _entity_in_transaction(
@@ -1849,15 +1906,18 @@ class ButlerRecoveryService:
         ]
         if not candidates:
             return None
-        case = next(
-            (
-                item
-                for item in candidates
-                if item.authority_revision == policy.revision
-                and (item.next_check_at is None or item.next_check_at <= utc_now())
-            ),
-            None,
-        )
+        case = None
+        for item in candidates:
+            if item.authority_revision != policy.revision or (
+                item.next_check_at is not None and item.next_check_at > utc_now()
+            ):
+                continue
+            # A scheduled check waits while an earlier one of its signal runs;
+            # other cases behind it are still claimed.
+            if await self._scheduled_check_running(item):
+                continue
+            case = item
+            break
         for stale in candidates:
             if stale.authority_revision != policy.revision:
                 (
@@ -2029,6 +2089,10 @@ class ButlerRecoveryService:
                 or case.finished_at is None
                 or utc_now() - case.finished_at > timedelta(hours=4)
                 or not (await _server_overloaded(self.store, case))
+                # A newer check already supersedes this failed one.
+                or await self._open_scheduled_check(
+                    case.signal, engagement_id=project_id, exclude_id=case.id
+                )
             ):
                 continue
             try:
