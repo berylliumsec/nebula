@@ -289,7 +289,7 @@ describe("the All projects link", () => {
     expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
   });
 
-  it("in the iPhone app, has nothing to exit to and still opens All projects", async () => {
+  it("in the iPhone app, has nothing to exit to and no way out to All projects", async () => {
     layout.compact = true;
     layout.shell = true;
     try {
@@ -301,8 +301,8 @@ describe("the All projects link", () => {
       await userEvent.click(screen.getByRole("tab", { name: /More/ }));
       const sheet = screen.getByRole("dialog", { name: "More in Butler" });
       expect(within(sheet).queryByRole("button", { name: "Open full Nebula" })).toBeNull();
-      await userEvent.click(within(sheet).getByRole("link", { name: "All projects" }));
-      expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
+      expect(within(sheet).queryByRole("link", { name: "All projects" })).toBeNull();
+      expect(screen.queryByRole("link", { name: "All projects" })).toBeNull();
     } finally {
       layout.shell = false;
     }

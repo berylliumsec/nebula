@@ -881,7 +881,8 @@
 .muted { color: var(--muted); font-size: var(--type-secondary); }
 .empty { margin: 4px 8px; color: var(--muted); font-size: var(--type-secondary); line-height: var(--leading-ui); }
 .note { margin: 0; color: var(--muted-strong); font-size: var(--type-secondary); }
-.error { margin: 8px 16px; padding: 8px 12px; border-radius: var(--radius-control); background: var(--red-muted); color: var(--text); font-size: var(--type-secondary); }
+.error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 16px; padding: 8px 12px; border-radius: var(--radius-control); background: var(--red-muted); color: var(--text); font-size: var(--type-secondary); }
+.error > span { flex: 1 1 200px; }
 .errorText { color: var(--red); font-size: var(--type-secondary); }
 
 .tabs {

@@ -31,7 +31,9 @@ def test_packaged_product_index_has_current_source_digest():
     assert metadata["source_digest"] == source_digest(source_paths())
     assert count == int(metadata["passage_count"])
     assert 50 <= count <= 600
-    assert OUTPUT.stat().st_size < 1_000_000
+    # The public commit guard refuses files over 1,024,000 bytes; split the
+    # index before it outgrows this margin.
+    assert OUTPUT.stat().st_size < 1_020_000
     assert OUTPUT.read_text(encoding="ascii").startswith(
         "# Generated SQLite index; zlib plus base85;"
     )

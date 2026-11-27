@@ -14,6 +14,7 @@ import { activityFromEvent, activityFromPendingTurn, activityFromSavedResults, l
 import { startVisiblePoll } from "../api/visiblePoll";
 import { useConfirmation } from "../components/DialogSystem";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { ShellPushSettings } from "../components/ShellPushNotifications";
 import { isNebulaShell, useCompactLayout } from "../hooks/useCompactLayout";
 import { readStorage, writeStorage } from "../state/browserStorage";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -105,7 +106,7 @@ function approvalDetail(approval: Approval | undefined): string | undefined {
  * board is grouped.
  */
 export function ButlerModePage() {
-  const { api, coreState, engagement, engagements, providers, harnesses, selectEngagement } = useWorkspace();
+  const { api, coreState, engagement, engagements, providers, harnesses, selectEngagement, reconnect } = useWorkspace();
   const bridge = useButlerPanelBridge();
   const drafts = useOptionalWorkbenchDrafts();
   const butlerDrafts = drafts?.butlerDrafts ?? [];
@@ -1352,6 +1353,7 @@ export function ButlerModePage() {
     </section>
     : section === "settings" ? <section className={styles.pane} aria-label="Butler settings for this project">
       <div className={styles.paneHead}><h2>Settings</h2>{projectPicker}</div>
+      {nativeShell && api && <ShellPushSettings api={api} />}
       {scopeProject ? <div ref={setSettingsHost} className={styles.embedHost} /> : noProject}
       {!bridge && <p className={styles.muted}>Butler's settings are unavailable here.</p>}
     </section>
@@ -1393,11 +1395,12 @@ export function ButlerModePage() {
         <span><i className={styles.dot} data-state="working" aria-hidden="true" />{states.working} working</span>
         {states.failed > 0 && <span><i className={styles.dot} data-state="failed" aria-hidden="true" />{states.failed} failed</span>}
       </div>}
-      {!compact && <Link className={styles.projectsLink} to="/projects" title="Every project's stages and work"><Columns3 size={15} aria-hidden="true" />All projects</Link>}
+      {!compact && !nativeShell && <Link className={styles.projectsLink} to="/projects" title="Every project's stages and work"><Columns3 size={15} aria-hidden="true" />All projects</Link>}
       {bridge && <button type="button" className={styles.iconButton} aria-label="Start Butler Voice" title="Start Butler Voice" disabled={!bridge.voiceAvailable} onClick={bridge.startVoice}><MicrophoneIcon size={17} /></button>}
       {!nativeShell && <button type="button" className={styles.iconButton} aria-label="Exit Butler mode" title="Exit Butler mode (Esc)" onClick={exit}><X size={17} aria-hidden="true" /></button>}
     </header>
-    {coreState !== "online" && <div className={styles.error} role="alert">Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</div>}
+    {/* Butler mode covers the app's own connection banner, so it offers the retry itself. */}
+    {coreState !== "online" && <div className={styles.error} role="alert"><span>Core is unavailable. Butler mode reconnects and reads the board again when Core answers.</span><button type="button" className="button quiet" onClick={reconnect}>Retry connection</button></div>}
     {compact ? <>
       <div className={styles.tabs} role="tablist" aria-label="Butler mode">
         <button type="button" role="tab" aria-selected={phoneTab === "board" && section === "board"} onClick={() => setSection("board")}>Board{states?.waiting ? <span className={styles.tabCount} data-state="waiting">{states.waiting}</span> : null}</button>
@@ -1410,7 +1413,7 @@ export function ButlerModePage() {
         <button type="button" className={styles.sheetScrim} aria-label="Close" tabIndex={-1} onClick={() => setMoreOpen(false)} />
         <div className={styles.sheet} role="dialog" aria-label="More in Butler">
           {(["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
-          <Link className={styles.sheetRow} to="/projects">All projects<ChevronRight size={16} aria-hidden="true" /></Link>
+          {!nativeShell && <Link className={styles.sheetRow} to="/projects">All projects<ChevronRight size={16} aria-hidden="true" /></Link>}
           {!nativeShell && <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>}
         </div>
       </div>}

@@ -3889,6 +3889,70 @@ class ButlerGlobalState(Entity):
     )
 
 
+class PushNotificationSettings(Entity):
+    """How Core reaches Apple's push service (one row, ``PUSH_SETTINGS_ID``).
+
+    The APNs signing key itself stays in the credential store; ``key_ref`` is
+    its ``vault:``/``store:``/``systemd:``/``env:`` reference. See
+    docs/design/butler-push-notifications.md.
+    """
+
+    entity_kind: ClassVar[str] = "push_notification_settings"
+    key_ref: str | None = Field(default=None, max_length=300)
+    key_id: str | None = Field(default=None, pattern=r"^[A-Z0-9]{10}$")
+    team_id: str | None = Field(default=None, pattern=r"^[A-Z0-9]{10}$")
+    topic: str = Field(
+        default="com.berylliumsec.nebula.ios",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[A-Za-z0-9.-]+$",
+    )
+    enabled: bool = True
+    # Set the first time the dispatcher runs, so incidents already open then
+    # are not each sent as a new alert.
+    baseline_at: datetime | None = None
+    last_error: str | None = Field(default=None, max_length=500)
+    last_error_at: datetime | None = None
+
+
+class PushDevice(Entity):
+    """One phone that receives Butler alerts, tied to its paired device."""
+
+    entity_kind: ClassVar[str] = "push_devices"
+    platform: Literal["ios"] = "ios"
+    token: str = Field(pattern=r"^[0-9a-f]{16,200}$")
+    environment: Literal["development", "production"]
+    topic: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9.-]+$")
+    paired_device_id: str = Field(min_length=1, max_length=200)
+    label: str = Field(default="iPhone", min_length=1, max_length=200)
+    enabled: bool = True
+    welcomed_at: datetime | None = None
+    test_requested_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    last_sent_at: datetime | None = None
+    last_error: str | None = Field(default=None, max_length=500)
+    # Apple said the token is no longer valid; the phone re-registers on launch.
+    unregistered_at: datetime | None = None
+
+
+class PushIncidentDelivery(Entity):
+    """The open episode of one Butler incident that was already alerted.
+
+    The row's id is ``push-<incident id>``. It exists from the first alert until
+    the incident resolves, so updates to an open incident never repeat the
+    alert and a reopened incident alerts again.
+    """
+
+    entity_kind: ClassVar[str] = "push_incident_deliveries"
+    incident_id: str = Field(min_length=1, max_length=200)
+    engagement_id: str = Field(min_length=1, max_length=200)
+    notified_at: datetime | None = None
+    # ``baseline``: already open when the dispatcher first ran. ``summary``:
+    # sent inside a grouped alert. ``alert``: its own alert. ``no_devices``.
+    delivery: Literal["baseline", "summary", "alert", "no_devices"] = "alert"
+    attempts: int = Field(default=0, ge=0)
+
+
 class ButlerFocusRuntime(Entity):
     """The model a Butler chat uses, shared so other projects can run Butler.
 
@@ -5535,6 +5599,9 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ButlerGoalWatch,
     ButlerProjectState,
     ButlerGlobalState,
+    PushNotificationSettings,
+    PushDevice,
+    PushIncidentDelivery,
     ButlerFocusRuntime,
     ButlerIncident,
     ButlerDecision,

@@ -16132,13 +16132,29 @@ reloadTest("assistant popup Butler long history keeps the composer and jump to l
   expect(accessibility.violations).toEqual([]);
 });
 
-reloadTest("iPhone assistant shell opens desktop Butler mode and a Projects snapshot of active projects with chats", async ({page}, testInfo) => {
-  reloadTest.slow(); // One long journey: Butler mode layout, Projects, failure and recovery.
+reloadTest("iPhone assistant shell stays in desktop Butler mode and registers this phone for Butler notifications", async ({page}, testInfo) => {
+  reloadTest.slow(); // One long journey: Butler mode layout, Butler-only routing, notifications.
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "userAgent", {configurable: true, get: () => "Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 NebulaShell/1.0"});
   });
+  await page.addInitScript(() => {
+    (window as unknown as {__nebulaShellPush: unknown}).__nebulaShellPush = {token: "ab".repeat(32), environment: "development", authorization: "authorized", bundleId: "com.berylliumsec.nebula.ios"};
+  });
   await installTruthfulCore(page);
-  let attentionFail = false;
+  const pushRegistrations: unknown[] = [];
+  let pushConfigured = false;
+  let pushEnabled = true;
+  let testQueued = false;
+  let lastSentAt: string | null = null;
+  const pushDevice = () => ({id: "push-phone", label: "Operator iPhone", environment: "development", topic: "com.berylliumsec.nebula.ios", enabled: pushEnabled, this_device: true, created_at: "2026-11-27T10:00:00Z", last_sent_at: lastSentAt, last_error: null, test_pending: false, unregistered: false, revision: 1});
+  const pushStatus = () => ({configured: pushConfigured, enabled: true, missing: pushConfigured ? [] : ["APNs key", "key ID", "team ID"], key_saved: pushConfigured, key_id: pushConfigured ? "ABC123DEFG" : null, team_id: pushConfigured ? "TEAM123456" : null, topic: "com.berylliumsec.nebula.ios", last_error: null, devices: pushRegistrations.length ? [pushDevice()] : [], revision: 1});
+  await page.route(/\/api\/v1\/notifications\/push(?:\?|$)/, route => {
+    if (testQueued) { testQueued = false; lastSentAt = new Date().toISOString(); }
+    return route.fulfill({json: pushStatus()});
+  });
+  await page.route(/\/api\/v1\/notifications\/push\/devices$/, route => { pushRegistrations.push(route.request().postDataJSON()); return route.fulfill({json: pushDevice()}); });
+  await page.route(/\/api\/v1\/notifications\/push\/devices\/push-phone\/test$/, route => { testQueued = true; return route.fulfill({status: 202, json: {...pushDevice(), test_pending: true}}); });
+  await page.route(/\/api\/v1\/notifications\/push\/devices\/push-phone$/, route => { pushEnabled = (route.request().postDataJSON() as {enabled: boolean}).enabled; return route.fulfill({json: pushDevice()}); });
   const butlerAnswer = [
     "| Goal | ID | Status |\n| --- | --- | --- |\n| Example Security Research Project | 89851bf1-1f41-40e1-8a9d-437f131ab601 | Paused |",
     "| Goal | Owner | Status | Evidence |\n| --- | --- | --- | --- |\n| Research | Sample assistant | Paused | https://example.test/evidence/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |",
@@ -16153,15 +16169,13 @@ reloadTest("iPhone assistant shell opens desktop Butler mode and a Projects snap
     sequence: 1, role: "assistant", content: butlerAnswer, citations: [], metadata: {},
   }]}));
   await page.route("**/api/v1/chat/attention", async route => {
-    if (attentionFail) await route.fulfill({status: 503, json: {detail: "Synthetic connection failure"}});
-    else await route.fulfill({json: [{
+    await route.fulfill({json: [{
       kind: "approval", action_id: "pending-approval", engagement_id: "scratch-project",
       engagement_name: "Scratch Project", session_id: "chat-pending", session_title: "Review request",
       requested_at: "2026-07-14T12:00:00Z",
     }]});
   });
-  let sessionsFail = false;
-  await page.route(/\/api\/v1\/chat-sessions\?engagement_id=scratch-project&/, route => sessionsFail ? route.fulfill({status: 503, json: {detail: "Synthetic read failure"}}) : route.fulfill({json: [
+  await page.route(/\/api\/v1\/chat-sessions\?engagement_id=scratch-project&/, route => route.fulfill({json: [
     {...entity, id: "chat-pending", engagement_id: "scratch-project", title: "Review request", backend: "provider", metadata: {}},
     {...entity, id: "chat-running", engagement_id: "scratch-project", title: "Recon sweep", backend: "provider", metadata: {}},
     {...entity, id: "iphone-butler", engagement_id: "scratch-project", title: "Butler", backend: "harness", metadata: {control_assistant: true}},
@@ -16199,51 +16213,39 @@ reloadTest("iPhone assistant shell opens desktop Butler mode and a Projects snap
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/butler\?project=scratch-project/);
+  // Butler mode only: no way out to Projects, and every other route lands back in Butler.
+  await expect(page.getByRole("link", {name: "All projects"})).toHaveCount(0);
   if (compactMode) {
     await page.getByRole("tablist", {name: "Butler mode"}).getByRole("tab", {name: /More/}).click();
     const more = page.getByRole("dialog", {name: "More in Butler"});
     await expect(more.getByRole("button", {name: "Open full Nebula"})).toHaveCount(0);
-    await more.getByRole("link", {name: "All projects"}).click();
-  } else {
-    await page.getByRole("link", {name: "All projects"}).click();
+    await expect(more.getByRole("link", {name: "All projects"})).toHaveCount(0);
+    await page.keyboard.press("Escape");
   }
-  await expect(page).toHaveURL(/\/projects$/);
-  const appTabs = page.getByRole("navigation", {name: "Nebula app"});
-  await expect(appTabs.getByRole("link", {name: "Projects"})).toHaveAttribute("aria-current", "page");
-  const projects = page.getByRole("region", {name: "Projects"});
-  const projectCard = projects.getByRole("listitem").filter({hasText: "Scratch Project"});
-  await expect(projectCard).toBeVisible();
-  await expect(projects.getByRole("listitem")).toHaveCount(1);
-  await expect(projectCard).toContainText("2 chats");
-  await expect(projectCard).toContainText("1 need you");
-  await expect(projectCard).toContainText("1 running");
-  await projectCard.locator("summary").click();
-  const recent = projectCard.getByRole("list", {name: "Recent chats in Scratch Project"});
-  await expect(recent.getByRole("listitem")).toHaveCount(2);
-  await expect(recent).not.toContainText("Butler");
-  await page.screenshot({path: testInfo.outputPath("iphone-projects-snapshot.png")});
+  for (const path of ["/projects", "/settings", "/library", "/storage"]) {
+    await page.goto(path);
+    await expect(page).toHaveURL(/\/butler\?project=scratch-project$/, {timeout: 30_000});
+    await expect(page.getByRole("heading", {name: "Butler", level: 1})).toBeVisible();
+    await expect(page.getByRole("navigation", {name: "Nebula app"})).toHaveCount(0);
+  }
+  // A tapped Butler alert opens its project's Oversight.
+  await page.goto("/butler?project=scratch-project&section=oversight");
+  await expect(page.getByRole("region", {name: "Oversight", exact: true})).toBeVisible({timeout: 30_000});
+
+  // Butler notifications: the app hands the page its APNs token; the page registers it with Core.
+  expect(pushRegistrations.at(-1)).toEqual({token: "ab".repeat(32), environment: "development", topic: "com.berylliumsec.nebula.ios", platform: "ios"});
+  await page.goto("/butler?project=scratch-project&section=settings");
+  const notifications = page.getByRole("region", {name: "Push notifications"});
+  await expect(notifications.getByRole("status").first()).toContainText("Core has no Apple push key yet", {timeout: 15_000});
+  pushConfigured = true;
+  await notifications.getByRole("button", {name: "Refresh notification status"}).click();
+  await expect(notifications.getByRole("status").first()).toContainText("On. Butler alerts this phone", {timeout: 15_000});
+  await notifications.getByRole("button", {name: "Send test"}).click();
+  await expect(notifications.getByText("Apple accepted the test alert")).toBeVisible({timeout: 20_000});
+  await page.screenshot({path: testInfo.outputPath("iphone-butler-notifications.png")});
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect((await new AxeBuilder({page}).include("section[aria-labelledby='shell-projects-title']").analyze()).violations).toEqual([]);
-  // Axe opens a helper page; WebKit can leave this one backgrounded (paused frames, hidden polls).
+  expect((await new AxeBuilder({page}).include("section[aria-label='Push notifications']").analyze()).violations).toEqual([]);
   await page.bringToFront();
-  attentionFail = true;
-  await projects.getByRole("button", {name: "Refresh projects"}).click();
-  await expect(projects.getByRole("alert")).toContainText("Pending actions could not be loaded", {timeout: 15_000});
-  attentionFail = false;
-  await projects.getByRole("button", {name: "Refresh projects"}).click();
-  await expect(projects.getByRole("alert")).toHaveCount(0, {timeout: 15_000});
-  sessionsFail = true;
-  await projects.getByRole("button", {name: "Refresh projects"}).click();
-  await expect(projects.getByRole("alert")).toContainText("1 project could not be read", {timeout: 15_000});
-  await expect(projectCard).toContainText("2 chats");
-  await expect(projects.getByText("No active projects with chats")).toHaveCount(0);
-  sessionsFail = false;
-  await projects.getByRole("button", {name: "Refresh projects"}).click();
-  await expect(projects.getByRole("alert")).toHaveCount(0, {timeout: 15_000});
-  await projectCard.getByRole("button", {name: "Ask Butler about Scratch Project"}).click();
-  await expect(page).toHaveURL(/\/butler\?project=scratch-project$/);
-  await expect(page.getByRole("heading", {name: "Butler", level: 1})).toBeVisible();
-  await page.goBack();
-  await appTabs.getByRole("link", {name: "Butler"}).click();
-  await expect(page).toHaveURL(/\/butler\?project=scratch-project$/);
+  await notifications.getByRole("button", {name: "Pause"}).click();
+  await expect(notifications.getByRole("status").first()).toContainText("paused for this phone", {timeout: 15_000});
 });

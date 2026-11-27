@@ -196,6 +196,8 @@ class RuntimeSupervisor:
         self._handoff_task = None
         self._prune_stop = threading.Event()
         self._prune_task: asyncio.Task | None = None
+        self._push_dispatcher = None
+        self._push_task: asyncio.Task | None = None
         self._handoff_serial = asyncio.Lock()
         self._next_process_reconciliation = 0.0
         self._activated_handoffs: set[str] = set()
@@ -435,6 +437,12 @@ class RuntimeSupervisor:
                     event_code="storage.event_history.prune",
                     failure_message="Removing event history of deleted records stopped.",
                     name="nebula-host-event-history-prune",
+                )
+                # Butler phone alerts: the host is the install's single sender.
+                from .push_notifications import start_push_dispatcher
+
+                self._push_dispatcher, self._push_task = start_push_dispatcher(
+                    self.store, name="nebula-host-butler-push"
                 )
 
     async def select_recovery_release(self, version: str) -> None:
@@ -1326,6 +1334,16 @@ class RuntimeSupervisor:
 
     async def _detach_resources(self, caller):
         failures = []
+        if self._push_dispatcher is not None:
+            self._push_dispatcher.stop()
+        if self._push_task is not None:
+            try:
+                await cancel_and_join(self._push_task)
+            except BaseException as error:
+                # diagnostic-expected: preserve this cleanup failure for the BaseExceptionGroup after every resource is attempted.
+                failures.append(error)
+        if self._push_dispatcher is not None:
+            await self._push_dispatcher.close()
         self._prune_stop.set()
         if self._prune_task is not None:
             try:

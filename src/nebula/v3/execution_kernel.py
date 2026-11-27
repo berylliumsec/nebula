@@ -757,6 +757,11 @@ CUSTOM_RESOURCES = {
     "butler_goal_watches",
     "butler_project_states",
     "butler_global_states",
+    # Butler phone alerts: settings, phones and sent incidents change only
+    # through push_notifications.py.
+    "push_notification_settings",
+    "push_devices",
+    "push_incident_deliveries",
     "butler_focus_runtimes",
     "butler_voice_settings",
     "butler_incidents",
@@ -2685,6 +2690,23 @@ def create_execution_kernel(
             started.append(
                 ("storage", "event-history-prune", _stop_event_history_prune)
             )
+            # Butler phone alerts. A project worker never sends: the host
+            # (supervisor) or this single-process Core is the one sender.
+            if store.database.execution_runtime_id is None:
+                from .push_notifications import start_push_dispatcher
+
+                push_dispatcher, push_task = start_push_dispatcher(
+                    store, credentials=credentials, name="nebula-butler-push"
+                )
+
+                async def _stop_push_dispatcher() -> None:
+                    if push_task is None:
+                        return
+                    push_dispatcher.stop()
+                    await asyncio.wait({push_task})
+                    await push_dispatcher.close()
+
+                started.append(("butler", "push-dispatcher", _stop_push_dispatcher))
         except BaseException:
             from .async_utils import finish_cleanup
 
@@ -12177,6 +12199,14 @@ def create_execution_kernel(
 
     app.include_router(
         butler_board_router(store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
+    from .push_notifications import push_notifications_router
+
+    app.include_router(
+        push_notifications_router(store),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
