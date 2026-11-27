@@ -2369,6 +2369,20 @@ def _available_account_folder(profile: HarnessProfile) -> Path:
     return home
 
 
+def _own_process_group_spawn_options() -> dict[str, Any]:
+    """Spawn keywords that start a child in its own process group.
+
+    The child keeps the worker's session, so a worker eviction still ends it,
+    while close can signal the whole group. The standard event loop takes
+    ``process_group=0``; uvloop rejects that keyword before the child starts,
+    so there the child calls ``setpgid(0, 0)`` itself through ``preexec_fn``.
+    """
+    loop = asyncio.get_running_loop()
+    if type(loop).__module__.split(".", 1)[0] == "uvloop":
+        return {"preexec_fn": os.setpgrp}
+    return {"process_group": 0}
+
+
 def _harness_environment(
     profile: HarnessProfile,
     extra: Mapping[str, str] | None = None,
@@ -5521,7 +5535,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 limit=CODEX_APP_SERVER_READ_CHUNK_BYTES,
                 # Its own group, still in the worker's session: close can stop
                 # the CLI's tree, and a worker eviction still ends it.
-                process_group=0,
+                **_own_process_group_spawn_options(),
             )
             rpc = _CodexRpc(process=process, process_marker=marker)
             await rpc.start()
@@ -8811,7 +8825,7 @@ class GrokAcpAdapter(HarnessAdapter):
             env={**environment, **owner_environment(marker)},
             limit=MAX_MCP_MESSAGE_BYTES,
             # Own group, worker's session: see the Codex app-server spawn.
-            process_group=0,
+            **_own_process_group_spawn_options(),
         )
         rpc = _AcpRpc(process=process, process_marker=marker)
         await rpc.start()
