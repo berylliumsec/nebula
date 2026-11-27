@@ -27,6 +27,7 @@ _QUERIES = {
     "goal.completion_review_requested": "goal completion closure review evidence criteria premature lesson",
     "goal.completed": "goal completion closure review evidence criteria premature lesson",
     "goal.read_only_tool_failures_repeated": "repeated read only tool failure parent agent reassessment lesson",
+    "storage.incident_reported": "storage volume full disk space cleanup host lesson",
     "agent.subagent_start_failed": "subagent start refusal harness provider runtime recovery parent lesson",
     "butler.periodic_check": "running goal stalled work blocker provider tools parent agent lesson",
 }

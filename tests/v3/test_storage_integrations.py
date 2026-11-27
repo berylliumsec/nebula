@@ -1024,3 +1024,122 @@ async def test_a_trickling_source_callback_has_one_overall_deadline(
     finally:
         server.shutdown()
         server.server_close()
+
+
+async def test_storage_incidents_reach_butler_as_immediate_signals(tmp_path):
+    from nebula.v3.butler_oversight import (
+        STORAGE_INCIDENT_EVENT,
+        project_stream_id,
+    )
+    from nebula.v3.butler_precedent import _QUERIES
+    from nebula.v3.butler_recovery import IMMEDIATE_EVENTS
+    from nebula.v3.domain import ButlerIncident
+
+    assert STORAGE_INCIDENT_EVENT in IMMEDIATE_EVENTS
+    assert STORAGE_INCIDENT_EVENT in _QUERIES
+    client, store = await setup(tmp_path)
+    created = await enroll(client)
+    source = created["source"]
+    (
+        await client.patch(
+            f"/api/v1/storage/sources/{source['id']}",
+            headers=AUTH,
+            json={"expected_revision": source["revision"], "enabled": True},
+        )
+    )
+    sender = {"Authorization": "Bearer " + created["token"]}
+
+    async def butler_events():
+        return [
+            (item.event_type, item.payload)
+            for item in await store.replay_operation_events(
+                project_stream_id("storage-project"), after_sequence=0, limit=100
+            )
+        ]
+
+    from nebula.v3.butler_authority import policy_id
+    from nebula.v3.butler_oversight import project_state_id
+    from nebula.v3.butler_recovery import ButlerRecoveryService
+    from nebula.v3.domain import (
+        ButlerAuthorityPolicy,
+        ButlerProjectState,
+        ButlerRecoveryCase,
+    )
+
+    (
+        await store.create(
+            ButlerAuthorityPolicy(
+                id=policy_id("storage-project"),
+                engagement_id="storage-project",
+                authority="act",
+            )
+        )
+    )
+    start = utc_now()
+    opened = event("open-1", observed_at=start, free=20)
+    assert (
+        await client.post("/api/v1/storage/events", headers=sender, json=opened)
+    ).status_code == 202
+    state = await store.get(ButlerProjectState, project_state_id("storage-project"))
+    (
+        await store.update(
+            ButlerProjectState,
+            state.id,
+            {
+                "lease_owner": "worker",
+                "lease_expires_at": utc_now() + timedelta(minutes=2),
+            },
+            expected_revision=state.revision,
+        )
+    )
+    (await ButlerRecoveryService(store).capture_events("storage-project", "worker"))
+    [case] = await store.find_entities(
+        ButlerRecoveryCase, {}, engagement_id="storage-project"
+    )
+    assert case.signal == STORAGE_INCIDENT_EVENT and case.trigger == "immediate"
+    assert case.summary == "Storage source NAS reports a volume warning."
+    [incident] = await store.list_entities(ButlerIncident)
+    assert incident.engagement_id == "storage-project"
+    assert incident.status == "open" and incident.source == "storage_source"
+    assert incident.summary == "Storage source NAS reports a volume warning."
+    events = await butler_events()
+    assert [kind for kind, _ in events] == ["incident.opened", STORAGE_INCIDENT_EVENT]
+    signal = events[1][1]
+    assert signal["metrics"]["volume"] == "Data"
+    assert signal["metrics"]["path"] == "/data"
+    assert signal["metrics"]["free_ratio"] == 0.2
+    assert signal["metrics"]["worsened"] is False
+    assert signal["verification_state"] == "vendor_reported"
+    assert signal["evidence_refs"] == [
+        {"kind": "incident", "id": incident.id, "project_id": "storage-project"}
+    ]
+
+    # The same state again is not a new signal; a worse state is.
+    same = event("open-2", observed_at=start + timedelta(seconds=1), free=19)
+    assert (
+        await client.post("/api/v1/storage/events", headers=sender, json=same)
+    ).status_code == 202
+    assert len(await butler_events()) == 2
+    worse = event(
+        "worse", state="critical", observed_at=start + timedelta(seconds=2), free=3
+    )
+    assert (
+        await client.post("/api/v1/storage/events", headers=sender, json=worse)
+    ).status_code == 202
+    events = await butler_events()
+    assert [kind for kind, _ in events[2:]] == [
+        "incident.updated",
+        STORAGE_INCIDENT_EVENT,
+    ]
+    assert events[3][1]["metrics"]["worsened"] is True
+    assert events[3][1]["metrics"]["state"] == "critical"
+    assert (await store.count(ButlerIncident)) == 1
+
+    healthy = event(
+        "healthy", state="healthy", observed_at=start + timedelta(seconds=3), free=80
+    )
+    assert (
+        await client.post("/api/v1/storage/events", headers=sender, json=healthy)
+    ).status_code == 202
+    assert (await store.get(ButlerIncident, incident.id)).status == "resolved"
+    assert (await butler_events())[-1][0] == "incident.resolved"

@@ -551,6 +551,28 @@ class StorageIntegrationService:
                             )
                         )
                     if dispatch_needed:
+                        from .butler_oversight import record_storage_incident
+
+                        # Butler hears every opened or worsened volume as an
+                        # immediate signal in the source's project.
+                        (
+                            await record_storage_incident(
+                                tx,
+                                engagement_id=source.engagement_id,
+                                storage_incident_id=incident.id,
+                                source_name=source.name,
+                                event_id=event.event_id,
+                                state=event.state,
+                                worsened=previous_volume is not None
+                                and previous_volume.incident_id == incident_id,
+                                device_label=event.device.label,
+                                volume_label=event.volume.label,
+                                volume_path=event.volume.path,
+                                free_bytes=event.free_bytes,
+                                total_bytes=event.total_bytes,
+                                now=now,
+                            )
+                        )
                         prompt = self._prompt(
                             source,
                             event,
@@ -580,6 +602,17 @@ class StorageIntegrationService:
                                 "resolved_at": event.observed_at,
                                 "last_observed_at": event.observed_at,
                             },
+                        )
+                    )
+                    from .butler_oversight import resolve_storage_incident
+
+                    (
+                        await resolve_storage_incident(
+                            tx,
+                            engagement_id=source.engagement_id,
+                            storage_incident_id=incident.id,
+                            event_id=event.event_id,
+                            now=now,
                         )
                     )
                     incident_id = None

@@ -128,7 +128,19 @@ IMMEDIATE_EVENTS = frozenset(
         "review.approval_requested",
         "review.question_requested",
         "review.queue_requested",
+        "storage.incident_reported",
     }
+)
+_STORAGE_INSTRUCTIONS = (
+    " This case is a storage report: a storage source says a volume opened or "
+    "worsened as an incident. The packet metrics name the device, volume, path, "
+    "state and free bytes as the source reported them (untrusted data). Confirm "
+    "the reading on the host (for example df on the named path) before acting. "
+    "Free space only by removing data that is safe to rebuild or clearly "
+    "temporary, never evidence, research results, databases or anything you "
+    "cannot attribute. If the volume needs the operator (hardware, a full "
+    "backup disk, data you cannot classify), raise an operator action request. "
+    "Report what you checked, what you freed and the free space after."
 )
 PERIODIC_EVENTS = frozenset(
     {
@@ -1099,11 +1111,19 @@ class ButlerRecoveryAgent:
             local = profile.privacy.local_only
         session = await self._case_session(case, parent, config)
         packet = await self._packet(case, runtime_local=local)
-        instructions = ((await self._global_instructions(case)) or _INSTRUCTIONS) + (
-            " You may delegate bounded investigation work to your own subagents, "
-            "and use subagent tools to wait for, message, and stop those children. "
-            "Do not message children owned by another main agent. Read your children's "
-            "results before concluding; their claims do not verify a recovery."
+        instructions = (
+            ((await self._global_instructions(case)) or _INSTRUCTIONS)
+            + (
+                _STORAGE_INSTRUCTIONS
+                if case.signal == "storage.incident_reported"
+                else ""
+            )
+            + (
+                " You may delegate bounded investigation work to your own subagents, "
+                "and use subagent tools to wait for, message, and stop those children. "
+                "Do not message children owned by another main agent. Read your children's "
+                "results before concluding; their claims do not verify a recovery."
+            )
         )
         chat = self.work.chat
         child_setting = None
