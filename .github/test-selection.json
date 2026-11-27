@@ -1,21 +1,21 @@
 {
-  "change_digest": "8b57afaef98d4475d6d25c48e623fa80925357a6875a505b5a08e197b060f63e",
-  "reviewed_by": "Claude: typed repository publish arguments and pull request supervisor tool",
-  "reason": "Adds optional repository and commit arguments to nebula.supervisor.repo_publish behind a publish repository allowlist, and a new nebula.supervisor.github_pr op that runs a configured script with a validated argument list. Selected the supervisor powers suite, which covers the policy, guardrails, host ops, audit and gateway registration of supervisor tools.",
-  "exclusions": "Docs-only edits to the settings assistant list need no product knowledge test; the index is generated at build. No UI or operator browser journey changes. Full suites not run.",
+  "change_digest": "92277478d63551657309fed241bd27ec61881cd2b5f4d646de58772aa268591f",
+  "reviewed_by": "Claude: public commit guard reviewer fallback",
+  "reason": "Only the local public-commit guard, its installer, its tests and the change-workflow rule change. The guard now tries an ordered reviewer chain from untracked local config (Codex then Claude), reads an optional private policy file, and records local receipts. Selected the guard's own synthetic-repo suite; nothing in Core, UI or native code is touched.",
+  "exclusions": "Full suites not run; the change touches only the local commit guard. The live Claude reviewer path was not exercised because the standalone claude CLI on the dev host is signed out.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 104,
+    "python": 32,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_supervisor_powers.py"
+    "tests/test_public_commit_guard.py"
   ],
   "frontend": [],
   "native": [],

@@ -10,6 +10,7 @@ from pathlib import Path
 
 PRIOR_GUARD_SHA256 = {
     "7b366e21a19ecb3f95504abde1c0273930551606dd2fba5b6b09570e88b89248",
+    "1c1872cd1d9eba9b70f13e0c99cc8022e1da04d894121d517a7efc2917359d32",
 }
 
 
