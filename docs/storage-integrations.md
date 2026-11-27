@@ -18,6 +18,13 @@ charts or automatically change storage.
    opens one incident and queues one assistant conversation. Worsening reports
    enter the same conversation; healthy reports resolve the incident. A stale
    volume keeps its last state and displays the stale marker.
+   Butler hears it too. Each opened or worsened incident becomes an open
+   Butler incident and an immediate `storage.incident_reported` signal in the
+   source's Project. Under Act authority, Butler opens a case right away to
+   confirm the reading on the host and free space safely, or to raise an
+   operator action request. A healthy report resolves Butler's incident.
+   Device, volume and path labels reach Butler only as source-reported
+   metrics, never as the incident summary.
 4. If source callbacks are configured, an action offer can be previewed in the
    dashboard or linked chat. The preview lists exact effects and an expiry.
    An authenticated operator approves that digest before Core asks the source

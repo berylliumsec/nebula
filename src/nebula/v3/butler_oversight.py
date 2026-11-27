@@ -883,6 +883,182 @@ async def ingest_agent_report(
     return report, incident
 
 
+STORAGE_INCIDENT_EVENT = "storage.incident_reported"
+
+
+def _storage_incident_key(storage_incident_id: str) -> str:
+    return f"storage:{storage_incident_id}"
+
+
+def _clip(value: str | None, limit: int = 200) -> str | None:
+    if value is None:
+        return None
+    compact = re.sub(r"\s+", " ", value).strip()
+    return compact[:limit] or None
+
+
+async def record_storage_incident(
+    transaction: StoreTransaction,
+    *,
+    engagement_id: str,
+    storage_incident_id: str,
+    source_name: str,
+    event_id: str,
+    state: str,
+    worsened: bool,
+    device_label: str,
+    volume_label: str,
+    volume_path: str | None,
+    free_bytes: int | None,
+    total_bytes: int | None,
+    now: datetime,
+) -> ButlerIncident:
+    """Tell Butler a storage source reported a volume opening or worsening.
+
+    The incident heading is Core-generated; device and volume labels and the
+    path come from the storage source and travel only as bounded metrics and
+    attributed evidence lines, never as the summary.
+    """
+
+    key = _storage_incident_key(storage_incident_id)
+    record_id = incident_id(engagement_id, key)
+    previous = await _entity_in_transaction(transaction, ButlerIncident, record_id)
+    source = _clip(source_name, 120) or "storage source"
+    heading = f"Storage source {source} reports a volume {state}" + (
+        " (worsened)." if worsened else "."
+    )
+    free_ratio = (
+        round(free_bytes / total_bytes, 4)
+        if free_bytes is not None and total_bytes
+        else None
+    )
+    evidence = [
+        line[:300]
+        for line in (
+            f"Source-reported device: {_clip(device_label)}",
+            f"Source-reported volume: {_clip(volume_label)}"
+            + (f" at {_clip(volume_path)}" if volume_path else ""),
+            f"State {state}; free {free_bytes} of {total_bytes} bytes"
+            if total_bytes is not None
+            else f"State {state}; capacity unknown",
+        )
+    ]
+    if previous is None:
+        incident = ButlerIncident(
+            id=record_id,
+            engagement_id=engagement_id,
+            incident_key=key,
+            source="storage_source",
+            verification_state="vendor_reported",
+            summary=heading,
+            impact="Work on the affected host can fail when the volume fills.",
+            next_action=(
+                "Check the volume on its host and free space safely, or raise "
+                "an operator action if it needs the operator."
+            ),
+            evidence_summary=evidence,
+            observed_at=now,
+        )
+        (await transaction.add(incident))
+        event_type = "incident.opened"
+    else:
+        incident = await transaction.update(
+            ButlerIncident,
+            previous.id,
+            {
+                "status": "open",
+                "resolved_at": None,
+                "acknowledged_at": None,
+                "summary": heading,
+                "evidence_summary": list(
+                    dict.fromkeys([*previous.evidence_summary, *evidence])
+                )[-8:],
+            },
+            expected_revision=previous.revision,
+        )
+        event_type = "incident.updated"
+    ref = ButlerEvidenceRef(kind="incident", id=incident.id, project_id=engagement_id)
+    metrics: dict[str, str | int | float | bool | None] = {
+        "storage_incident_id": storage_incident_id,
+        "state": state,
+        "worsened": worsened,
+        "device": _clip(device_label),
+        "volume": _clip(volume_label),
+        "path": _clip(volume_path),
+        "free_bytes": free_bytes,
+        "total_bytes": total_bytes,
+        "free_ratio": free_ratio,
+    }
+    for kind in (event_type, STORAGE_INCIDENT_EVENT):
+        (
+            await _append_project_event(
+                transaction,
+                engagement_id=engagement_id,
+                event_type=kind,
+                payload=ButlerEventPayload(
+                    project_id=engagement_id,
+                    source="core",
+                    actor_role="core",
+                    summary=heading,
+                    metrics=metrics,
+                    verification_state="vendor_reported",
+                    evidence_refs=[ref],
+                    incident_key=key,
+                ),
+                idempotency_key=f"storage:{storage_incident_id}:{event_id}:{kind}",
+                now=now,
+            )
+        )
+    return incident
+
+
+async def resolve_storage_incident(
+    transaction: StoreTransaction,
+    *,
+    engagement_id: str,
+    storage_incident_id: str,
+    event_id: str,
+    now: datetime,
+) -> None:
+    """Resolve Butler's storage incident when its source reports it healthy."""
+
+    record_id = incident_id(engagement_id, _storage_incident_key(storage_incident_id))
+    previous = await _entity_in_transaction(transaction, ButlerIncident, record_id)
+    if previous is None or previous.status == "resolved":
+        return
+    (
+        await transaction.update(
+            ButlerIncident,
+            previous.id,
+            {"status": "resolved", "resolved_at": now},
+            expected_revision=previous.revision,
+        )
+    )
+    (
+        await _append_project_event(
+            transaction,
+            engagement_id=engagement_id,
+            event_type="incident.resolved",
+            payload=ButlerEventPayload(
+                project_id=engagement_id,
+                source="core",
+                actor_role="core",
+                summary="The storage source reports the volume healthy again.",
+                metrics={"storage_incident_id": storage_incident_id},
+                verification_state="vendor_reported",
+                evidence_refs=[
+                    ButlerEvidenceRef(
+                        kind="incident", id=previous.id, project_id=engagement_id
+                    )
+                ],
+                incident_key=previous.incident_key,
+            ),
+            idempotency_key=f"storage:{storage_incident_id}:{event_id}:resolved",
+            now=now,
+        )
+    )
+
+
 async def acknowledge_incident(
     store: NebulaStore,
     *,
