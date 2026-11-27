@@ -28,7 +28,8 @@ All of these are reached through Butler's existing gateway
 | `nebula.supervisor.shell` | Runs one command on an allowlisted lab host: the Core host, or a lab host over SSH. |
 | `nebula.supervisor.signal` | Sends one signal to one process. The process's command line is re-checked at signal time. |
 | `nebula.supervisor.runner_control` | Starts, stops or restarts the runner service, or starts or stops the ingress service. It runs `sudo -n <script> <verb>` with the operator's configured control scripts. |
-| `nebula.supervisor.repo_publish` | Runs the operator's configured prepare or publish script. |
+| `nebula.supervisor.repo_publish` | Runs the operator's configured prepare or publish script. With a publish repository allowlist, it passes the named `repository` and, for `publish` (required) or `prepare` (optional), the exact 40-hex `commit` as arguments. |
+| `nebula.supervisor.github_pr` | Creates, merges, views, lists or checks pull requests on an allowlisted repository through the operator's configured pull request script, as an argument list with no shell. `merge` needs `expected_head_sha`. The body goes through a private temporary file. Private strings and operator-only patterns in the branch names, title or body are refused. Raw shell `gh pr`/`gh api` stays refused. |
 | `nebula.supervisor.run_gate` | Runs one deterministic gate script. The gate must be committed and unmodified, and sit under an allowlisted root. It returns `gate.passed`. |
 | `nebula.supervisor.repo_audit` | Finds three kinds of commit: wide commits, foreign deletes, and stale-blob reverts of paths outside the committing goal's project. |
 | `nebula.supervisor.repo_restore` | Restores exact paths from a known-good commit and commits only those paths. The repository's hooks run, and nothing is pushed. |
@@ -67,6 +68,9 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_SUPERVISOR_EXTERNAL_HOSTS` | Non-lab hosts that network tools may reach. Default: `github.com`. |
 | `NEBULA_BUTLER_SUPERVISOR_RUNNER_CONTROL`, `…_INGRESS_CONTROL` | The sudoers control scripts. Without them, `runner_control` refuses. |
 | `NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT`, `…_PREPARE_SCRIPT` | The repository publish scripts. |
+| `NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS` | Comma-separated repository names the publish scripts accept as their first argument. Empty (the default) keeps the scripts argument-free and refuses a `repository`. |
+| `NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT` | Absolute path to the executable pull request script. Without it, `github_pr` refuses. It is called as `<script> <action> --repo <repository> [--number N] [--head H --base B --title T --body-file F] [--expected-head-sha S --merge-method M]`. |
+| `NEBULA_BUTLER_SUPERVISOR_GITHUB_REPOS` | Comma-separated repositories (`name` or `owner/name`) that `github_pr` may act on. |
 | `NEBULA_BUTLER_SUPERVISOR_GATE_ROOTS` | Git checkouts whose committed scripts may run as gates. |
 | `NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS` | Repositories that `repo_audit` and `repo_restore` may read and write. |
 | `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | A provider profile for the independent reviewer. Set this or the harness variable below, not both. |

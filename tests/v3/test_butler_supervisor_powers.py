@@ -819,3 +819,345 @@ def test_malformed_operator_pattern_fails_closed(tmp_path: Path) -> None:
             NEBULA_BUTLER_SUPERVISOR_OPERATOR_ONLY_PATTERNS="([unclosed",
         )
     assert caught.value.rule == "operator_only_configured"
+
+
+# --- typed repository publish and pull request tools --------------------
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _argv_script(tmp_path: Path, name: str) -> Path:
+    """A script that prints each argument on its own line, plus body-file facts."""
+
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/bash\n"
+        'for arg in "$@"; do printf "%s\\n" "$arg"; done\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "--body-file" ]; then\n'
+        '    printf "mode=%s\\n" "$(stat -c %a "$2")"\n'
+        '    printf "content=%s\\n" "$(cat "$2")"\n'
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _publish_ops(tmp_path: Path, **extra: str) -> ButlerHostOps:
+    script = _argv_script(tmp_path, "publish.sh")
+    return _ops(
+        tmp_path,
+        NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT=str(script),
+        NEBULA_BUTLER_SUPERVISOR_PREPARE_SCRIPT=str(script),
+        **extra,
+    )
+
+
+@pytest.mark.anyio
+async def test_legacy_publish_runs_the_script_without_arguments(
+    tmp_path: Path,
+) -> None:
+    ops = _publish_ops(tmp_path)
+    result = await ops.repo_publish({"step": "publish", "reason": "legacy publish"})
+    assert result["exit_code"] == 0
+    assert result["stdout"] == ""
+    assert _audit(tmp_path)[-1]["command"] == f"bash {tmp_path / 'publish.sh'}"
+    with pytest.raises(GuardrailViolation) as caught:
+        await ops.repo_publish(
+            {"step": "publish", "repository": "shared", "reason": "no allowlist"}
+        )
+    assert caught.value.rule == "invalid_argument"
+    assert _audit(tmp_path)[-1]["outcome"] == "refused"
+
+
+@pytest.mark.anyio
+async def test_allowlisted_publish_passes_repository_and_commit(
+    tmp_path: Path,
+) -> None:
+    ops = _publish_ops(tmp_path, NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS="shared, tools")
+    script = tmp_path / "publish.sh"
+    result = await ops.repo_publish(
+        {"step": "publish", "repository": "tools", "commit": SHA, "reason": "push"}
+    )
+    assert result["stdout"].splitlines() == ["tools", SHA]
+    assert _audit(tmp_path)[-1]["command"] == f"bash {script} tools {SHA}"
+    prepared = await ops.repo_publish(
+        {"step": "prepare", "repository": "shared", "reason": "filter"}
+    )
+    assert prepared["stdout"].splitlines() == ["shared"]
+
+
+@pytest.mark.parametrize(
+    ("arguments", "rule"),
+    [
+        ({"step": "publish", "commit": SHA}, "invalid_argument"),
+        (
+            {"step": "publish", "repository": "other", "commit": SHA},
+            "repository_not_allowlisted",
+        ),
+        (
+            {"step": "publish", "repository": "../shared", "commit": SHA},
+            "invalid_argument",
+        ),
+        ({"step": "publish", "repository": "shared"}, "invalid_argument"),
+        (
+            {"step": "publish", "repository": "shared", "commit": SHA.upper()},
+            "invalid_argument",
+        ),
+        (
+            {"step": "prepare", "repository": "shared", "commit": "abc123"},
+            "invalid_argument",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_allowlisted_publish_refuses_bad_arguments(
+    tmp_path: Path, arguments: dict[str, Any], rule: str
+) -> None:
+    ops = _publish_ops(tmp_path, NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS="shared")
+    with pytest.raises(GuardrailViolation) as caught:
+        await ops.repo_publish({**arguments, "reason": "must refuse"})
+    assert caught.value.rule == rule
+    [entry] = _audit(tmp_path)
+    assert entry["outcome"] == "refused"
+
+
+def _pr_ops(tmp_path: Path, **extra: str) -> ButlerHostOps:
+    script = _argv_script(tmp_path, "pr.sh")
+    env = {
+        "NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT": str(script),
+        "NEBULA_BUTLER_SUPERVISOR_GITHUB_REPOS": "example/shared,example/tools",
+    }
+    env.update(extra)
+    return _ops(tmp_path, **env)
+
+
+@pytest.mark.anyio
+async def test_github_pr_refuses_when_not_configured(tmp_path: Path) -> None:
+    ops = _ops(tmp_path)
+    with pytest.raises(GuardrailViolation) as caught:
+        await ops.github_pr(
+            {"action": "list", "repository": "example/shared", "reason": "list"}
+        )
+    assert caught.value.rule == "not_configured"
+    relative = _pr_ops(tmp_path, NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT="pr.sh")
+    with pytest.raises(GuardrailViolation) as caught:
+        await relative.github_pr(
+            {"action": "list", "repository": "example/shared", "reason": "list"}
+        )
+    assert caught.value.rule == "not_configured"
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"action": "list"}, []),
+        ({"action": "view", "number": 12}, ["--number", "12"]),
+        ({"action": "checks", "number": 7}, ["--number", "7"]),
+        (
+            {"action": "merge", "number": 3, "expected_head_sha": SHA},
+            ["--number", "3", "--expected-head-sha", SHA, "--merge-method", "merge"],
+        ),
+        (
+            {
+                "action": "merge",
+                "number": 3,
+                "expected_head_sha": SHA,
+                "merge_method": "squash",
+            },
+            ["--number", "3", "--expected-head-sha", SHA, "--merge-method", "squash"],
+        ),
+        (
+            {
+                "action": "create",
+                "head": "feature/typed-tools",
+                "base": "main",
+                "title": "Add typed tools",
+            },
+            [
+                "--head",
+                "feature/typed-tools",
+                "--base",
+                "main",
+                "--title",
+                "Add typed tools",
+            ],
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_github_pr_argv_shape(
+    tmp_path: Path, arguments: dict[str, Any], expected: list[str]
+) -> None:
+    ops = _pr_ops(tmp_path)
+    result = await ops.github_pr(
+        {**arguments, "repository": "example/shared", "reason": "pr call"}
+    )
+    action = arguments["action"]
+    assert result["exit_code"] == 0
+    assert result["stdout"].splitlines() == [
+        action,
+        "--repo",
+        "example/shared",
+        *expected,
+    ]
+    entry = _audit(tmp_path)[-1]
+    assert entry["tool"] == "github_pr"
+    assert entry["outcome"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_github_pr_body_goes_through_a_private_file_that_is_removed(
+    tmp_path: Path,
+) -> None:
+    ops = _pr_ops(tmp_path)
+    result = await ops.github_pr(
+        {
+            "action": "create",
+            "repository": "example/tools",
+            "head": "topic",
+            "base": "main",
+            "title": "Add a check",
+            "body": "Summary line",
+            "reason": "open pr",
+        }
+    )
+    lines = result["stdout"].splitlines()
+    body_path = Path(lines[lines.index("--body-file") + 1])
+    assert lines[-2:] == ["mode=600", "content=Summary line"]
+    assert not body_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "rule"),
+    [
+        (
+            {"action": "list", "repository": "example/elsewhere"},
+            "repository_not_allowlisted",
+        ),
+        ({"action": "list", "repository": "example/shared; id"}, "invalid_argument"),
+        ({"action": "view", "repository": "example/shared"}, "invalid_argument"),
+        (
+            {"action": "view", "repository": "example/shared", "number": 0},
+            "invalid_argument",
+        ),
+        (
+            {"action": "merge", "repository": "example/shared", "number": 2},
+            "invalid_argument",
+        ),
+        (
+            {
+                "action": "merge",
+                "repository": "example/shared",
+                "number": 2,
+                "expected_head_sha": SHA,
+                "merge_method": "force",
+            },
+            "invalid_argument",
+        ),
+        (
+            {"action": "list", "repository": "example/shared", "number": 2},
+            "invalid_argument",
+        ),
+        *(
+            (
+                {
+                    "action": "create",
+                    "repository": "example/shared",
+                    "head": head,
+                    "base": "main",
+                    "title": "t",
+                },
+                "invalid_argument",
+            )
+            for head in ("../main", "-delete", "topic name", "a..b", "x;rm")
+        ),
+        (
+            {
+                "action": "create",
+                "repository": "example/shared",
+                "head": "topic",
+                "base": "main",
+                "title": "two\nlines",
+            },
+            "invalid_argument",
+        ),
+        (
+            {
+                "action": "create",
+                "repository": "example/shared",
+                "head": "topic",
+                "base": "main",
+                "title": "t",
+                "body": "contact operator@example.test",
+            },
+            "private_data",
+        ),
+        (
+            {
+                "action": "create",
+                "repository": "example/shared",
+                "head": "operator@example.test",
+                "base": "main",
+                "title": "t",
+            },
+            "invalid_argument",
+        ),
+        (
+            {
+                "action": "create",
+                "repository": "example/shared",
+                "head": "topic",
+                "base": "main",
+                "title": "See reports.vendor.example",
+            },
+            "operator_only_configured",
+        ),
+    ],
+)
+@pytest.mark.anyio
+async def test_github_pr_refuses_bad_arguments_and_never_runs(
+    tmp_path: Path, arguments: dict[str, Any], rule: str
+) -> None:
+    ops = _pr_ops(tmp_path)
+    with pytest.raises(GuardrailViolation) as caught:
+        await ops.github_pr({**arguments, "reason": "must refuse"})
+    assert caught.value.rule == rule
+    [entry] = _audit(tmp_path)
+    assert entry["outcome"] == "refused"
+    assert entry["tool"] == "github_pr"
+
+
+@pytest.mark.anyio
+async def test_github_pr_refuses_a_private_string_in_a_branch_name(
+    tmp_path: Path,
+) -> None:
+    ops = _pr_ops(tmp_path, NEBULA_BUTLER_SUPERVISOR_PRIVATE_STRINGS="secret-team")
+    with pytest.raises(GuardrailViolation) as caught:
+        await ops.github_pr(
+            {
+                "action": "create",
+                "repository": "example/shared",
+                "head": "secret-team/topic",
+                "base": "main",
+                "title": "t",
+                "reason": "must refuse",
+            }
+        )
+    assert caught.value.rule == "private_data"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh pr create --title x --body y",
+        "gh pr merge 3 --merge",
+        "gh api repos/example/shared/pulls",
+    ],
+)
+def test_raw_shell_gh_pull_requests_stay_refused(tmp_path: Path, command: str) -> None:
+    with pytest.raises(GuardrailViolation) as caught:
+        _screen(tmp_path, command)
+    assert caught.value.rule == "operator_only_report_submission"

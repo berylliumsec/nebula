@@ -1,22 +1,21 @@
 {
-  "change_digest": "458bba8e9a97b2ed7fa8d0d83defbad6010c0bb7f2d99698a6498c66b61e3146",
-  "reviewed_by": "Claude: deployer refused main dd9da96 (entity field digest)",
-  "reason": "#1348 added ButlerGlobalState.host_seen_at (optional) without refreshing runtime-compatibility.json entity_fields_sha256, so prepare failed in core_build. Only the digest changes; the manifest already declares storage.entity-field-additions/v1. Selected the runtime bundle and tolerant entity reader suites.",
-  "exclusions": "test_tolerant_entity_readers::test_a_new_entity_field_needs_a_reviewed_addition_flag already fails on main dd9da96 (it expects the real manifest to lack the addition flag). Full suites not run.",
+  "change_digest": "8b57afaef98d4475d6d25c48e623fa80925357a6875a505b5a08e197b060f63e",
+  "reviewed_by": "Claude: typed repository publish arguments and pull request supervisor tool",
+  "reason": "Adds optional repository and commit arguments to nebula.supervisor.repo_publish behind a publish repository allowlist, and a new nebula.supervisor.github_pr op that runs a configured script with a validated argument list. Selected the supervisor powers suite, which covers the policy, guardrails, host ops, audit and gateway registration of supervisor tools.",
+  "exclusions": "Docs-only edits to the settings assistant list need no product knowledge test; the index is generated at build. No UI or operator browser journey changes. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 43,
+    "python": 104,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_runtime_bundle.py",
-    "tests/v3/test_tolerant_entity_readers.py"
+    "tests/v3/test_butler_supervisor_powers.py"
   ],
   "frontend": [],
   "native": [],

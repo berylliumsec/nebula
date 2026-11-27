@@ -166,6 +166,7 @@ SUPERVISOR_ACTIONS = frozenset(
         "nebula.supervisor.signal",
         "nebula.supervisor.runner_control",
         "nebula.supervisor.repo_publish",
+        "nebula.supervisor.github_pr",
         "nebula.supervisor.run_gate",
         "nebula.supervisor.repo_audit",
         "nebula.supervisor.repo_restore",
