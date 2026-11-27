@@ -39,7 +39,8 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
   onAsk: (brief: ButlerBrief) => void;
   onOpenChat: (projectId: string) => void;
   onOpenTurn: (projectId: string, turnId: string) => void;
-  onOpenFile: (path: string, projectId: string) => void;
+  /** Absent where Butler mode has no file viewer (the iPhone app); files then show as plain names. */
+  onOpenFile?: (path: string, projectId: string) => void;
   onDecide: (actionId: string, decision: "approve" | "reject") => void;
   deciding: boolean;
   note?: string;
@@ -162,7 +163,7 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
     <div className={styles.turnHead}><span className={styles.turnLabel}>Turn {turn.index}</span><span className={styles.turnLine} data-status={turn.status}>{turn.line || "No answer yet."}</span></div>
     {(turnChips(turn).length > 0 || turn.files.length > 0) && <div className={styles.chips}>
       {turnChips(turn).map((chip) => <span key={chip} className={styles.chip}>{chip}</span>)}
-      {turn.files.slice(0, 4).map((path) => <button key={path} type="button" className={styles.fileChip} title={`Open ${path} in Code & files`} onClick={() => onOpenFile(path, brief.project.id)}>{path.split("/").pop()}</button>)}
+      {turn.files.slice(0, 4).map((path) => onOpenFile ? <button key={path} type="button" className={styles.fileChip} title={`Open ${path} in Code & files`} onClick={() => onOpenFile(path, brief.project.id)}>{path.split("/").pop()}</button> : <span key={path} className={styles.fileChip} title={path}>{path.split("/").pop()}</span>)}
       {turn.files.length > 4 && <span className={styles.muted}>+{turn.files.length - 4}</span>}
     </div>}
     <button type="button" className={styles.link} onClick={() => onOpenTurn(brief.project.id, turn.turnId)}>Show raw turn <ExternalLink size={12} aria-hidden="true" /></button>
@@ -206,7 +207,7 @@ export function ButlerChatBrief({ api, sessionId, turnId, onBack, onAsk, onOpenC
 
     {brief.files.length > 0 && <div className={styles.files}>
       <span className={styles.label}>Files</span>
-      {brief.files.slice(0, 8).map((file) => <button key={file.path} type="button" className={styles.fileChip} title={`Open ${file.path} in Code & files`} onClick={() => onOpenFile(file.path, brief.project.id)}>{file.path.split("/").pop()}</button>)}
+      {brief.files.slice(0, 8).map((file) => onOpenFile ? <button key={file.path} type="button" className={styles.fileChip} title={`Open ${file.path} in Code & files`} onClick={() => onOpenFile(file.path, brief.project.id)}>{file.path.split("/").pop()}</button> : <span key={file.path} className={styles.fileChip} title={file.path}>{file.path.split("/").pop()}</span>)}
       {brief.files.length > 8 && <span className={styles.muted}>+{brief.files.length - 8} more</span>}
     </div>}
 

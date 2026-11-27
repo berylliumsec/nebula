@@ -138,7 +138,9 @@ export function ButlerModePage() {
   const openThreadId = params.get("thread") ?? undefined;
   const phoneTab = params.get("tab") === "threads" ? "threads" : "board";
   const sectionParam = params.get("section");
-  const section: Section = isSection(sectionParam) ? sectionParam : "board";
+  // The iPhone app has no code editor: Code & files is a desktop and browser section.
+  const availableSections = nativeShell ? SECTIONS.filter((item) => item.id !== "code") : SECTIONS;
+  const section: Section = isSection(sectionParam) && availableSections.some((item) => item.id === sectionParam) ? sectionParam : "board";
   // The chat whose brief is open, a project's ongoing Butler thread, and a file to open in Code & files.
   const briefId = params.get("chat") ?? undefined;
   const projectThreadId = params.get("pthread") ?? undefined;
@@ -1325,7 +1327,7 @@ export function ButlerModePage() {
     onAsk={(value) => askAbout(briefItem ?? itemFromBrief(value))}
     onOpenChat={(projectId) => openPopup(briefId, briefItem?.title ?? "Chat", projectId)}
     onOpenTurn={(projectId) => openPopup(briefId, briefItem?.title ?? "Chat", projectId)}
-    onOpenFile={openFile}
+    onOpenFile={nativeShell ? undefined : openFile}
     onDecide={(actionId, decision) => void decideAction(briefId, actionId, decision)}
     deciding={deciding === briefId}
     note={actionNote[briefId]}
@@ -1375,7 +1377,7 @@ export function ButlerModePage() {
     onAskAbout={(path) => { setDraft((current) => current || `About ${path}: `); updateParams((next) => { next.delete("section"); next.delete("pthread"); next.set("tab", "threads"); }); window.setTimeout(() => composerRef.current?.focus(), 0); }} /></Suspense> : noProject;
 
   const sectionTabs = <nav className={styles.sections} aria-label="Butler sections">
-    {SECTIONS.map((item) => <button key={item.id} type="button" className={styles.sectionTab} aria-current={section === item.id ? "page" : undefined} onClick={() => setSection(item.id)}>
+    {availableSections.map((item) => <button key={item.id} type="button" className={styles.sectionTab} aria-current={section === item.id ? "page" : undefined} onClick={() => setSection(item.id)}>
       {item.label}
       {item.id === "board" && states?.waiting ? <span className={styles.badge} data-state="waiting">{states.waiting}</span> : null}
       {item.id === "oversight" && bridge?.attentionCount ? <span className={styles.badge} data-state="failed">{bridge.attentionCount}</span> : null}
@@ -1412,7 +1414,7 @@ export function ButlerModePage() {
       {moreOpen && <div className={styles.sheetLayer}>
         <button type="button" className={styles.sheetScrim} aria-label="Close" tabIndex={-1} onClick={() => setMoreOpen(false)} />
         <div className={styles.sheet} role="dialog" aria-label="More in Butler">
-          {(["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
+          {(nativeShell ? ["memory", "settings"] as const : ["code", "memory", "settings"] as const).map((value) => <button key={value} type="button" className={styles.sheetRow} onClick={() => setSection(value)}>{SECTIONS.find((item) => item.id === value)?.label}<ChevronRight size={16} aria-hidden="true" /></button>)}
           {!nativeShell && <Link className={styles.sheetRow} to="/projects">All projects<ChevronRight size={16} aria-hidden="true" /></Link>}
           {!nativeShell && <button type="button" className={styles.sheetRow} onClick={exit}>Open full Nebula<ChevronRight size={16} aria-hidden="true" /></button>}
         </div>

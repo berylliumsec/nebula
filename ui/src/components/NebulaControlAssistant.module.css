@@ -192,7 +192,8 @@
   }
 }
 /* Butler mode lends the panel a column: it fills that place instead of floating. */
-.embeddedPanel { position: static; z-index: auto; width: 100%; height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+/* Lent into Butler mode: undo the phone-width floating placement (left: 50% plus translateX(-50%)), which otherwise pushes the panel half off-screen. */
+.embeddedPanel { position: static; inset: auto; transform: none; z-index: auto; width: 100%; height: 100%; max-height: none; min-height: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .embeddedPanel .body { flex: 1; min-height: 0; }
 .embeddedPanel .transcript { max-height: none; }
 .embedHidden { display: none !important; }
@@ -203,3 +204,5 @@
 .ownSettings select,
 .voiceSettings select { padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--canvas); color: var(--text); font: inherit; }
 .embeddedPanel .body { max-width: 680px; padding-left: 0; }
+/* A project thread on a phone has no surrounding pane padding, so the lent chat keeps its own gutter. */
+@media (max-width: 760px) { .embeddedPanel[data-embed-view="chat"] .body { padding-left: 16px; padding-right: 16px; } }

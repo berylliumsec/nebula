@@ -289,6 +289,18 @@ describe("the All projects link", () => {
     expect(await screen.findByRole("heading", { name: "Projects page" })).toBeVisible();
   });
 
+  it("in the iPhone app, has no Code & files section, even from a code link", async () => {
+    layout.shell = true;
+    try {
+      render(<MemoryRouter initialEntries={["/butler?section=code"]}><ButlerModePage /></MemoryRouter>);
+      expect(await screen.findByRole("navigation", { name: "Butler sections" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Code & files" })).toBeNull();
+      expect(screen.getByRole("button", { name: /^Board/ })).toHaveAttribute("aria-current", "page");
+    } finally {
+      layout.shell = false;
+    }
+  });
+
   it("in the iPhone app, has nothing to exit to and no way out to All projects", async () => {
     layout.compact = true;
     layout.shell = true;

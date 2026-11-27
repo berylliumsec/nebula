@@ -1,38 +1,26 @@
 {
-  "change_digest": "da6d717cdc7f382d41e51ac9cee899d25b7f5f0b9330532aeae270f6731ffa22",
-  "reviewed_by": "Claude: Butler push notifications and a Butler-only iPhone app",
-  "reason": "New Core push_notifications.py (APNs dispatcher, phone registry, /api/v1/notifications/push routes, three new entities (runtime-compatibility entity digest recorded), supervisor and single-process startup, httpx http2 extra), iPhone build 9 push registration, Butler-only shell routing (Projects snapshot removed), Push notifications settings panel and Butler mode Settings card, Butler mode outage alert gains Retry connection, settings catalog, Butler destination, workflow registry and product-help doc. Selected the new push suite (dispatcher dedupe/reopen/burst/revoke/retire/welcome/test, ES256 JWT, APNs headers, API, Butler opening the section, product-help search), entity-resource classification, global settings app mounting and the product index digest check; frontend: new push helper tests, Butler mode board (no All projects in the shell), settings list glyphs, assistant navigation phrases and the Settings page (panel reads only when its group is open); Playwright: the iPhone shell area (mocked journey on 10 projects plus the real-Core LAN journey with a fake APNs on 3), Settings search, and the Butler mode real-Core journey on desktop and phone width.",
-  "exclusions": "tests/v3/test_settings_assistant_tools.py and tests/v3/test_product_knowledge.py beyond the digest check are excluded: test_catalog_covers_settings_destinations_without_secrets, test_provider_tools_are_bounded_to_catalog_and_project and test_product_search_finds_headless_core_and_paired_butler_cli already fail on origin/main (destination count and host-command tools drifted). Native macOS tests do not cover the iOS app; the Swift policy checks (60) and an unsigned iPhone build ran locally in Xcode. Real APNs delivery and the physical phone are not testable in CI. Full suites not run in CI.",
+  "change_digest": "9855c9e3cd55451560560b7a0256e9f685d1e9f92e393486546a09cb6d9b59ab",
+  "reviewed_by": "Claude: Butler panels skewed in phone-width Butler mode; no code editor in the iPhone app",
+  "reason": "CSS and Butler mode page change. At phone width the floating Butler panel's placement (left: 50% plus translateX(-50%), NebulaControlAssistant.module.css media rule) still applied when the panel was lent into Butler mode, so project threads and Butler settings rendered half off-screen (validated in a browser: panel left -163/-195 vs host 16/0; transform none fixes it). .embeddedPanel now resets inset and transform and keeps a gutter for lent chats on phones. The iPhone app drops Code & files (section tabs, More sheet, section=code falls back to Board, brief file chips become plain names). Selected the Butler mode board unit suite (new shell test) and the iPhone shell Playwright area, whose mocked journey now asserts the lent settings and project-thread panels sit inside the screen and that Code & files is absent, plus the Butler mode real-Core journey at phone width.",
+  "exclusions": "No Core, Python or native change. Desktop layout is unchanged by the media-scoped rules; full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 71,
-    "frontend": 95,
+    "python": 0,
+    "frontend": 24,
     "native": 0,
-    "playwright": 18
+    "playwright": 14
   },
-  "python": [
-    "tests/v3/test_push_notifications.py",
-    "tests/v3/test_generic_crud_exposure.py",
-    "tests/v3/test_runtime_global_settings.py",
-    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/api/pushNotifications.test.ts",
-    "ui/src/pages/ButlerModePage.board.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/components/nebulaAssistantActions.test.ts",
-    "ui/src/pages/SettingsPage.test.tsx"
+    "ui/src/pages/ButlerModePage.board.test.tsx"
   ],
   "native": [],
   "playwright": [
     "area:ios-assistant-only",
-    "entry:settings-search/desktop",
-    "entry:settings-search/narrow",
-    "entry:butler-mode/assistant-real-desktop",
     "entry:butler-mode/assistant-real-chromium-390"
   ],
   "checks": []
