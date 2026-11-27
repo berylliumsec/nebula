@@ -1,23 +1,22 @@
 {
-  "change_digest": "8db8803d2888d5fdca1107f96c673edf2e153fc2b9bd75fa3541cd84bbb606ab",
-  "reviewed_by": "Claude: Butler could not find blocked chats by name",
-  "reason": "Butler told the operator three blocked chats could not be found: the live roster (work.agents) omits blocked chats and nebula.data.search_chats matches one literal phrase in message text, so a multi-name query returned nothing; it never paged nebula.work.chats. nebula.work.chats now takes a title query (any word, case-insensitive, LIKE wildcards escaped) through a new chats_titled helper; search_chats and work.agents descriptions say what they omit, and an empty search carries a hint. Selected the Butler chat paging test (title lookup added), the Butler data tests (empty-search hint) and the execution-scope suite (title lookup runs project-scoped on an execution worker).",
-  "exclusions": "Message search semantics for the web UI and terminal client are unchanged. No UI change, so no Playwright. test_butler_capabilities::test_scheduled_butler_can_edit_all_assistant_settings already fails on main 35d0be8 and is not selected. Full suites not run.",
+  "change_digest": "458bba8e9a97b2ed7fa8d0d83defbad6010c0bb7f2d99698a6498c66b61e3146",
+  "reviewed_by": "Claude: deployer refused main dd9da96 (entity field digest)",
+  "reason": "#1348 added ButlerGlobalState.host_seen_at (optional) without refreshing runtime-compatibility.json entity_fields_sha256, so prepare failed in core_build. Only the digest changes; the manifest already declares storage.entity-field-additions/v1. Selected the runtime bundle and tolerant entity reader suites.",
+  "exclusions": "test_tolerant_entity_readers::test_a_new_entity_field_needs_a_reviewed_addition_flag already fails on main dd9da96 (it expects the real manifest to lack the addition flag). Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 166,
+    "python": 43,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_data.py",
-    "tests/v3/test_control_assistant_work.py",
-    "tests/v3/test_execution_scope.py"
+    "tests/v3/test_runtime_bundle.py",
+    "tests/v3/test_tolerant_entity_readers.py"
   ],
   "frontend": [],
   "native": [],
