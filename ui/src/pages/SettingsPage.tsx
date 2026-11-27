@@ -35,6 +35,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
 import { ShowMeHow } from "../guides/ShowMeHow";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
+import { PushNotificationSettings } from "../components/PushNotificationSettings";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
 import { isTauriRuntime, isElectronRuntime, shutdownLocalRuntime } from "../api/runtime";
@@ -79,7 +80,7 @@ function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSe
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
   if (["integrations-settings", "storage-integration-settings", "saved-credential-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
-  if (["identity-security-settings", "operator-settings", "device-pairing-settings", "general-settings", "appearance-settings", "security-settings"].includes(hash)) return "identity-security-settings";
+  if (["identity-security-settings", "operator-settings", "device-pairing-settings", "push-notification-settings", "general-settings", "appearance-settings", "security-settings"].includes(hash)) return "identity-security-settings";
   if (["release-settings-group", "release-settings"].includes(hash)) return "release-settings-group";
   return "models-settings";
 }
@@ -1030,6 +1031,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           <StandardEmptyState compact icon={<KeyRound size={23} />} title="Write-only" explanation="Secrets stay in the system vault." />
         </section>
       </div>
+      <PushNotificationSettings api={api} disabled={previewMode} active={openAdvancedGroup === "identity-security-settings"} />
       </SettingsGroup>
       <SettingsGroup id="release-settings-group" title="Release" summary="Version and update channel" open={openAdvancedGroup === "release-settings-group"} onOpen={openSettingsGroup} bodyClassName="settings-release-body" hidden={embedded && embeddedAdvancedGroup !== "release-settings-group"}><ReleaseSettingsPanel /></SettingsGroup>
       </div>

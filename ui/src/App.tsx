@@ -5,7 +5,7 @@ import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRout
 import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 import { isNebulaShell } from "./hooks/useCompactLayout";
-import { ShellProjectsPage, shellButlerPath } from "./components/ShellProjects";
+import { shellButlerPath } from "./components/shellPaths";
 import { MemoryBudgetSettings } from "./components/MemoryBudgetSettings";
 import { RuntimeContinuityNotice } from "./components/RuntimeContinuityNotice";
 import { NavigationContinuity } from "./state/NavigationContinuityBoundary";
@@ -138,12 +138,6 @@ function ShellProjectRedirect() {
   return <Navigate to={shellButlerPath(projectId)} replace />;
 }
 
-function AssistantShellHandoff() {
-  const location = useLocation();
-  const url = `${window.location.origin}${location.pathname}${location.search}`;
-  return <section className="page assistant-shell-empty"><h1>Open in full Nebula</h1><p>This page is outside the iPhone app, which has only Butler mode and Projects.</p><label>Page link<input readOnly value={url} onFocus={event => event.currentTarget.select()} /></label><Link className="button primary" to="/">Back to Butler</Link></section>;
-}
-
 export function App() {
   const { api, health, reconnect } = useWorkspace();
   const location = useLocation();
@@ -167,14 +161,14 @@ export function App() {
 
 function ApplicationRoutes() {
   if (isNebulaShell()) return <Routes><Route element={<AppShell />}>
-    <Route path="projects" element={<ShellProjectsPage />} />
     <Route path="butler" element={route(<ButlerModePage />)} />
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route index element={<ShellProjectRedirect />} />
       <Route path="*" element={<ShellProjectRedirect />} />
     </Route>
     <Route index element={<AssistantShellLanding />} />
-    <Route path="*" element={<AssistantShellHandoff />} />
+    {/* The app is Butler mode only: every other link, including /projects, lands back in Butler. */}
+    <Route path="*" element={<Navigate to="/" replace />} />
   </Route></Routes>;
   return <Routes><Route element={<AppShell />}>
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>

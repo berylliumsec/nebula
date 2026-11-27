@@ -241,6 +241,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["operator", "profile", "identity", "name", "email", "role", "attribution"],
   },
   {
+    id: "settings.push-notifications",
+    label: "Push notifications",
+    description: "Send Butler alerts to the Nebula iPhone app when a project needs you or is blocked; add the APNs key, test, pause or remove phones",
+    category: "Identity & Security",
+    scope: "Security",
+    target: "push-notification-settings",
+    keywords: ["notifications", "push", "push notifications", "phone notifications", "Butler notifications", "alerts", "APNs", "Apple push", ".p8", "AuthKey", "key ID", "team ID", "Butler alerts", "needs you", "blocked", "blocker", "incident", "test notification", "pause notifications", "badge", "sound"],
+  },
+  {
     id: "settings.devices",
     label: "Paired devices",
     description: "Pair, inspect, and revoke browsers, mobile devices, and terminal Assistant clients",

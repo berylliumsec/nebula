@@ -62,6 +62,7 @@ export const settingIcons: Record<string, LucideIcon> = {
   "settings.typesafe": ShieldCheck,
   "settings.saved-credentials": KeyRound,
   "settings.devices": Smartphone,
+  "settings.push-notifications": Smartphone,
   "settings.appearance": Moon,
   "settings.release": RefreshCw,
   "settings.diagnostics": Activity,

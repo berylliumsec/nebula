@@ -27,6 +27,7 @@ import { projectSurface } from "../resourceRoutes";
 import { useNavigationChords } from "../state/useNavigationChords";
 import { GuideProvider } from "../guides/GuideProvider";
 import { useGuideAction } from "../guides/guideActions";
+import { ShellPushRegistration } from "./ShellPushNotifications";
 import { isNebulaShell } from "../hooks/useCompactLayout";
 
 const resourceLabels: Record<string, string> = {
@@ -296,6 +297,7 @@ export function AppShell() {
                 {workspaceState !== "failed" && <ProjectRuntimeNotice api={api} />}
                 {workspaceState !== "failed" && <ProjectHoldNotice api={api} projectId={engagement?.id} />}
                 <RuntimeContinuityNotice api={api} />
+                {api && <ShellPushRegistration api={api} />}
                 <Outlet />
               </main>
               {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} refreshKey={settingLens.refreshKey} status={settingLens.status} statusMode={settingLens.statusMode} onClose={() => setSettingLens(undefined)} />}
