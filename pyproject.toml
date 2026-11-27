@@ -47,7 +47,7 @@ SQLAlchemy = { version = ">=2.0,<3", extras = ["asyncio"] }
 aiosqlite = ">=0.20,<1"
 psycopg = { version = ">=3.2,<4", extras = ["binary"] }
 alembic = ">=1.14,<2"
-httpx = ">=0.28,<1"
+httpx = { version = ">=0.28,<1", extras = ["http2"] }
 typer = ">=0.16,<1"
 prompt-toolkit = ">=3.0.51,<4"
 rich = ">=13,<15"
