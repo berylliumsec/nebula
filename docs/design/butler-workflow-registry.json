@@ -1111,12 +1111,10 @@
         "ui/src/pages/SessionsPage.tsx::getChatSession",
         "ui/src/pages/SessionsPage.tsx::listChatSessions",
         "ui/src/pages/SessionsPage.tsx::listChatSessionsPage",
-        "ui/src/components/ShellProjects.tsx::listChatSessionsPage",
         "ui/src/pages/SessionsPage.tsx::listChatSessionActivityIfChanged",
         "ui/src/pages/useSessionState.ts::requestIfChanged",
         "ui/src/pages/WorkPage.tsx::listChatSessions",
         "ui/src/pages/WorkPage.tsx::listChatSessionActivity",
-        "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
         "ui/src/pages/WorkPage.tsx::request::GET \"work/agents\"",
         "ui/src/pages/ChildProjectConversations.tsx::listLinkedProjectChatsIfChanged",
         "ui/src/api/butlerBoard.ts::requestIfChanged",
@@ -1294,7 +1292,6 @@
       "entry_point": "Attention inbox or chat approval: inspect and decide one exact pending request after operator instruction",
       "ui_calls": [
         "ui/src/components/MobileAttentionInbox.tsx::listChatAttention",
-        "ui/src/components/ShellProjects.tsx::listChatAttention",
         "ui/src/components/chat-subagents/ChatSubagentPane.tsx::decideApproval",
         "ui/src/pages/SessionsPage.tsx::getApproval",
         "ui/src/state/WorkspaceContext.tsx::listApprovals",
@@ -3738,6 +3735,37 @@
         ],
         "reason": "The requesting browser owns local submission records and scoped drafts. Core remains authoritative for receipt, turn and approval status. Reopening only reads; no draft, decision or resume is automatically submitted. Only a request verified succeeded can be dismissed."
       }
+    },
+    {
+      "id": "settings.push_notifications",
+      "entry_point": "Settings > Identity & Security > Push notifications; Butler mode > Settings in the iPhone app; the iPhone app registers itself on launch",
+      "ui_calls": [
+        "ui/src/api/pushNotifications.ts::request::GET \"notifications/push\"",
+        "ui/src/api/pushNotifications.ts::request::\"PUT\" \"notifications/push/settings\"",
+        "ui/src/api/pushNotifications.ts::request::\"PUT\" \"notifications/push/devices\"",
+        "ui/src/api/pushNotifications.ts::request::\"PATCH\" `notifications/push/devices/${encodeURIComponent(deviceId)}`",
+        "ui/src/api/pushNotifications.ts::request::\"DELETE\" `notifications/push/devices/${encodeURIComponent(deviceId)}`",
+        "ui/src/api/pushNotifications.ts::request::\"POST\" `notifications/push/devices/${encodeURIComponent(deviceId)}/test`",
+        "ui/src/components/PushNotificationSettings.tsx::createCredential"
+      ],
+      "core_owner": "push_notifications.py: global PushNotificationSettings (APNs key reference in the credential vault), PushDevice rows tied to paired devices, and the install's single dispatcher in the supervisor or single-process Core",
+      "butler": {
+        "discover": "nebula.settings.catalog",
+        "read": "nebula.settings.open setting_id=push-notifications (status, phones and last Apple answer shown to the operator)",
+        "change": "nebula.settings.open setting_id=push-notifications"
+      },
+      "authority": "The APNs signing key is a device secret the operator chooses on the requesting browser; it goes straight to the credential vault and only its reference is saved. Phone registration comes from the paired iPhone app itself. Pause, remove and test are operator controls in the section Butler opens.",
+      "observed_result_test": "tests/v3/test_push_notifications.py::test_butler_opens_phone_notification_settings_without_the_key",
+      "result": "The Push notifications section opens; no key enters a Butler result, and an opening receipt claims no mutation.",
+      "status": "device_handoff",
+      "handoff": {
+        "operation": "nebula.settings.open",
+        "target_id": "push-notifications",
+        "owner": "requesting_browser",
+        "boundary": "device_secret",
+        "reason": "The APNs .p8 key is chosen from a file on the requesting device, and phone registration belongs to that phone's own paired app.",
+        "observed_result": "opened"
+      }
     }
   ],
   "ui_api_calls": [
@@ -3871,6 +3899,30 @@
     },
     {
       "key": "ui/src/api/memoryBudgets.ts::request::GET `memory-budgets/host-commands${options.toolCallId ? `?tool_call_id=${encodeURIComponent(options.toolCallId)}` : \"\"}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::\"DELETE\" `notifications/push/devices/${encodeURIComponent(deviceId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::\"PATCH\" `notifications/push/devices/${encodeURIComponent(deviceId)}`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::\"POST\" `notifications/push/devices/${encodeURIComponent(deviceId)}/test`",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::\"PUT\" \"notifications/push/devices\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::\"PUT\" \"notifications/push/settings\"",
+      "count": 1
+    },
+    {
+      "key": "ui/src/api/pushNotifications.ts::request::GET \"notifications/push\"",
       "count": 1
     },
     {
@@ -4858,6 +4910,10 @@
       "count": 2
     },
     {
+      "key": "ui/src/components/PushNotificationSettings.tsx::createCredential",
+      "count": 2
+    },
+    {
       "key": "ui/src/components/ResourceActionMenu.tsx::resolveResourceActions",
       "count": 1
     },
@@ -4943,18 +4999,6 @@
     },
     {
       "key": "ui/src/components/SecurityDashboard.tsx::stopSecurityBrowserAutomation",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ShellProjects.tsx::listChatAttention",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ShellProjects.tsx::listChatSessionActivity",
-      "count": 1
-    },
-    {
-      "key": "ui/src/components/ShellProjects.tsx::listChatSessionsPage",
       "count": 1
     },
     {

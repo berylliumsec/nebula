@@ -6113,7 +6113,7 @@ export class ApiClient {
 
   createCredential(
     secret: string,
-    persistence: "vault" | "session" = "vault",
+    persistence: "vault" | "store" | "session" = "vault",
   ): Promise<CredentialStatus> {
     return this.request<{
       reference: string;
