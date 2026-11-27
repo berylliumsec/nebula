@@ -1,26 +1,39 @@
 {
-  "change_digest": "165e4f4adb9162f296d81ac80659bed85e079c9b49b3cdd48c6ac9e88d659215",
-  "reviewed_by": "Claude: retry a Butler check on another account after a usage limit",
-  "reason": "Backend-only fix in butler_recovery.py. A background Butler check runs on the host project's Butler chat account; for Claude accounts nothing routed around a spent plan, so every Nebula-wide check hosted by a project whose Butler chat was on that account ended interrupted (live 2026-11-25..27). Now a check turn that fails on a usage or rate limit (is_rate_limit_failure) runs once more on another enabled same-kind account offering the model, with children moved off the spent account. Selected the Butler instructions suite (new regression test plus the Codex capacity-selection test that shares the refactored candidate filter), the global-check scope suite (roster privacy follows the running account) and the check-summary suite. Also closes test_butler_global_check_scope.py's SQLite stores with the shared close_database_handles fixture: eight aiosqlite worker threads kept pytest from exiting after every test passed, on main too, so CI's thread guard failed the job.",
-  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run.",
+  "change_digest": "c8a5473f5e40c08bf5ff78987a1a5072ece59879a59a745f8e130c427ab14932",
+  "reviewed_by": "Claude: Butler push notifications and a Butler-only iPhone app",
+  "reason": "New Core push_notifications.py (APNs dispatcher, phone registry, /api/v1/notifications/push routes, three new entities, supervisor and single-process startup, httpx http2 extra), iPhone build 9 push registration, Butler-only shell routing (Projects snapshot removed), Push notifications settings panel and Butler mode Settings card, Butler mode outage alert gains Retry connection, settings catalog, Butler destination, workflow registry and product-help doc. Selected the new push suite (dispatcher dedupe/reopen/burst/revoke/retire/welcome/test, ES256 JWT, APNs headers, API, Butler opening the section, product-help search), entity-resource classification, global settings app mounting and the product index digest check; frontend: new push helper tests, Butler mode board (no All projects in the shell), settings list glyphs, assistant navigation phrases and the Settings page (panel reads only when its group is open); Playwright: the iPhone shell area (mocked journey on 10 projects plus the real-Core LAN journey with a fake APNs on 3), Settings search, and the Butler mode real-Core journey on desktop and phone width.",
+  "exclusions": "tests/v3/test_settings_assistant_tools.py and tests/v3/test_product_knowledge.py beyond the digest check are excluded: test_catalog_covers_settings_destinations_without_secrets, test_provider_tools_are_bounded_to_catalog_and_project and test_product_search_finds_headless_core_and_paired_butler_cli already fail on origin/main (destination count and host-command tools drifted). Native macOS tests do not cover the iOS app; the Swift policy checks (60) and an unsigned iPhone build ran locally in Xcode. Real APNs delivery and the physical phone are not testable in CI. Full suites not run in CI.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 50,
-    "frontend": 0,
+    "python": 71,
+    "frontend": 95,
     "native": 0,
-    "playwright": 0
+    "playwright": 18
   },
   "python": [
-    "tests/v3/test_butler_instructions.py",
-    "tests/v3/test_butler_global_check_scope.py",
-    "tests/v3/test_butler_check_summary_post.py"
+    "tests/v3/test_push_notifications.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_runtime_global_settings.py",
+    "tests/v3/test_product_knowledge.py::test_packaged_product_index_has_current_source_digest"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/pushNotifications.test.ts",
+    "ui/src/pages/ButlerModePage.board.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/nebulaAssistantActions.test.ts",
+    "ui/src/pages/SettingsPage.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "area:ios-assistant-only",
+    "entry:settings-search/desktop",
+    "entry:settings-search/narrow",
+    "entry:butler-mode/assistant-real-desktop",
+    "entry:butler-mode/assistant-real-chromium-390"
+  ],
   "checks": []
 }
