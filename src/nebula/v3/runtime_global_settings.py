@@ -43,6 +43,7 @@ GLOBAL_SETTINGS_HOST_ROUTES = (
     ("POST", r"/api/v1/providers/[^/]+/openrouter/credits/refresh"),
     ("POST", r"/api/v1/runner-profiles/[^/]+/probe"),
     ("POST", r"/api/v1/harnesses/[^/]+/(?:health|test-turn)"),
+    ("POST", r"/api/v1/harnesses/public-commit-review"),
 )
 
 

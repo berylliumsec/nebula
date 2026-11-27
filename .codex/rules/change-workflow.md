@@ -48,19 +48,32 @@ untested feature works.
 
 ## Public commit review unavailable
 
-The local public-commit guard has Codex review every staged commit. The operator
-gives standing approval to bypass it when Codex review is **unavailable**: the
-guard reports `Codex review failed`, `could not start or timed out`, or `invalid
-review result`, and a trivial `codex exec` confirms a usage limit, an
-authentication failure, or an outage. Retry once first. Never bypass a commit that
-Codex reviewed and did not allow, and never bypass to commit secrets or research
-material the guard exists to keep out of the public repository.
+The local public-commit guard has a reviewer check every staged commit: Codex
+first, then Claude when Codex cannot give a verdict. The order, models, and any
+operator-specific block policy come from the untracked local configuration in
+`$(git rev-parse --git-common-dir)/hooks/nebula-public-commit-review.json`
+(`reviewers`, `policy_file`); keep that configuration and the policy text out of
+the repository. On the Core host where Butler commits, the configuration names
+a `command` reviewer that reviews on Butler's configured harness profiles
+through Core (see "Public commit review" in
+`docs/design/butler-supervisor-powers.md`). A reviewer that returns `block` or `uncertain` is final; the
+next reviewer runs only when the previous one could not start, timed out,
+failed, or returned an incomplete result. Each passed or bypassed review is
+recorded in `nebula-public-commit-reviews.jsonl` beside the hooks directory.
+
+The operator gives standing approval to bypass the guard when **every**
+configured reviewer is unavailable: the guard reports `No configured reviewer
+was available`, and a trivial `codex exec` and `claude -p` confirm a usage
+limit, an authentication failure, or an outage. Retry once first. Never bypass
+a commit that any reviewer reviewed and did not allow, and never bypass to
+commit secrets or research material the guard exists to keep out of the public
+repository.
 
 Use only the guard's tree-scoped bypass, for one commit at a time:
 
 ```sh
 TREE=$(git write-tree)
-REASON="Codex review unavailable: <cause, e.g. usage limit until 2026-11-21>"
+REASON="Public review unavailable: <cause, e.g. Codex and Claude usage limits until 2026-11-21>"
 NEBULA_PUBLIC_COMMIT_BYPASS_TREE=$TREE \
 NEBULA_PUBLIC_COMMIT_BYPASS_REASON="$REASON" \
 git commit -F <message file ending with "Public-Review-Bypass: $REASON">

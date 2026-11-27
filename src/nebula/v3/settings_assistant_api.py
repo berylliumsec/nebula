@@ -138,6 +138,9 @@ def _template_is_allowed(template: str) -> bool:
             "/auth/pairings/redeem",
             "/auth/devices/current/capabilities",
             "/test-turn",
+            # Only the local public-commit guard asks for this review; Butler,
+            # whose commits it reviews, must not.
+            "/public-commit-review",
             "/external-sessions",
         )
     ):

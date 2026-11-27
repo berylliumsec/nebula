@@ -75,6 +75,7 @@ All configuration is through environment variables in Core's service environment
 | `NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS` | Repositories that `repo_audit` and `repo_restore` may read and write. |
 | `NEBULA_BUTLER_REVIEW_PROVIDER_ID` | A provider profile for the independent reviewer. Set this or the harness variable below, not both. |
 | `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` | A harness profile for the independent reviewer, such as a Claude harness on the host's existing login. Each review is one turn in a fresh session with no tools, no MCP server and no Core gateway. |
+| `NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS` | Up to four comma-separated harness profiles, in order, that review commits to the public repository for the local public-commit guard (see "Public commit review" below). Default: `NEBULA_BUTLER_REVIEW_HARNESS_PROFILE_ID` alone. Each profile reviews on its own account folder and default model, and must be local-only or cleared for sensitive data. |
 | `NEBULA_BUTLER_REVIEW_MODEL` | The reviewer model. Default: `claude-opus-5-5`. It must differ from the reviewed goal's model. |
 | `NEBULA_BUTLER_REVIEW_CEILING_POLICY` | A file appended to the reviewer instructions, such as an impact-ceiling policy. |
 | `NEBULA_BUTLER_REVIEW_EVIDENCE_ROOTS` | Extra directories the reviewer may read evidence bytes from. The goal's own project workspace is always an evidence root, so this is optional. |
@@ -376,3 +377,36 @@ on with `NEBULA_GOAL_RUNTIME_ROUTING_ENABLED`, which is off by default.
 
 The config shape, turn-boundary rule, fallback and rollout plan are in
 [goal-runtime-routing.md](goal-runtime-routing.md).
+
+## Public commit review
+
+When Butler commits to the public Nebula repository from the Core host, the
+local public-commit guard (`scripts/public_commit_guard.py`) reviews every
+commit. On that host the guard's untracked hook configuration names a `command`
+reviewer, `scripts/simulation/nebula_public_review.py`, instead of the plain
+`codex` and `claude` CLIs, whose default logins are not the harness profiles'
+account folders:
+
+```json
+{"reviewers": [{"kind": "command", "label": "Nebula Butler",
+                "argv": ["/usr/bin/python3", "-I", "<checkout>/scripts/simulation/nebula_public_review.py"]}],
+ "policy_file": "nebula-public-commit-policy.txt"}
+```
+
+The command reads the guard's prompt and asks Core's
+`POST /api/v1/harnesses/public-commit-review` with the service token. Core runs
+one fresh, tool-free turn (`run_harness_one_shot`, through the host memory
+runner) on the first profile in `NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS`.
+It moves to the next profile only when one is unavailable: missing, disabled,
+not cleared for sensitive data, without a default model, or its turn fails,
+times out, uses a tool or does not answer with a JSON object. Each attempt is
+one host effect inside the 150-second host-effect bound. The guard validates the
+verdict; `block` and `uncertain` are final. When Core is unreachable or no
+profile answers, the commit is blocked.
+
+Butler's conversation never reaches the reviewer, and the route is excluded
+from the Settings assistant catalog so Butler cannot ask for a review itself.
+Add the hooks directory and its configuration to
+`NEBULA_BUTLER_SUPERVISOR_PROTECTED_PATHS` so Butler cannot rewrite them. Like
+every host effect, the request (the staged text) and the verdict are kept in
+Core's encrypted runtime payload vault.

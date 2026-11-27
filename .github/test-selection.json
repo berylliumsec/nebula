@@ -1,21 +1,27 @@
 {
-  "change_digest": "8b57afaef98d4475d6d25c48e623fa80925357a6875a505b5a08e197b060f63e",
-  "reviewed_by": "Claude: typed repository publish arguments and pull request supervisor tool",
-  "reason": "Adds optional repository and commit arguments to nebula.supervisor.repo_publish behind a publish repository allowlist, and a new nebula.supervisor.github_pr op that runs a configured script with a validated argument list. Selected the supervisor powers suite, which covers the policy, guardrails, host ops, audit and gateway registration of supervisor tools.",
-  "exclusions": "Docs-only edits to the settings assistant list need no product knowledge test; the index is generated at build. No UI or operator browser journey changes. Full suites not run.",
+  "change_digest": "668f6cf190e9793e4846c4a9c6c6c2600db6d339846aa47624e70d459ba8e60c",
+  "reviewed_by": "Claude: public commit guard reviewer fallback",
+  "reason": "Public-commit guard reviewer chain plus a Core route that reviews on Butler's harness profiles. The guard tries reviewers from untracked local config (Codex, then Claude, or a command reviewer). On the Core host the command reviewer (scripts/simulation/nebula_public_review.py) asks POST /api/v1/harnesses/public-commit-review, which runs one tool-free run_harness_one_shot turn per configured profile (NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS) through the host memory runner. Selected the guard, client and route suites plus the host diagnostic, global-settings classifier, Settings-assistant catalog and one-shot parity suites the route and harness_diagnostics refactor touch. Also resets butler_independent_review's kernel-set module globals in the harness-parity suite: a stale workspace resolver from an earlier app-building test reopened a closed database and kept pytest from exiting.",
+  "exclusions": "Full suites not run. Not verified against a live Core with a signed-in harness profile, and the plain claude CLI path was not exercised live (the dev host's standalone CLI is signed out). No UI change, so no frontend or Playwright selection.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 104,
+    "python": 157,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_supervisor_powers.py"
+    "tests/test_public_commit_guard.py",
+    "tests/test_simulation_public_review.py",
+    "tests/v3/test_public_commit_review.py",
+    "tests/v3/test_runtime_host_usage.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_runtime_global_settings.py",
+    "tests/v3/test_butler_harness_parity.py"
   ],
   "frontend": [],
   "native": [],
