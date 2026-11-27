@@ -51,6 +51,9 @@ RUNNER_CONTROL_ENV = "NEBULA_BUTLER_SUPERVISOR_RUNNER_CONTROL"
 INGRESS_CONTROL_ENV = "NEBULA_BUTLER_SUPERVISOR_INGRESS_CONTROL"
 PUBLISH_SCRIPT_ENV = "NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT"
 PREPARE_SCRIPT_ENV = "NEBULA_BUTLER_SUPERVISOR_PREPARE_SCRIPT"
+PUBLISH_REPOS_ENV = "NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS"
+GITHUB_PR_SCRIPT_ENV = "NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT"
+GITHUB_REPOS_ENV = "NEBULA_BUTLER_SUPERVISOR_GITHUB_REPOS"
 OPERATOR_ONLY_ENV = "NEBULA_BUTLER_SUPERVISOR_OPERATOR_ONLY_PATTERNS"
 GATE_ROOTS_ENV = "NEBULA_BUTLER_SUPERVISOR_GATE_ROOTS"
 FORENSICS_REPOS_ENV = "NEBULA_BUTLER_SUPERVISOR_FORENSICS_REPOS"
@@ -130,6 +133,12 @@ class SupervisorPolicy:
     # The reviewer may run on a harness profile (for example Claude) instead
     # of a provider profile; exactly one of the two is configured.
     review_harness_profile_id: str | None = None
+    # Repository names the publish scripts accept as their first argument.
+    # Empty keeps the single-repository scripts that take no arguments.
+    publish_repos: tuple[str, ...] = ()
+    # The pull request script and the repositories it may act on.
+    github_pr_script: str | None = None
+    github_repos: tuple[str, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
 
     def require_enabled(self) -> None:
@@ -225,6 +234,9 @@ def load_policy(environ: dict[str, str] | None = None) -> SupervisorPolicy:
         ingress_control=env.get(INGRESS_CONTROL_ENV) or None,
         publish_script=env.get(PUBLISH_SCRIPT_ENV) or None,
         prepare_script=env.get(PREPARE_SCRIPT_ENV) or None,
+        publish_repos=_split_commas(env.get(PUBLISH_REPOS_ENV)),
+        github_pr_script=env.get(GITHUB_PR_SCRIPT_ENV) or None,
+        github_repos=_split_commas(env.get(GITHUB_REPOS_ENV)),
         operator_only_patterns=tuple(
             item
             for item in (env.get(OPERATOR_ONLY_ENV) or "").splitlines()
@@ -437,6 +449,48 @@ def _is_private_ip(value: str) -> bool:
     return address.is_loopback
 
 
+def _screen_operator_patterns(policy: SupervisorPolicy, text: str) -> None:
+    for raw in policy.operator_only_patterns:
+        try:
+            matched = re.search(raw, text, re.IGNORECASE) is not None
+        except re.error as exc:
+            # A malformed operator pattern fails closed, and the operator
+            # needs to see that their pattern is broken.
+            record_caught_exception(
+                "butler",
+                "butler.supervisor.operator_pattern_invalid",
+                "An operator-only pattern for Butler supervisor tools is not a "
+                "valid regular expression; matching commands are refused.",
+                exc,
+                stage="guardrails",
+            )
+            matched = True
+        if matched:
+            raise GuardrailViolation(
+                "operator_only_configured",
+                "matches an operator-only pattern; the human operator must do this",
+            )
+
+
+def screen_outbound_text(policy: SupervisorPolicy, text: str, *, field: str) -> None:
+    """Refuse text that a typed tool would send off the host.
+
+    Configured private strings and operator-only patterns apply; the built-in
+    shell rules do not, because this text is data, not a command.
+    """
+
+    if "\x00" in text:
+        raise GuardrailViolation("invalid_argument", f"{field} contains a NUL byte")
+    folded = text.casefold()
+    for secret in policy.private_strings:
+        if secret and secret.casefold() in folded:
+            raise GuardrailViolation(
+                "private_data",
+                f"{field} contains a configured private string; it may not leave the host",
+            )
+    _screen_operator_patterns(policy, folded)
+
+
 def screen_command(
     policy: SupervisorPolicy,
     command: str,
@@ -464,26 +518,7 @@ def screen_command(
             raise GuardrailViolation(
                 rule, "operator-only action; the human operator must do this"
             )
-    for raw in policy.operator_only_patterns:
-        try:
-            matched = re.search(raw, text, re.IGNORECASE) is not None
-        except re.error as exc:
-            # A malformed operator pattern fails closed, and the operator
-            # needs to see that their pattern is broken.
-            record_caught_exception(
-                "butler",
-                "butler.supervisor.operator_pattern_invalid",
-                "An operator-only pattern for Butler supervisor tools is not a "
-                "valid regular expression; matching commands are refused.",
-                exc,
-                stage="guardrails",
-            )
-            matched = True
-        if matched:
-            raise GuardrailViolation(
-                "operator_only_configured",
-                "matches an operator-only pattern; the human operator must do this",
-            )
+    _screen_operator_patterns(policy, text)
     if re.search(r"\bgh\s+(issue|pr|release|gist|api)\b", text):
         raise GuardrailViolation(
             "operator_only_report_submission",

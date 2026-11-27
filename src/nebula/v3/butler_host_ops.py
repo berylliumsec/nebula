@@ -21,6 +21,7 @@ import os
 import re
 import signal as signal_module
 import subprocess
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -35,6 +36,7 @@ from .butler_supervisor_policy import (
     load_policy,
     redact,
     screen_command,
+    screen_outbound_text,
     write_audit,
 )
 from .domain import RiskClass
@@ -91,14 +93,69 @@ _RUNNER_SCHEMA = {
     "required": ["service", "verb", "reason"],
     "additionalProperties": False,
 }
+_REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+# Pull request repositories may also be written owner/name.
+_GITHUB_REPO = re.compile(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$")
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_BRANCH = re.compile(r"^[A-Za-z0-9._/-]+$")
+_PR_ACTIONS = ("create", "merge", "view", "checks", "list")
+_MERGE_METHODS = ("merge", "squash", "rebase")
+# Fields each pull request action takes beyond action, repository and reason.
+_PR_FIELDS: dict[str, frozenset[str]] = {
+    "create": frozenset({"head", "base", "title", "body"}),
+    "merge": frozenset({"number", "expected_head_sha", "merge_method"}),
+    "view": frozenset({"number"}),
+    "checks": frozenset({"number"}),
+    "list": frozenset(),
+}
+_PR_COMMON = frozenset({"action", "repository", "reason"})
+_REPOSITORY = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 100,
+    "pattern": _REPO_NAME.pattern,
+}
+_GITHUB_REPOSITORY = {**_REPOSITORY, "pattern": _GITHUB_REPO.pattern}
+_SHA = {"type": "string", "pattern": _COMMIT.pattern}
+_BRANCH_FIELD = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 255,
+    "pattern": _BRANCH.pattern,
+}
+_PR_TIMEOUT = 300
+
 _PUSH_SCHEMA = {
     "type": "object",
     "properties": {
         "step": {"type": "string", "enum": ["prepare", "publish"]},
+        "repository": _REPOSITORY,
+        "commit": _SHA,
         "timeout_seconds": _TIMEOUT,
         "reason": _REASON,
     },
     "required": ["step", "reason"],
+    "additionalProperties": False,
+}
+_GITHUB_PR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string", "enum": list(_PR_ACTIONS)},
+        "repository": _GITHUB_REPOSITORY,
+        "number": {"type": "integer", "minimum": 1},
+        "head": _BRANCH_FIELD,
+        "base": _BRANCH_FIELD,
+        "title": {"type": "string", "minLength": 1, "maxLength": 256},
+        "body": {"type": "string", "maxLength": 65_536},
+        "expected_head_sha": _SHA,
+        "merge_method": {
+            "type": "string",
+            "enum": list(_MERGE_METHODS),
+            "default": "merge",
+        },
+        "reason": _REASON,
+    },
+    "required": ["action", "repository", "reason"],
     "additionalProperties": False,
 }
 _GATE_SCHEMA = {
@@ -448,10 +505,21 @@ class ButlerHostOps:
                 "not_configured",
                 "set NEBULA_BUTLER_SUPERVISOR_PUBLISH_SCRIPT and _PREPARE_SCRIPT",
             )
-        argv = ["bash", script]
+        tool = f"repo_{arguments['step']}"
+        try:
+            argv = ["bash", script, *_publish_arguments(policy, arguments)]
+        except GuardrailViolation as error:
+            await self._audit_refusal(
+                policy,
+                tool,
+                error,
+                command=f"bash {script}",
+                reason=arguments["reason"],
+            )
+            raise
         return await self._exec(
             policy,
-            tool=f"repo_{arguments['step']}",
+            tool=tool,
             host=local,
             argv=argv,
             display=" ".join(argv),
@@ -459,6 +527,63 @@ class ButlerHostOps:
             cwd=None,
             reason=arguments["reason"],
         )
+
+    async def github_pr(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        policy = self._policy()
+        local = next((h for h in policy.hosts.values() if h.local), None)
+        script = policy.github_pr_script
+        if local is None or not script:
+            raise GuardrailViolation(
+                "not_configured", "set NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT"
+            )
+        if (
+            not os.path.isabs(script)
+            or not os.path.isfile(script)
+            or not os.access(script, os.X_OK)
+        ):
+            raise GuardrailViolation(
+                "not_configured",
+                "NEBULA_BUTLER_SUPERVISOR_GITHUB_PR_SCRIPT must be an absolute "
+                "path to an executable file",
+            )
+        action = str(arguments.get("action"))
+        try:
+            flags, body = _pr_arguments(policy, arguments)
+        except GuardrailViolation as error:
+            await self._audit_refusal(
+                policy,
+                "github_pr",
+                error,
+                command=f"{script} {action}",
+                reason=arguments.get("reason"),
+            )
+            raise
+        body_path: str | None = None
+        try:
+            if body is not None:
+                # mkstemp creates the file 0600; it is removed after the run.
+                fd, body_path = tempfile.mkstemp(prefix="nebula-pr-body-", suffix=".md")
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(body)
+                flags += ["--body-file", body_path]
+            argv = [script, action, "--repo", arguments["repository"], *flags]
+            return await self._exec(
+                policy,
+                tool="github_pr",
+                host=local,
+                argv=argv,
+                display=" ".join(argv),
+                timeout=_PR_TIMEOUT,
+                cwd=None,
+                reason=arguments["reason"],
+            )
+        finally:
+            if body_path is not None:
+                try:
+                    os.unlink(body_path)
+                except FileNotFoundError:
+                    # diagnostic-expected: the script may remove its input.
+                    pass
 
     async def run_gate(self, arguments: dict[str, Any]) -> dict[str, Any]:
         policy = self._policy()
@@ -586,7 +711,9 @@ class ButlerHostOps:
                         "'prepare' runs the prepare script (for example a large-file "
                         "filter); 'publish' runs the publish script (for example a "
                         "secrets scan, merge and push). Only those two scripts run. "
-                        "Audited."
+                        "When the operator allowlists publish repositories, name the "
+                        "repository, and the exact 40-hex commit for 'publish' "
+                        "(optional for 'prepare'). Audited."
                     ),
                     input_schema=_PUSH_SCHEMA,
                     output_schema=_OUT,
@@ -594,6 +721,26 @@ class ButlerHostOps:
                     idempotency=once,
                 ),
                 self.repo_publish,
+            ),
+            AnalysisTool(
+                ToolSpec(
+                    name="nebula.supervisor.github_pr",
+                    description=(
+                        "Create, merge, view, list or check pull requests on an "
+                        "allowlisted repository through the operator's configured "
+                        "pull request script (no shell, no direct gh). create takes "
+                        "head, base, title and optional body; merge takes number, "
+                        "expected_head_sha (the merge is refused if the head moved) "
+                        "and merge_method; view and checks take number. Private "
+                        "strings and operator-only patterns in the title or body are "
+                        "refused. Audited. State the reason."
+                    ),
+                    input_schema=_GITHUB_PR_SCHEMA,
+                    output_schema=_OUT,
+                    risk_class=write,
+                    idempotency=once,
+                ),
+                self.github_pr,
             ),
             AnalysisTool(
                 ToolSpec(
@@ -613,6 +760,145 @@ class ButlerHostOps:
                 self.run_gate,
             ),
         ]
+
+
+def _repository(
+    value: Any,
+    allowlist: tuple[str, ...],
+    env: str,
+    pattern: re.Pattern[str] = _REPO_NAME,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or not pattern.fullmatch(value)
+        or len(value) > 100
+        or any(part in {".", ".."} for part in value.split("/"))
+    ):
+        raise GuardrailViolation("invalid_argument", "repository name")
+    if value not in allowlist:
+        raise GuardrailViolation(
+            "repository_not_allowlisted",
+            f"{value!r} is not in {env}; allowlisted: {sorted(allowlist)}",
+        )
+    return value
+
+
+def _commit(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not _COMMIT.fullmatch(value):
+        raise GuardrailViolation(
+            "invalid_argument", f"{field} must be a 40-character lowercase hex SHA"
+        )
+    return value
+
+
+def _branch(value: Any, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not _BRANCH.fullmatch(value)
+        or len(value) > 255
+        or ".." in value
+        or value.startswith("-")
+    ):
+        raise GuardrailViolation("invalid_argument", f"{field} branch name")
+    return value
+
+
+def _publish_arguments(
+    policy: SupervisorPolicy, arguments: dict[str, Any]
+) -> list[str]:
+    """The publish script's arguments: none in legacy mode, else repo [commit]."""
+
+    repository = arguments.get("repository")
+    commit = arguments.get("commit")
+    if not policy.publish_repos:
+        if repository is not None or commit is not None:
+            raise GuardrailViolation(
+                "invalid_argument",
+                "repository and commit need NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS; "
+                "the configured scripts publish one fixed repository",
+            )
+        return []
+    if repository is None:
+        raise GuardrailViolation("invalid_argument", "repository is required")
+    args = [
+        _repository(
+            repository, policy.publish_repos, "NEBULA_BUTLER_SUPERVISOR_PUBLISH_REPOS"
+        )
+    ]
+    if commit is None:
+        if arguments["step"] == "publish":
+            raise GuardrailViolation(
+                "invalid_argument", "commit is required for step=publish"
+            )
+    else:
+        args.append(_commit(commit, "commit"))
+    return args
+
+
+def _pr_arguments(
+    policy: SupervisorPolicy, arguments: dict[str, Any]
+) -> tuple[list[str], str | None]:
+    """Validate one pull request call. Returns its flags and the body, if any."""
+
+    action = arguments.get("action")
+    if action not in _PR_FIELDS:
+        raise GuardrailViolation(
+            "invalid_argument", f"action must be one of {_PR_ACTIONS}"
+        )
+    extra = set(arguments) - _PR_COMMON - _PR_FIELDS[action]
+    if extra:
+        raise GuardrailViolation(
+            "invalid_argument", f"{action} does not take {sorted(extra)}"
+        )
+    _repository(
+        arguments.get("repository"),
+        policy.github_repos,
+        "NEBULA_BUTLER_SUPERVISOR_GITHUB_REPOS",
+        _GITHUB_REPO,
+    )
+    flags: list[str] = []
+    body: str | None = None
+    if action in {"merge", "view", "checks"}:
+        number = arguments.get("number")
+        if isinstance(number, bool) or not isinstance(number, int) or number < 1:
+            raise GuardrailViolation(
+                "invalid_argument", "number must be an integer > 0"
+            )
+        flags += ["--number", str(number)]
+    if action == "create":
+        head = _branch(arguments.get("head"), "head")
+        base = _branch(arguments.get("base"), "base")
+        title = arguments.get("title")
+        if (
+            not isinstance(title, str)
+            or not title.strip()
+            or len(title) > 256
+            or title.startswith("-")
+            or any(ch in title for ch in "\r\n")
+        ):
+            raise GuardrailViolation(
+                "invalid_argument", "title must be one non-empty line"
+            )
+        raw_body = arguments.get("body")
+        if raw_body is not None and (
+            not isinstance(raw_body, str) or len(raw_body) > 65_536
+        ):
+            raise GuardrailViolation("invalid_argument", "body")
+        for field, text in (("head", head), ("base", base), ("title", title)):
+            screen_outbound_text(policy, text, field=field)
+        if raw_body:
+            screen_outbound_text(policy, raw_body, field="body")
+            body = raw_body
+        flags += ["--head", head, "--base", base, "--title", title]
+    if action == "merge":
+        sha = _commit(arguments.get("expected_head_sha"), "expected_head_sha")
+        method = arguments.get("merge_method") or "merge"
+        if method not in _MERGE_METHODS:
+            raise GuardrailViolation(
+                "invalid_argument", f"merge_method must be one of {_MERGE_METHODS}"
+            )
+        flags += ["--expected-head-sha", sha, "--merge-method", method]
+    return flags, body
 
 
 def _quote(value: str) -> str:
