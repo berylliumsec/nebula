@@ -493,6 +493,10 @@ def test_butler_opens_phone_notification_settings_without_the_key():
 def test_product_help_explains_butler_push_notifications(monkeypatch):
     """Butler's product help (bundled index) answers how to get alerts on the phone."""
     from nebula.v3.product_knowledge import search_product_knowledge
+    from scripts.build_product_knowledge import ensure
+
+    # The index is generated, not committed; build it when absent or stale.
+    ensure()
 
     monkeypatch.setattr("nebula.v3.product_knowledge._dense_query", lambda _: None)
     for question, expected in (
