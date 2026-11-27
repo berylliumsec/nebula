@@ -781,3 +781,112 @@ async def test_check_interval_is_authenticated_revision_guarded_and_durable(tmp_
 
 
 pytestmark = pytest.mark.anyio
+
+
+class _ProjectScopedStore:
+    """A project worker's view: it reads only its own project's Engagement."""
+
+    def __init__(self, store, project_id: str) -> None:
+        self._store = store
+        self._project_id = project_id
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+    async def iter_readable_entities(self, model, *args, **kwargs):
+        async for item in self._store.iter_readable_entities(model, *args, **kwargs):
+            if model is not Engagement or item.id == self._project_id:
+                yield item
+
+
+async def _set_global(store, **changes) -> None:
+    state = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    await store.update(
+        ButlerGlobalState, GLOBAL_STATE_ID, changes, expected_revision=state.revision
+    )
+
+
+async def test_project_workers_keep_one_host_until_it_goes_silent(tmp_path):
+    store, alpha, _ = await _anchored_project(tmp_path)
+    beta = await store.create(Engagement(name="Beta"))
+    provider = (await store.find_entities(ProviderProfile, {}))[0]
+    await store.create(
+        ButlerAuthorityPolicy(
+            id=policy_id(beta.id), engagement_id=beta.id, authority="act"
+        )
+    )
+    await store.create(
+        ButlerProjectState(
+            id=project_state_id(beta.id),
+            engagement_id=beta.id,
+            lease_owner="worker-1",
+            lease_expires_at=utc_now() + timedelta(minutes=10),
+        )
+    )
+    await store.create(
+        ChatSession(
+            engagement_id=beta.id,
+            title="Butler",
+            model="fixture-model",
+            provider_profile_id=provider.id,
+            metadata={"control_assistant": True},
+        )
+    )
+    workers = {
+        project.id: ButlerRecoveryService(
+            _ProjectScopedStore(store, project.id), instructions_root=tmp_path
+        )
+        for project in (alpha, beta)
+    }
+    # Each worker sees only itself, so each computes itself as the anchor.
+    assert await workers[alpha.id]._global_anchor() == alpha.id
+    assert await workers[beta.id]._global_anchor() == beta.id
+
+    assert await workers[alpha.id].fire_global_periodic_check(alpha.id, "worker-1")
+    assert (await workers[alpha.id].capture_events(alpha.id, "worker-1")) == 1
+    await _rewind_clock(store)
+    # The check is due, but alpha hosts it and fired recently.
+    assert not await workers[beta.id].fire_global_periodic_check(beta.id, "worker-1")
+    (case,) = await store.find_entities(ButlerRecoveryCase, {}, engagement_id=alpha.id)
+    await _set_status(store, case.id, "resolved")
+    assert await workers[alpha.id].fire_global_periodic_check(alpha.id, "worker-1")
+    await _set_status(store, case.id, "investigating")
+
+    # A long check keeps alpha the host: skipping it refreshes alpha's presence.
+    long_ago = utc_now() - timedelta(minutes=20)
+    await _set_global(store, last_periodic_at=long_ago, host_seen_at=long_ago)
+    assert not await workers[alpha.id].fire_global_periodic_check(alpha.id, "worker-1")
+    assert (await store.get(ButlerGlobalState, GLOBAL_STATE_ID)).host_seen_at > long_ago
+    assert not await workers[beta.id].fire_global_periodic_check(beta.id, "worker-1")
+
+    # Alpha's worker goes silent, so beta takes over and then keeps the role.
+    await _set_global(store, last_periodic_at=long_ago, host_seen_at=long_ago)
+    assert await workers[beta.id].fire_global_periodic_check(beta.id, "worker-1")
+    state = await store.get(ButlerGlobalState, GLOBAL_STATE_ID)
+    assert state.last_project_id == beta.id
+    await _rewind_clock(store)
+    for open_case in await store.find_entities(
+        ButlerRecoveryCase, {}, engagement_id=alpha.id
+    ):
+        await _set_status(store, open_case.id, "resolved")
+    assert not await workers[alpha.id].fire_global_periodic_check(alpha.id, "worker-1")
+    status = await workers[alpha.id].global_status(alpha.id)
+    assert status["status"] == "ready" and status["host_project_id"] == beta.id
+
+
+async def test_a_worker_that_reads_every_project_uses_the_stable_anchor(tmp_path):
+    store, alpha, _ = await _anchored_project(tmp_path)
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    # A recorded host this store can read but that no longer qualifies does not
+    # hold the role until it goes silent.
+    other = await store.create(Engagement(name="Retired host"))
+    await store.create(
+        ButlerGlobalState(
+            id=GLOBAL_STATE_ID,
+            last_periodic_at=utc_now() - timedelta(minutes=6),
+            last_project_id=other.id,
+            host_seen_at=utc_now(),
+        )
+    )
+    assert await recovery._global_anchor() == alpha.id
+    assert await recovery.fire_global_periodic_check(alpha.id, "worker-1")

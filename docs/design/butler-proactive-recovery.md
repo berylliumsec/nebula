@@ -76,6 +76,14 @@ closes, under the target's own Act check. A worker uses this route only when
 its host advertises `butler_background_actions`. Recovery goals, project
 resumption and child projects stay in the host project. Per-project checks
 keep their project scope.
+One Act project keeps the host role. A store that reads every project picks
+the oldest Act project with a Butler runtime. A project worker reads only its
+own project, so it fires the check only when the shared `ButlerGlobalState`
+names it as host, names no host, or names a host that has been silent for three
+check intervals. The host shows it is alive by firing, or, while its last check
+is still open, by refreshing `host_seen_at` once per interval, so no other
+worker starts a second check beside a long one. An ineligible or stopped host
+hands over after that silence.
 The event detector, capability schemas, project authority, and verifier are
 Core contracts. The model selects the remedy and may combine tools; it is not
 limited to a table of preset responses.

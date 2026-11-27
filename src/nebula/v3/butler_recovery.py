@@ -11,7 +11,7 @@ from .async_utils import async_any
 import asyncio
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -90,6 +90,35 @@ def check_interval(state: ButlerGlobalState | None) -> timedelta:
     )
 
 
+def _host_seen(state: ButlerGlobalState) -> datetime | None:
+    """When the recorded host last fired a check or showed it is alive."""
+
+    seen = [item for item in (state.last_periodic_at, state.host_seen_at) if item]
+    return max(seen) if seen else None
+
+
+def _unreadable_host_active(
+    state: ButlerGlobalState | None,
+    project_id: str | None,
+    readable: set[str],
+    now: datetime,
+) -> bool:
+    """Whether another project, which this store cannot read, hosts the checks.
+
+    A store that can read the recorded host chose the anchor with it in view,
+    so only a project worker defers to a host it cannot see, and only until
+    that host has been silent for ``HOST_SILENT_INTERVALS`` check intervals.
+    """
+
+    if state is None or not state.last_project_id:
+        return False
+    if state.last_project_id == project_id or state.last_project_id in readable:
+        return False
+    seen = _host_seen(state)
+    silent_after = HOST_SILENT_INTERVALS * check_interval(state)
+    return seen is not None and now - seen < silent_after
+
+
 MAX_DIALOGUE_TURNS = 8
 IMMEDIATE_EVENTS = frozenset(
     {
@@ -120,6 +149,9 @@ RUNNING_CHECK_STATUSES = ("investigating", "verifying")
 # An open check untouched this long is treated as abandoned so it cannot hold
 # the schedule; interrupted-case recovery settles it separately.
 STALE_OPEN_CHECK = timedelta(hours=3)
+# A host that has neither fired nor reported an open check for this many check
+# intervals is silent, and another Act project's worker takes the role over.
+HOST_SILENT_INTERVALS = 3
 LEASE_RENEW_INTERVAL_SECONDS = 15
 
 
@@ -1407,23 +1439,17 @@ class ButlerRecoveryService:
             return {**result, "status": "invalid", "detail": str(exc)}
         if loaded is None:
             return {**result, "status": "missing"}
-        anchor = await self._global_anchor()
-        if anchor:
-            return {**result, "status": "ready", "host_project_id": anchor}
-        if (
-            state is not None
-            and state.last_project_id
-            and state.last_project_id != project_id
-            and state.last_periodic_at
-            and utc_now() - state.last_periodic_at <= 3 * interval
-        ):
-            # Another project's worker hosts the checks and ran one recently;
+        anchor, readable = await self._anchor_view()
+        if _unreadable_host_active(state, project_id, readable, utc_now()):
+            # Another project's worker hosts the checks and showed it recently;
             # this worker cannot read that project to confirm it still can.
             return {
                 **result,
                 "status": "ready",
-                "host_project_id": state.last_project_id,
+                "host_project_id": state.last_project_id if state else None,
             }
+        if anchor:
+            return {**result, "status": "ready", "host_project_id": anchor}
         blocker = await self.host_blocker(project_id) if project_id else None
         return {
             **result,
@@ -1480,10 +1506,20 @@ class ButlerRecoveryService:
 
         The runtime is the project's own Butler chat, or the model Butler's
         home session for the project shares through ``ButlerFocusRuntime``.
+        A project worker reads only its own project, so this is the stable
+        choice only for a store that reads every project; workers also defer
+        to the recorded host (``_unreadable_host_active``).
         """
 
+        return (await self._anchor_view())[0]
+
+    async def _anchor_view(self) -> tuple[str | None, set[str]]:
+        """The anchor this store can choose, and every project it can read."""
+
+        readable: set[str] = set()
         candidates: list[Engagement] = []
         async for project in self.store.iter_readable_entities(Engagement):
+            readable.add(project.id)
             if project.status == EngagementStatus.ARCHIVED or not project.work_enabled:
                 continue
             policy = await self.store.find_entity(
@@ -1494,11 +1530,39 @@ class ButlerRecoveryService:
             if not await _has_butler(self.store, project.id):
                 continue
             candidates.append(project)
-        return (
+        anchor = (
             min(candidates, key=lambda item: (item.created_at, item.id)).id
             if candidates
             else None
         )
+        return anchor, readable
+
+    async def _show_host_presence(self, project_id: str) -> None:
+        """Record that the host is alive while its last check is still open.
+
+        Written at most once per check interval, so other project workers do
+        not take the role over and start a second check beside this one.
+        """
+
+        now = utc_now()
+        async with self.store.transaction(immediate=True) as transaction:
+            (await transaction.lock_shared_rows())
+            current = await _entity_in_transaction(
+                transaction, ButlerGlobalState, GLOBAL_STATE_ID
+            )
+            if current is None or current.last_project_id != project_id:
+                return
+            seen = _host_seen(current)
+            if seen is not None and now - seen < check_interval(current):
+                return
+            (
+                await transaction.update(
+                    ButlerGlobalState,
+                    current.id,
+                    {"host_seen_at": now},
+                    expected_revision=current.revision,
+                )
+            )
 
     async def _open_scheduled_check(
         self,
@@ -1540,7 +1604,10 @@ class ButlerRecoveryService:
         if self.instructions_root is None:
             return False
         loaded = read_butler_instructions(self.instructions_root)
-        if loaded is None or (await self._global_anchor()) != project_id:
+        if loaded is None:
+            return False
+        anchor, readable = await self._anchor_view()
+        if anchor != project_id:
             return False
         policy = await self._current_act(project_id, worker_id)
         if policy is None:
@@ -1549,6 +1616,7 @@ class ButlerRecoveryService:
         if await self._open_scheduled_check(
             "butler.global_periodic_check", engagement_id=project_id
         ):
+            (await self._show_host_presence(project_id))
             return False
         now = utc_now()
         async with self.store.transaction(immediate=True) as transaction:
@@ -1564,6 +1632,10 @@ class ButlerRecoveryService:
                 and current.last_periodic_at is not None
                 and now - current.last_periodic_at < interval
             ):
+                return False
+            # A project worker sees only itself as the anchor, so it keeps
+            # the recorded host until that host goes silent.
+            if _unreadable_host_active(current, project_id, readable, now):
                 return False
             state = await _entity_in_transaction(
                 transaction, ButlerProjectState, project_state_id(project_id)
@@ -1609,6 +1681,7 @@ class ButlerRecoveryService:
                             id=GLOBAL_STATE_ID,
                             last_periodic_at=now,
                             last_project_id=project_id,
+                            host_seen_at=now,
                         )
                     )
                 )
@@ -1617,7 +1690,11 @@ class ButlerRecoveryService:
                     await transaction.update(
                         ButlerGlobalState,
                         current.id,
-                        {"last_periodic_at": now, "last_project_id": project_id},
+                        {
+                            "last_periodic_at": now,
+                            "last_project_id": project_id,
+                            "host_seen_at": now,
+                        },
                         expected_revision=current.revision,
                     )
                 )
