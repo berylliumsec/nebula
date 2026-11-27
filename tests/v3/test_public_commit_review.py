@@ -269,12 +269,12 @@ async def test_kernel_route_reviews_on_the_kernel_harness_runtime(
             privacy=ProviderPrivacy(permits_sensitive_data=True),
         )
     )
-    client = TestClient(create_app(store, auth_token="test-token"))
-    response = await client.post(
-        "/api/v1/harnesses/public-commit-review",
-        json={"prompt": PROMPT},
-        headers={"Authorization": "Bearer test-token"},
-    )
+    async with TestClient(create_app(store, auth_token="test-token")) as client:
+        response = await client.post(
+            "/api/v1/harnesses/public-commit-review",
+            json={"prompt": PROMPT},
+            headers={"Authorization": "Bearer test-token"},
+        )
     assert response.status_code == 200, response.text
     assert response.json()["verdict"]["decision"] == "allow"
     assert seen == {

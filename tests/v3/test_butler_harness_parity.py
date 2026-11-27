@@ -20,6 +20,7 @@ from typing import Any
 
 import pytest
 
+from nebula.v3 import butler_independent_review as review_module
 from nebula.v3 import harnesses as harness_module
 from nebula.v3.butler_independent_review import (
     REVIEW_KEY,
@@ -75,6 +76,16 @@ from nebula.v3.domain import GOAL_COMPLETION_PROPOSAL_KEY
 SHELL_PROFILE = HarnessNativeCapabilities(
     workspace_access=HarnessWorkspaceAccess.READ, shell=True
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_kernel_review_globals(monkeypatch):
+    # An earlier test that built Core's app leaves the execution kernel's review
+    # hooks in these module globals, bound to that test's (closed) store. A
+    # review here would fall back to them and reopen that database, leaving an
+    # aiosqlite thread that keeps pytest from exiting.
+    for name in ("_workspace_resolver", "_harness_runner", "_provider_factory"):
+        monkeypatch.setattr(review_module, name, None)
 
 
 def _runtime(store: NebulaStore, tmp_path: Path) -> HarnessRuntimeService:
