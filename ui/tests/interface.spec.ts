@@ -16236,6 +16236,31 @@ reloadTest("iPhone assistant shell stays in desktop Butler mode and registers th
   expect(pushRegistrations.at(-1)).toEqual({token: "ab".repeat(32), environment: "development", topic: "com.berylliumsec.nebula.ios", platform: "ios"});
   await page.goto("/butler?project=scratch-project&section=settings");
   const notifications = page.getByRole("region", {name: "Push notifications"});
+  // Butler's own settings, lent into Butler mode, sit inside the screen (a phone-width
+  // floating-panel transform once pushed them half off to the left).
+  const embedded = page.locator("#nebula-assistant-panel");
+  await expect(embedded).toBeVisible({timeout: 15_000});
+  const within = async () => {
+    const box = await embedded.boundingBox();
+    const host = await page.locator("[class*='embedHost']").first().boundingBox();
+    return box && host ? Math.round(Math.abs(box.x - host.x)) <= 1 && box.x >= 0 && box.x + box.width <= (page.viewportSize()?.width ?? 0) + 1 : false;
+  };
+  await expect.poll(within).toBe(true);
+  // The app has no code editor.
+  await expect(page.getByRole("button", {name: "Code & files"})).toHaveCount(0);
+  await page.goto("/butler?project=scratch-project&section=code");
+  await expect(page.getByRole("region", {name: "Status board"})).toBeVisible({timeout: 15_000});
+  if (await page.evaluate(() => matchMedia("(max-width: 760px)").matches)) {
+    await page.getByRole("tablist", {name: "Butler mode"}).getByRole("tab", {name: /More/}).click();
+    await expect(page.getByRole("dialog", {name: "More in Butler"}).getByRole("button", {name: "Code & files"})).toHaveCount(0);
+    await page.keyboard.press("Escape");
+  }
+  // A project thread lends Butler's chat the same way and also stays on screen.
+  await page.goto("/butler?project=scratch-project&tab=threads&pthread=scratch-project");
+  await expect(embedded).toBeVisible({timeout: 15_000});
+  await expect.poll(within).toBe(true);
+  await page.screenshot({path: testInfo.outputPath("iphone-project-thread.png")});
+  await page.goto("/butler?project=scratch-project&section=settings");
   await expect(notifications.getByRole("status").first()).toContainText("Core has no Apple push key yet", {timeout: 15_000});
   pushConfigured = true;
   await notifications.getByRole("button", {name: "Refresh notification status"}).click();
