@@ -1542,6 +1542,48 @@ async def test_butler_discovers_pages_and_saves_chat_priority(tmp_path):
     with pytest.raises(ValueError, match="work roster"):
         (await work.chat_detail(project.id, other_chat.id))
 
+    # A blocked chat is absent from the live roster, so Butler finds chats by
+    # title. Any word matches, so several names fit in one lookup.
+    named = [
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=title,
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        for title in (
+            "Alpha parser — build 7",
+            "Beta parser — build 7",
+            "Gamma archive — build 7",
+            "100%_done literal",
+        )
+    ]
+    found = await dispatch_work_tool(
+        work,
+        project.id,
+        "nebula.work.manage",
+        {
+            "operation": "nebula.work.chats",
+            "arguments": {"query": "ALPHA beta gamma"},
+        },
+    )
+    assert {item["id"] for item in found["chats"]} == {item.id for item in named[:3]}
+    assert found["query_terms"] == ["alpha", "beta", "gamma"]
+    assert found["next_offset"] is None
+    # LIKE wildcards in a title word match literally.
+    assert [
+        item["id"] for item in (await work.chats(project.id, 0, "100%_"))["chats"]
+    ] == [named[3].id]
+    assert (await work.chats(project.id, 0, "1_0"))["chats"] == []
+    assert (await work.chats(project.id, 0, "Excluded"))["chats"] == []
+    assert (await work.chats(project.id, 0, "Other project's"))["chats"] == []
+    with pytest.raises(ValueError, match="query must be text"):
+        (await work.chats(project.id, 0, 7))
+    for item in named:
+        (await store.delete(ChatSession, item.id))
+
     target = chats[0]
 
     async def change(revision, **updates):

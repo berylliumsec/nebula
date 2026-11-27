@@ -52,6 +52,7 @@ from nebula.v3.domain import (
     ProviderProfile,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalConversationCreate
+from nebula.v3.control_assistant_work import chats_titled
 from nebula.v3.chat_queue import ChatQueueService
 from nebula.v3.execution_scope import ExecutionSQLScope, execution_context
 from nebula.v3.provider_scheduler import ProviderScheduler
@@ -187,6 +188,27 @@ async def test_column_only_reads_and_raw_connections_are_scoped(execution):
                 select(EntityRow.id).where(EntityRow.kind == "chat_turns")
             )
         ) == ["turn-mine"]
+
+
+async def test_butler_chat_title_lookup_runs_scoped_on_execution_worker(execution):
+    control, runtime, _, lease = execution
+    for project in ("mine", "other"):
+        await control.create(
+            ChatSession(
+                id=f"named-{project}",
+                engagement_id=project,
+                title="Alpha parser — build 7",
+                provider_profile_id="provider",
+                model="inert",
+            )
+        )
+    with execution_context(lease):
+        found = await chats_titled(
+            runtime, "mine", ["beta", "alpha"], offset=0, limit=31
+        )
+        foreign = await chats_titled(runtime, "other", ["alpha"], offset=0, limit=31)
+    assert [item.id for item in found] == ["named-mine"]
+    assert foreign == []
 
 
 async def test_filtered_count_retains_mapped_project_scope(execution):
