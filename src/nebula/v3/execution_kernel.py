@@ -341,6 +341,7 @@ from .integration_settings import (
     web_search_integration_status,
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
+from .public_commit_review import PublicCommitReviewRequest
 from .domain import (
     HarnessTurnStatus,
     ENTITY_MODEL_BY_KIND,
@@ -4757,6 +4758,41 @@ def create_execution_kernel(
     )
     async def test_harness_turn(profile_id: str) -> Any:
         return await harness_runtime.test_turn(profile_id)
+
+    @app.post(
+        f"{API_PREFIX}/harnesses/public-commit-review",
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def review_public_commit_on_harness(
+        body: PublicCommitReviewRequest,
+    ) -> Any:
+        # The local public-commit guard's reviewer on Butler's configured
+        # harness profiles; served by the host service in supervisor mode.
+        from .harness_diagnostics import run_harness_one_shot
+        from .public_commit_review import PublicReviewUnavailable, review_public_commit
+
+        async def runner(
+            profile: HarnessProfile, model: str, prompt: str, timeout_seconds: float
+        ) -> str:
+            return await run_harness_one_shot(
+                profile,
+                model,
+                prompt,
+                credentials=harness_runtime.credential_store,
+                adapter_factory=harness_runtime.adapter_factory,
+                open_connection=harness_runtime._open_memory_managed,
+                timeout_seconds=timeout_seconds,
+            )
+
+        try:
+            return await review_public_commit(
+                store, body.prompt, runner, attempt=body.attempt
+            )
+        except PublicReviewUnavailable as error:
+            raise HTTPException(
+                422, {"code": error.code, "detail": error.detail}
+            ) from None
 
     @app.get(
         f"{API_PREFIX}/harnesses/{{profile_id}}/skills",

@@ -227,10 +227,8 @@ async def run_harness_test_turn(
     )
 
 
-async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessHealth:
-    """Run a bounded diagnostic with the adapter's available open contract."""
-    from .harnesses import HarnessRuntimeService
-
+def _host_connection_opener(settings: Any) -> Callable[..., Any]:
+    """Open a host harness connection bounded and through the host memory runner."""
     controller: MemoryComputeController | None = getattr(
         settings.observations, "memory_compute", None
     )
@@ -255,6 +253,17 @@ async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessH
         connection = await asyncio.wait_for(opening, timeout=15)
         return BoundedConnection(connection)
 
+    return open_connection
+
+
+def _host_adapter_factory(settings: Any) -> Callable[..., Any]:
+    from .harnesses import HarnessRuntimeService
+
+    return settings.harness_factory or HarnessRuntimeService._default_adapter
+
+
+async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessHealth:
+    """Run a bounded diagnostic with the adapter's available open contract."""
     # Includes bounded open, canonical 90-second fixed turn, resume and cleanup;
     # it completes before the accepted host effect's own 150-second boundary.
     async with asyncio.timeout(140):
@@ -262,9 +271,28 @@ async def run_host_harness_test_turn(settings: Any, profile_id: str) -> HarnessH
             settings.store,
             profile_id,
             credentials=settings.credentials,
-            adapter_factory=settings.harness_factory
-            or HarnessRuntimeService._default_adapter,
-            open_connection=open_connection,
+            adapter_factory=_host_adapter_factory(settings),
+            open_connection=_host_connection_opener(settings),
+        )
+
+
+async def run_host_harness_one_shot(
+    settings: Any,
+    profile: HarnessProfile,
+    model: str,
+    prompt: str,
+    timeout_seconds: float,
+) -> str:
+    """One fresh, tool-free review turn on the host, inside the host-effect bound."""
+    async with asyncio.timeout(140):
+        return await run_harness_one_shot(
+            profile,
+            model,
+            prompt,
+            credentials=settings.credentials,
+            adapter_factory=_host_adapter_factory(settings),
+            open_connection=_host_connection_opener(settings),
+            timeout_seconds=timeout_seconds,
         )
 
 

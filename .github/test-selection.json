@@ -1,21 +1,27 @@
 {
-  "change_digest": "92277478d63551657309fed241bd27ec61881cd2b5f4d646de58772aa268591f",
+  "change_digest": "00bd132c5c93f726f3c86ebac5074ddac66dfad24571fb07fd679ec97fae0a65",
   "reviewed_by": "Claude: public commit guard reviewer fallback",
-  "reason": "Only the local public-commit guard, its installer, its tests and the change-workflow rule change. The guard now tries an ordered reviewer chain from untracked local config (Codex then Claude), reads an optional private policy file, and records local receipts. Selected the guard's own synthetic-repo suite; nothing in Core, UI or native code is touched.",
-  "exclusions": "Full suites not run; the change touches only the local commit guard. The live Claude reviewer path was not exercised because the standalone claude CLI on the dev host is signed out.",
+  "reason": "Public-commit guard reviewer chain plus a Core route that reviews on Butler's harness profiles. The guard tries reviewers from untracked local config (Codex, then Claude, or a command reviewer). On the Core host the command reviewer (scripts/simulation/nebula_public_review.py) asks POST /api/v1/harnesses/public-commit-review, which runs one tool-free run_harness_one_shot turn per configured profile (NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS) through the host memory runner. Selected the guard, client and route suites plus the host diagnostic, global-settings classifier, Settings-assistant catalog and one-shot parity suites the route and harness_diagnostics refactor touch.",
+  "exclusions": "Full suites not run. Not verified against a live Core with a signed-in harness profile, and the plain claude CLI path was not exercised live (the dev host's standalone CLI is signed out). No UI change, so no frontend or Playwright selection.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 32,
+    "python": 157,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_public_commit_guard.py"
+    "tests/test_public_commit_guard.py",
+    "tests/test_simulation_public_review.py",
+    "tests/v3/test_public_commit_review.py",
+    "tests/v3/test_runtime_host_usage.py",
+    "tests/v3/test_settings_assistant_api.py",
+    "tests/v3/test_runtime_global_settings.py",
+    "tests/v3/test_butler_harness_parity.py"
   ],
   "frontend": [],
   "native": [],

@@ -53,7 +53,10 @@ first, then Claude when Codex cannot give a verdict. The order, models, and any
 operator-specific block policy come from the untracked local configuration in
 `$(git rev-parse --git-common-dir)/hooks/nebula-public-commit-review.json`
 (`reviewers`, `policy_file`); keep that configuration and the policy text out of
-the repository. A reviewer that returns `block` or `uncertain` is final; the
+the repository. On the Core host where Butler commits, the configuration names
+a `command` reviewer that reviews on Butler's configured harness profiles
+through Core (see "Public commit review" in
+`docs/design/butler-supervisor-powers.md`). A reviewer that returns `block` or `uncertain` is final; the
 next reviewer runs only when the previous one could not start, timed out,
 failed, or returned an incomplete result. Each passed or bypassed review is
 recorded in `nebula-public-commit-reviews.jsonl` beside the hooks directory.

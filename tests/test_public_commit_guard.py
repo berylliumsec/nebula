@@ -449,3 +449,92 @@ def test_private_policy_file_is_sent_to_the_reviewer(repo: tuple[Path, dict[str,
 def test_public_prompt_names_no_private_program() -> None:
     text = GUARD.read_text(encoding="utf-8").lower()
     assert "bug bounty" not in text
+
+
+COMMAND_REVIEWER = """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+request = json.loads(sys.stdin.read())
+repo = Path(os.environ['TEST_REPO'])
+with (repo / '.git' / 'reviewer-calls.jsonl').open('a') as calls:
+    calls.write(json.dumps({'kind': 'command', 'args': sys.argv[1:], 'prompt': request['prompt'],
+                            'schema': request['schema'], 'simple': os.environ.get('CLAUDE_CODE_SIMPLE')}) + '\\n')
+mode = os.environ.get('FAKE_COMMAND')
+if mode == 'down':
+    print('Core is not reachable at the local origin', file=sys.stderr)
+    sys.exit(4)
+payload = json.loads(request['prompt'].split('STAGED_COMMIT_DATA_JSON:\\n', 1)[1])
+files = payload['files']
+content = ''.join(item['content'] for item in files)
+if 'PRIVATE_RESEARCH' in content:
+    verdict = {'decision': 'block', 'category': 'research_data', 'reviewed_files': [item['id'] for item in files]}
+else:
+    verdict = {'decision': 'allow', 'category': 'none', 'reviewed_files': [item['id'] for item in files]}
+print('not json' if mode == 'garbage' else json.dumps(verdict))
+"""
+
+
+@pytest.fixture
+def command_reviewer(repo: tuple[Path, dict[str, str]]) -> Path:
+    path, _ = repo
+    program = path / "bin" / "nebula-public-review"
+    program.write_text(COMMAND_REVIEWER, encoding="utf-8")
+    program.chmod(0o755)
+    return program
+
+
+def test_command_reviewer_gets_prompt_and_schema_and_decides(
+    repo: tuple[Path, dict[str, str]], command_reviewer: Path
+) -> None:
+    path, env = repo
+    write_config(path, {"reviewers": [{"kind": "command", "argv": [str(command_reviewer), "--origin", "x"],
+                                       "label": "Nebula Butler"}]})
+    (path / "note.txt").write_text("Public change\n")
+    git(path, "add", "note.txt")
+    result = run_guard(path, {**env, "CLAUDE_CODE_SIMPLE": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "review passed (Nebula Butler)" in result.stderr
+    (call,) = reviewer_calls(path)
+    assert call["args"] == ["--origin", "x"]
+    assert call["schema"]["required"] == ["decision", "category", "reviewed_files"]
+    assert call["simple"] is None
+    assert receipts(path)[-1]["reviewers"] == ["Nebula Butler"]
+    (path / "note.txt").write_text("PRIVATE_RESEARCH\n")
+    git(path, "add", "note.txt")
+    blocked = run_guard(path, env)
+    assert blocked.returncode == 1
+    assert "Nebula Butler marked the commit block (research_data)" in blocked.stderr
+
+
+@pytest.mark.parametrize("mode", ["down", "garbage"])
+def test_unavailable_command_reviewer_fails_closed_with_its_reason(
+    repo: tuple[Path, dict[str, str]], command_reviewer: Path, mode: str
+) -> None:
+    path, env = repo
+    write_config(path, {"reviewers": [{"kind": "command", "argv": [str(command_reviewer)]}]})
+    (path / "note.txt").write_text("Public change\n")
+    git(path, "add", "note.txt")
+    result = run_guard(path, {**env, "FAKE_COMMAND": mode})
+    assert result.returncode == 1
+    assert "No configured reviewer was available: command (nebula-public-review)" in result.stderr
+    if mode == "down":
+        assert "Core is not reachable at the local origin" in result.stderr
+    assert [call["kind"] for call in reviewer_calls(path)] == ["command"]
+
+
+@pytest.mark.parametrize(
+    "reviewer",
+    [{"kind": "command"}, {"kind": "command", "argv": ["relative/review"]},
+     {"kind": "command", "argv": ["/bin/true"], "model": "opus"}, {"kind": "codex", "argv": ["/bin/true"]},
+     {"kind": "command", "argv": ["/bin/true"], "label": "bad\nlabel"}],
+)
+def test_invalid_command_reviewer_config_blocks(repo: tuple[Path, dict[str, str]], reviewer: dict) -> None:
+    path, env = repo
+    write_config(path, {"reviewers": [reviewer]})
+    (path / "note.txt").write_text("Public change\n")
+    git(path, "add", "note.txt")
+    assert run_guard(path, env).returncode == 1
+    assert reviewer_calls(path) == []

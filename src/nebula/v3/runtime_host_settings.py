@@ -39,6 +39,7 @@ from .model_catalog import (
 from .memory_actor import memory_actor
 from .memory_budget import MemoryJob
 from .memory_policy import MemoryRunningUpdate
+from .public_commit_review import PublicCommitReviewRequest
 from .provider_settings import (
     ProviderCapabilityVerifyRequest,
     _discover_local_provider_services,
@@ -445,6 +446,28 @@ class HostSettings:
                 self.store, profile.id, result
             )
 
+        @app.post("/api/v1/harnesses/public-commit-review", dependencies=auth)
+        async def public_commit_review(body: PublicCommitReviewRequest):
+            from .harness_diagnostics import run_host_harness_one_shot
+            from .public_commit_review import (
+                PublicReviewUnavailable,
+                review_public_commit,
+            )
+
+            async def runner(profile, model, prompt, timeout_seconds):
+                return await run_host_harness_one_shot(
+                    self, profile, model, prompt, timeout_seconds
+                )
+
+            try:
+                return await review_public_commit(
+                    self.store, body.prompt, runner, attempt=body.attempt
+                )
+            except PublicReviewUnavailable as error:
+                raise HTTPException(
+                    422, {"code": error.code, "detail": error.detail}
+                ) from None
+
         @app.post("/api/v1/harnesses/{profile_id}/test-turn", dependencies=auth)
         async def harness_test_turn(profile_id: str):
             from .harness_diagnostics import run_host_harness_test_turn
@@ -620,6 +643,7 @@ class HostSettings:
             ("/api/v1/runner-profiles/{profile_id}/probe", ["POST"]),
             ("/api/v1/harnesses/{profile_id}/health", ["POST"]),
             ("/api/v1/harnesses/{profile_id}/test-turn", ["POST"]),
+            ("/api/v1/harnesses/public-commit-review", ["POST"]),
             ("/api/v1/memory-budgets/jobs/{job_id}/apply", ["POST"]),
             ("/api/v1/credentials", ["POST"]),
             ("/api/v1/credentials/{path:path}", ["GET", "DELETE"]),

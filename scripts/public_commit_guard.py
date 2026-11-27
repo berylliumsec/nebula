@@ -28,8 +28,9 @@ CONFIG_FILENAME = "nebula-public-commit-review.json"
 RECEIPTS_FILENAME = "nebula-public-commit-reviews.jsonl"
 MAX_POLICY_BYTES = 16 * 1024
 MAX_REVIEWERS = 4
-REVIEWER_KINDS = ("codex", "claude")
-REVIEWER_KEYS = {"kind", "model", "timeout_seconds"}
+REVIEWER_KINDS = ("codex", "claude", "command")
+REVIEWER_KEYS = {"kind", "model", "timeout_seconds", "argv", "label"}
+MAX_COMMAND_ARGS = 16
 # Parent agent sessions export these; inherited, they would change how a nested Claude runs
 # (CLAUDE_CODE_SIMPLE forces bare mode, which never reads the operator's sign-in).
 SESSION_ENV_PREFIXES = ("CLAUDECODE", "CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "CLAUDE_SSH_", "CLAUDE_PID")
@@ -125,7 +126,34 @@ def validate_reviewers(reviewers: object) -> list[dict]:
         timeout = reviewer.get("timeout_seconds", TIMEOUT_SECONDS)
         if type(timeout) is not int or not 10 <= timeout <= 1800:
             raise GuardError("Reviewer timeout_seconds must be an integer from 10 to 1800.")
-        validated.append({"kind": reviewer["kind"], "model": model, "timeout_seconds": timeout})
+        argv = reviewer.get("argv")
+        if reviewer["kind"] == "command":
+            # The operator's own reviewer program, such as one that asks Nebula Core to
+            # review on Butler's configured harnesses. It reads {"prompt", "schema"} JSON
+            # on stdin and prints the verdict object; any failure counts as unavailable.
+            if (
+                not isinstance(argv, list)
+                or not 1 <= len(argv) <= MAX_COMMAND_ARGS
+                or any(not isinstance(item, str) or not item or len(item) > 4096 or "\0" in item
+                       for item in argv)
+                or not argv[0].startswith("/")
+            ):
+                raise GuardError("A command reviewer needs argv: an absolute program path and its arguments.")
+            if model is not None:
+                raise GuardError("A command reviewer chooses its own model; remove model.")
+        elif argv is not None:
+            raise GuardError("Only a command reviewer takes argv.")
+        label = reviewer.get("label")
+        if label is not None and (
+            not isinstance(label, str)
+            or not 1 <= len(label) <= 60
+            or not all(character.isalnum() or character in " ._:-()" for character in label)
+        ):
+            raise GuardError("Reviewer label must be 1-60 plain characters.")
+        validated.append({
+            "kind": reviewer["kind"], "model": model, "timeout_seconds": timeout,
+            "argv": list(argv) if argv else None, "label": label,
+        })
     return validated
 
 
@@ -336,6 +364,10 @@ def split_review_parts(item: dict, content: str) -> list[dict]:
 
 
 def reviewer_label(reviewer: dict) -> str:
+    if reviewer["label"]:
+        return reviewer["label"]
+    if reviewer["kind"] == "command":
+        return f"command ({Path(reviewer['argv'][0]).name})"
     return reviewer["kind"] + (f" ({reviewer['model']})" if reviewer["model"] else "")
 
 
@@ -364,8 +396,12 @@ def run_reviewer(reviewer: dict, directory: Path, prompt: str) -> object:
     schema_path = directory / "schema.json"
     result_path = directory / "verdict.json"
     result_path.unlink(missing_ok=True)
-    env = None
-    if reviewer["kind"] == "codex":
+    env = {key: value for key, value in os.environ.items() if not key.startswith(SESSION_ENV_PREFIXES)}
+    stdin = prompt
+    if reviewer["kind"] == "command":
+        command = list(reviewer["argv"])
+        stdin = json.dumps({"prompt": prompt, "schema": SCHEMA}, ensure_ascii=False)
+    elif reviewer["kind"] == "codex":
         command = [
             "codex", "exec", "--sandbox", "read-only", "--ephemeral", "--ignore-user-config",
             "--skip-git-repo-check", "-C", str(directory), "--output-schema", str(schema_path),
@@ -382,14 +418,20 @@ def run_reviewer(reviewer: dict, directory: Path, prompt: str) -> object:
         ]
         if reviewer["model"]:
             command += ["--model", reviewer["model"]]
-        env = {key: value for key, value in os.environ.items() if not key.startswith(SESSION_ENV_PREFIXES)}
     try:
         result = subprocess.run(
-            command, input=prompt, text=True, capture_output=True, cwd=directory, env=env,
+            command, input=stdin, text=True, capture_output=True, cwd=directory, env=env,
             timeout=reviewer["timeout_seconds"], check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ReviewerUnavailable("could not start or timed out") from exc
+    if reviewer["kind"] == "command":
+        if result.returncode != 0:
+            raise ReviewerUnavailable("review failed; " + _command_failure(result.stderr))
+        try:
+            return json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise ReviewerUnavailable("invalid review result") from exc
     if reviewer["kind"] == "codex":
         if result.returncode != 0 or not result_path.is_file():
             raise ReviewerUnavailable("review failed; check sign-in and usage limits")
@@ -407,6 +449,14 @@ def run_reviewer(reviewer: dict, directory: Path, prompt: str) -> object:
     if "structured_output" not in envelope:
         raise ReviewerUnavailable("invalid review result")
     return envelope["structured_output"]
+
+
+def _command_failure(stderr: str) -> str:
+    """The reviewer program's own one-line reason, bounded and printable."""
+    lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+    reason = lines[-1] if lines else "it exited with an error"
+    reason = "".join(character for character in reason if character.isprintable())
+    return reason[:200]
 
 
 def review(directory: Path, expected_ids: list[str], config: dict) -> dict:
