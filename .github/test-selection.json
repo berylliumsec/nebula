@@ -1,27 +1,26 @@
 {
-  "change_digest": "9855c9e3cd55451560560b7a0256e9f685d1e9f92e393486546a09cb6d9b59ab",
-  "reviewed_by": "Claude: Butler panels skewed in phone-width Butler mode; no code editor in the iPhone app",
-  "reason": "CSS and Butler mode page change. At phone width the floating Butler panel's placement (left: 50% plus translateX(-50%), NebulaControlAssistant.module.css media rule) still applied when the panel was lent into Butler mode, so project threads and Butler settings rendered half off-screen (validated in a browser: panel left -163/-195 vs host 16/0; transform none fixes it). .embeddedPanel now resets inset and transform and keeps a gutter for lent chats on phones. The iPhone app drops Code & files (section tabs, More sheet, section=code falls back to Board, brief file chips become plain names). Selected the Butler mode board unit suite (new shell test) and the iPhone shell Playwright area, whose mocked journey now asserts the lent settings and project-thread panels sit inside the screen and that Code & files is absent, plus the Butler mode real-Core journey at phone width.",
-  "exclusions": "No Core, Python or native change. Desktop layout is unchanged by the media-scoped rules; full suites not run.",
+  "change_digest": "8db8803d2888d5fdca1107f96c673edf2e153fc2b9bd75fa3541cd84bbb606ab",
+  "reviewed_by": "Claude: Butler could not find blocked chats by name",
+  "reason": "Butler told the operator three blocked chats could not be found: the live roster (work.agents) omits blocked chats and nebula.data.search_chats matches one literal phrase in message text, so a multi-name query returned nothing; it never paged nebula.work.chats. nebula.work.chats now takes a title query (any word, case-insensitive, LIKE wildcards escaped) through a new chats_titled helper; search_chats and work.agents descriptions say what they omit, and an empty search carries a hint. Selected the Butler chat paging test (title lookup added), the Butler data tests (empty-search hint) and the execution-scope suite (title lookup runs project-scoped on an execution worker).",
+  "exclusions": "Message search semantics for the web UI and terminal client are unchanged. No UI change, so no Playwright. test_butler_capabilities::test_scheduled_butler_can_edit_all_assistant_settings already fails on main 35d0be8 and is not selected. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 24,
+    "python": 166,
+    "frontend": 0,
     "native": 0,
-    "playwright": 14
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/ButlerModePage.board.test.tsx"
+  "python": [
+    "tests/v3/test_butler_data.py",
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_execution_scope.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:ios-assistant-only",
-    "entry:butler-mode/assistant-real-chromium-390"
-  ],
+  "playwright": [],
   "checks": []
 }
