@@ -99,3 +99,9 @@ settings app (`mount_global_settings`).
 
 Not covered by automation: real delivery through Apple's service, which needs
 the operator's `.p8` key and the signed build on the phone.
+
+## Physical acceptance (iPhone build 9)
+
+Still required on a signed build: the permission prompt on first launch, a real
+alert while the phone is locked, tapping it opens Oversight, Send test, Pause,
+and revoking the pairing stops alerts. Record the result here when it is done.
