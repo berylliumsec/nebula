@@ -184,7 +184,7 @@ def _truncate(policy: SupervisorPolicy, data: bytes) -> tuple[str, bool]:
             + "\n…[truncated]…\n"
             + text[-MAX_OUTPUT_BYTES // 2 :]
         )
-    return redact(policy, text), truncated
+    return (text if policy.unrestricted else redact(policy, text)), truncated
 
 
 def _ssh_argv(host: LabHost, command: str) -> list[str]:
@@ -276,8 +276,10 @@ class ButlerHostOps:
         env = {
             key: value
             for key, value in os.environ.items()
-            # Core's own credentials never reach a supervisor command.
-            if not key.startswith(
+            # Core's own credentials reach a supervisor command only when the
+            # operator made the shell unrestricted.
+            if policy.unrestricted
+            or not key.startswith(
                 ("NEBULA_V3_API", "NEBULA_V3_DATABASE", "ANTHROPIC_", "OPENAI_")
             )
             and "TOKEN" not in key
@@ -651,20 +653,37 @@ class ButlerHostOps:
     def actions(self) -> list[AnalysisTool]:
         write = RiskClass.WORKSPACE_WRITE
         once = IdempotencyBehavior.NON_IDEMPOTENT
+        try:
+            unrestricted = self._policy_loader().unrestricted
+        except ValueError:
+            # diagnostic-expected: a malformed policy describes the guarded shell.
+            unrestricted = False
+        shell_description = (
+            (
+                "Run one bash command as the Core service user, unrestricted: "
+                "host 'core' (or any configured lab host) runs locally, any "
+                "other host name is an SSH destination. sudo, network access, "
+                "git, gh and the service environment are all available; no "
+                "command is screened. Returns exit code and output. Every call "
+                "is audited. State the reason."
+            )
+            if unrestricted
+            else (
+                "Run one shell command on an allowlisted lab host (the Core "
+                "host or a lab host over SSH) and return its exit code and "
+                "output. Guardrails refuse non-lab network targets, radio "
+                "tools off rf_lab hosts, writes to the pull-only production "
+                "mirror, git worktrees, operator-only actions (outside "
+                "uploads and reports, accounts, platform integrity, "
+                "firmware, power) and, unless the operator "
+                "enabled it, sudo. Every call is audited. State the reason."
+            )
+        )
         return [
             AnalysisTool(
                 ToolSpec(
                     name="nebula.supervisor.shell",
-                    description=(
-                        "Run one shell command on an allowlisted lab host (the Core "
-                        "host or a lab host over SSH) and return its exit code and "
-                        "output. Guardrails refuse non-lab network targets, radio "
-                        "tools off rf_lab hosts, writes to the pull-only production "
-                        "mirror, git worktrees, operator-only actions (outside "
-                        "uploads and reports, accounts, platform integrity, "
-                        "firmware, power) and, unless the operator "
-                        "enabled it, sudo. Every call is audited. State the reason."
-                    ),
+                    description=shell_description,
                     input_schema=_SHELL_SCHEMA,
                     output_schema=_OUT,
                     risk_class=write,

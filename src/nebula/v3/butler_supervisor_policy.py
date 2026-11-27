@@ -19,6 +19,13 @@ The guardrails here are enforced in code before any command runs:
   the host in a command and are redacted from returned output;
 - git worktrees are refused.
 
+``NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED`` is the operator's opt-out of all of
+the above. It turns the supervisor tools on by itself and makes the shell raw:
+no command screening, general sudo, any SSH target, the full service
+environment, unredacted output, and the Core API tool
+(``butler_core_api``). Only the kill switch (clear both variables) and the
+audit log remain. Commands run as the Core service user.
+
 String screening of shell text is a guardrail, not a sandbox. The audit log
 records every attempt, allowed or refused, so the operator can review it.
 """
@@ -41,6 +48,7 @@ from .diagnostics import record_caught_exception
 
 
 ENABLED_ENV = "NEBULA_BUTLER_SUPERVISOR_ENABLED"
+UNRESTRICTED_ENV = "NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED"
 HOSTS_ENV = "NEBULA_BUTLER_SUPERVISOR_HOSTS"
 ALLOW_SUDO_ENV = "NEBULA_BUTLER_SUPERVISOR_ALLOW_SUDO"
 AUDIT_LOG_ENV = "NEBULA_BUTLER_SUPERVISOR_AUDIT_LOG"
@@ -140,16 +148,24 @@ class SupervisorPolicy:
     github_pr_script: str | None = None
     github_repos: tuple[str, ...] = ()
     extra: dict[str, Any] = field(default_factory=dict)
+    # The operator's opt-out of every guardrail (UNRESTRICTED_ENV).
+    unrestricted: bool = False
 
     def require_enabled(self) -> None:
         if not self.enabled:
             raise SupervisorDisabled(
                 "Butler supervisor tools are off. The operator enables them with "
-                f"{ENABLED_ENV}=1; clearing it is the kill switch."
+                f"{ENABLED_ENV}=1 or {UNRESTRICTED_ENV}=1; clearing both is the "
+                "kill switch."
             )
 
     def host(self, name: str) -> LabHost:
         host = self.hosts.get(name)
+        if host is None and self.unrestricted:
+            if name.casefold() in {"core", "local", "localhost"}:
+                return LabHost(name=name, local=True)
+            # Any SSH destination the Core user's ssh config can reach.
+            return LabHost(name=name, address=name)
         if host is None:
             raise GuardrailViolation(
                 "host_not_allowlisted",
@@ -219,10 +235,13 @@ def load_policy(environ: dict[str, str] | None = None) -> SupervisorPolicy:
     data_dir = Path(
         env.get("NEBULA_V3_DATA_DIR", str(Path.home() / ".local/share/nebula/v3"))
     )
+    unrestricted = env.get(UNRESTRICTED_ENV, "").strip().casefold() in _TRUE
     return SupervisorPolicy(
-        enabled=env.get(ENABLED_ENV, "").strip().casefold() in _TRUE,
+        enabled=unrestricted or env.get(ENABLED_ENV, "").strip().casefold() in _TRUE,
+        unrestricted=unrestricted,
         hosts=_parse_hosts(env.get(HOSTS_ENV)),
-        allow_sudo=env.get(ALLOW_SUDO_ENV, "").strip().casefold() in _TRUE,
+        allow_sudo=unrestricted
+        or env.get(ALLOW_SUDO_ENV, "").strip().casefold() in _TRUE,
         audit_log=Path(
             env.get(AUDIT_LOG_ENV) or data_dir / "butler-supervisor-audit.jsonl"
         ),
@@ -481,6 +500,8 @@ def screen_outbound_text(policy: SupervisorPolicy, text: str, *, field: str) -> 
 
     if "\x00" in text:
         raise GuardrailViolation("invalid_argument", f"{field} contains a NUL byte")
+    if policy.unrestricted:
+        return
     folded = text.casefold()
     for secret in policy.private_strings:
         if secret and secret.casefold() in folded:
@@ -504,6 +525,8 @@ def screen_command(
         raise GuardrailViolation("empty_command", "command is empty")
     if "\x00" in command:
         raise GuardrailViolation("invalid_command", "command contains a NUL byte")
+    if policy.unrestricted:
+        return
     text = command.casefold()
 
     for secret in policy.private_strings:
@@ -596,6 +619,8 @@ def screen_command(
 
 
 def screen_path_write(policy: SupervisorPolicy, path: str | Path) -> None:
+    if policy.unrestricted:
+        return
     resolved = os.path.realpath(str(path))
     for protected in policy.protected_paths:
         root = os.path.realpath(protected)

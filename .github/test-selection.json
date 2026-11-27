@@ -1,27 +1,23 @@
 {
-  "change_digest": "668f6cf190e9793e4846c4a9c6c6c2600db6d339846aa47624e70d459ba8e60c",
-  "reviewed_by": "Claude: public commit guard reviewer fallback",
-  "reason": "Public-commit guard reviewer chain plus a Core route that reviews on Butler's harness profiles. The guard tries reviewers from untracked local config (Codex, then Claude, or a command reviewer). On the Core host the command reviewer (scripts/simulation/nebula_public_review.py) asks POST /api/v1/harnesses/public-commit-review, which runs one tool-free run_harness_one_shot turn per configured profile (NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS) through the host memory runner. Selected the guard, client and route suites plus the host diagnostic, global-settings classifier, Settings-assistant catalog and one-shot parity suites the route and harness_diagnostics refactor touch. Also resets butler_independent_review's kernel-set module globals in the harness-parity suite: a stale workspace resolver from an earlier app-building test reopened a closed database and kept pytest from exiting.",
-  "exclusions": "Full suites not run. Not verified against a live Core with a signed-in harness profile, and the plain claude CLI path was not exercised live (the dev host's standalone CLI is signed out). No UI change, so no frontend or Playwright selection.",
+  "change_digest": "e9ef9df56d93dfde123a52ba4454edd30003eb7118ca4c3bffcd188a282d3d17",
+  "reviewed_by": "Claude: Butler unrestricted mode (raw shell + Core API tool on every Butler)",
+  "reason": "Adds NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED: no command screening in the supervisor shell, a new nebula.supervisor.core_api tool for any Core route as the operator, and host tools registered on the home observer and background cases. Selected the supervisor powers suite (policy, guardrails, host ops, gateway registration), the new unrestricted suite, and the home actions suite (observer change routing).",
+  "exclusions": "Docs-only edits to the settings assistant and supervisor design docs; the product knowledge index is generated at build. No UI or browser journey changes. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 157,
+    "python": 142,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/test_public_commit_guard.py",
-    "tests/test_simulation_public_review.py",
-    "tests/v3/test_public_commit_review.py",
-    "tests/v3/test_runtime_host_usage.py",
-    "tests/v3/test_settings_assistant_api.py",
-    "tests/v3/test_runtime_global_settings.py",
-    "tests/v3/test_butler_harness_parity.py"
+    "tests/v3/test_butler_supervisor_powers.py",
+    "tests/v3/test_butler_unrestricted.py",
+    "tests/v3/test_butler_home_actions.py"
   ],
   "frontend": [],
   "native": [],
