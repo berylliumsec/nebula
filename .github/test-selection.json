@@ -1,7 +1,7 @@
 {
-  "change_digest": "6ec9c2d09ef635d06f1644a055e1d2dcff0232727bc606857c4257cd9cc5a124",
-  "reviewed_by": "Claude: run Butler's scheduled checks one at a time",
-  "reason": "Backend-only fix in butler_recovery.py: a Butler scheduled check (global or per-project) is not fired, claimed or overload-retried while an earlier check of the same signal is still open, so a check longer than the interval no longer runs a second Butler turn beside the first. Selected the suites that exercise firing, claiming, capacity retry, concurrent recovery and the home host path, plus the new single-flight tests in test_butler_instructions.py.",
+  "change_digest": "57dc75eed110d56bfdb34fb086aaadb021a9810effa740cc4c1fdc882b64138f",
+  "reviewed_by": "Claude: spawn harness CLIs in their own process group under uvloop",
+  "reason": "Backend-only fix in harnesses.py: the Codex app-server and Grok ACP spawns passed process_group=0, which uvloop (Core's loop) rejects before the child starts, so every Codex harness start failed. A new helper keeps process_group=0 on the stdlib loop and uses preexec_fn=os.setpgrp on uvloop, so the child still gets its own group in the worker's session and close still reaps its tree. Selected the new loop-parametrized spawn test, the process-tree reaping tests, and the Codex/Grok transport suites that spawn these CLIs.",
   "exclusions": "No UI, frontend, Playwright or native change. Full suites not run.",
   "python_versions": [
     "3.12"
@@ -9,18 +9,16 @@
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 62,
+    "python": 45,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_instructions.py",
-    "tests/v3/test_butler_capacity_retry.py",
-    "tests/v3/test_butler_concurrent_recovery.py",
-    "tests/v3/test_butler_home_host.py",
-    "tests/v3/test_butler_recovery.py",
-    "tests/v3/test_chat_session_recent_page.py"
+    "tests/v3/test_harness_process_group_spawn.py",
+    "tests/v3/test_turn_end_process_reaping.py",
+    "tests/v3/test_codex_transport.py",
+    "tests/v3/test_grok_acp_compliance.py"
   ],
   "frontend": [],
   "native": [],
