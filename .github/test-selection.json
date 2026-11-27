@@ -1,5 +1,5 @@
 {
-  "change_digest": "00bd132c5c93f726f3c86ebac5074ddac66dfad24571fb07fd679ec97fae0a65",
+  "change_digest": "4c738a6472c98ed9d6f7e7512d94173b2cf4e30cb5ee063b69dd367c1dacb87f",
   "reviewed_by": "Claude: public commit guard reviewer fallback",
   "reason": "Public-commit guard reviewer chain plus a Core route that reviews on Butler's harness profiles. The guard tries reviewers from untracked local config (Codex, then Claude, or a command reviewer). On the Core host the command reviewer (scripts/simulation/nebula_public_review.py) asks POST /api/v1/harnesses/public-commit-review, which runs one tool-free run_harness_one_shot turn per configured profile (NEBULA_BUTLER_PUBLIC_REVIEW_HARNESS_PROFILE_IDS) through the host memory runner. Selected the guard, client and route suites plus the host diagnostic, global-settings classifier, Settings-assistant catalog and one-shot parity suites the route and harness_diagnostics refactor touch.",
   "exclusions": "Full suites not run. Not verified against a live Core with a signed-in harness profile, and the plain claude CLI path was not exercised live (the dev host's standalone CLI is signed out). No UI change, so no frontend or Playwright selection.",
