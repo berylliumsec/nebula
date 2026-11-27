@@ -583,6 +583,123 @@ class ButlerRecoveryAgent:
         if preferred.kind != HarnessKind.CODEX_APP_SERVER:
             return preferred
         available: list[tuple[tuple[int, float], bool, HarnessProfile]] = []
+        for profile in await self._same_model_harness_profiles(
+            project_id, preferred, model, reasoning_effort, cyber_access_program
+        ):
+            capacity = await measured_harness_capacity(
+                self.work, project_id, profile.id
+            )
+            if capacity is not None:
+                available.append((capacity, profile.id == preferred.id, profile))
+        if available:
+            return min(
+                available,
+                key=lambda item: (-item[0][0], -item[0][1], not item[1], item[2].id),
+            )[2]
+        raise ButlerRouteUnavailableError(
+            "No authorized Codex account has confirmed included usage or credits for "
+            f"Butler's scheduled {model} check."
+        )
+
+    async def _rate_limit_fallback_profile(
+        self,
+        project_id: str,
+        limited: HarnessProfile,
+        model: str,
+        reasoning_effort: str | None,
+        cyber_access_program: str | None,
+    ) -> HarnessProfile | None:
+        """Another same-kind account for a check whose account hit its limit.
+
+        A Claude account reports its plan limits only inside a turn, so an
+        account with no current report stays eligible behind one with
+        measured headroom. A Codex account needs measured capacity, as for
+        the scheduled check. A local-only account is replaced only by
+        another local-only account, because the check packet was built for it.
+        """
+
+        ranked: list[tuple[tuple[int, float], str, HarnessProfile]] = []
+        for profile in await self._same_model_harness_profiles(
+            project_id, limited, model, reasoning_effort, cyber_access_program
+        ):
+            if profile.id == limited.id or (
+                limited.privacy.local_only and not profile.privacy.local_only
+            ):
+                continue
+            capacity = await measured_harness_capacity(
+                self.work, project_id, profile.id
+            )
+            if capacity is None and profile.kind == HarnessKind.CODEX_APP_SERVER:
+                continue
+            ranked.append((capacity or (0, 0.0), profile.id, profile))
+        if not ranked:
+            return None
+        return min(ranked, key=lambda item: (-item[0][0], -item[0][1], item[1]))[2]
+
+    async def _fallback_after_rate_limit(
+        self,
+        case: ButlerRecoveryCase,
+        limited: HarnessProfile,
+        model: str,
+        config: dict[str, Any],
+        harness_turn_id: str,
+    ) -> HarnessProfile | None:
+        """The account to retry a check on once, if its turn hit a usage limit.
+
+        A project's Butler chat may stay on an account after that account's
+        plan runs out; without a retry every check hosted there fails until
+        the limit resets.
+        """
+
+        from .goal_runtime_routing import is_rate_limit_failure
+
+        try:
+            failed = await self.store.get(HarnessTurn, harness_turn_id)
+        except NotFoundError:
+            # diagnostic-expected: without the harness turn there is no limit evidence.
+            return None
+        if not is_rate_limit_failure(failed):
+            return None
+        fallback = await self._rate_limit_fallback_profile(
+            case.engagement_id,
+            limited,
+            model,
+            config["harness_reasoning_effort"],
+            config["harness_cyber_access_program"],
+        )
+        record_diagnostic(
+            "warning",
+            "butler",
+            "butler.recovery.rate_limit_fallback",
+            (
+                f"Butler's check hit a usage limit on {limited.name}; it runs again "
+                f"on {fallback.name}."
+                if fallback is not None
+                else f"Butler's check hit a usage limit on {limited.name}, and no "
+                f"other authorized account offers {model}."
+            ),
+            outcome="degraded" if fallback is not None else "failure",
+            stage="recovery",
+            metadata={
+                "entity_id": case.engagement_id,
+                "kind": "project",
+                "reason_code": "rate_limited",
+                "result": "fallback" if fallback is not None else "no_fallback",
+            },
+        )
+        return fallback
+
+    async def _same_model_harness_profiles(
+        self,
+        project_id: str,
+        preferred: HarnessProfile,
+        model: str,
+        reasoning_effort: str | None,
+        cyber_access_program: str | None,
+    ) -> list[HarnessProfile]:
+        """Enabled accounts of ``preferred``'s kind that can run this check."""
+
+        eligible: list[HarnessProfile] = []
         async for profile in self.store.iter_readable_entities(HarnessProfile):
             if (
                 not profile.enabled
@@ -627,20 +744,8 @@ class ButlerRecoveryAgent:
             except HarnessConfigurationError:
                 # diagnostic-expected: this account cannot read project tools.
                 continue
-            capacity = await measured_harness_capacity(
-                self.work, project_id, profile.id
-            )
-            if capacity is not None:
-                available.append((capacity, profile.id == preferred.id, profile))
-        if available:
-            return min(
-                available,
-                key=lambda item: (-item[0][0], -item[0][1], not item[1], item[2].id),
-            )[2]
-        raise ButlerRouteUnavailableError(
-            "No authorized Codex account has confirmed included usage or credits for "
-            f"Butler's scheduled {model} check."
-        )
+            eligible.append(profile)
+        return eligible
 
     async def _record_model_turn(
         self,
@@ -1018,35 +1123,61 @@ class ButlerRecoveryAgent:
                     metadata={"entity_id": case.engagement_id, "kind": "project"},
                 )
         if backend == ChatBackend.HARNESS:
-            _, turn, harness_turn = await self.harness_runtime.prepare_chat(
-                engagement_id=case.engagement_id,
-                profile_id=profile_id,
-                model=model,
-                chat_session_id=session.id,
-                harness_session_id=None,
-                mcp_server_ids=[],
-                prompt=packet,
-                runtime_context=instructions,
-                control_assistant=True,
-                butler_initiated=True,
-                butler_recovery_case_id=case.id,
-                include_knowledge=False,
-                allow_mcp_catalog=False,
-                allow_agent_messaging=False,
-                provider_subagent=child_setting,
-                harness_reasoning_effort=config["harness_reasoning_effort"],
-                harness_cyber_access_program=config["harness_cyber_access_program"],
-            )
-            await self._record_investigation_turn(case.id, turn)
-            await self._record_model_turn(
-                case.id, backend, profile_id, model, harness_turn.id
-            )
+            assert isinstance(profile, HarnessProfile)
+
+            async def start(
+                runtime: HarnessProfile, children: dict[str, Any] | None
+            ) -> tuple[ChatTurn, str]:
+                _, started, harness_turn = await self.harness_runtime.prepare_chat(
+                    engagement_id=case.engagement_id,
+                    profile_id=runtime.id,
+                    model=model,
+                    chat_session_id=session.id,
+                    harness_session_id=None,
+                    mcp_server_ids=[],
+                    prompt=packet,
+                    runtime_context=instructions,
+                    control_assistant=True,
+                    butler_initiated=True,
+                    butler_recovery_case_id=case.id,
+                    include_knowledge=False,
+                    allow_mcp_catalog=False,
+                    allow_agent_messaging=False,
+                    provider_subagent=children,
+                    harness_reasoning_effort=config["harness_reasoning_effort"],
+                    harness_cyber_access_program=config["harness_cyber_access_program"],
+                )
+                await self._record_investigation_turn(case.id, started)
+                await self._record_model_turn(
+                    case.id, backend, runtime.id, model, harness_turn.id
+                )
+                try:
+                    async for _ in self.harness_runtime.stream_turn(harness_turn.id):
+                        pass
+                except asyncio.CancelledError:
+                    await chat.subagents.stop_for_parent_turn(started.id)
+                    raise
+                return started, harness_turn.id
+
+            turn, harness_turn_id = await start(profile, child_setting)
             try:
-                async for _ in self.harness_runtime.stream_turn(harness_turn.id):
-                    pass
-            except asyncio.CancelledError:
-                await chat.subagents.stop_for_parent_turn(turn.id)
-                raise
+                return await self._wait_for_turn(case, turn.id)
+            except ValueError:
+                fallback = await self._fallback_after_rate_limit(
+                    case, profile, model, config, harness_turn_id
+                )
+                if fallback is None:
+                    raise
+            if child_setting is not None and (
+                child_setting["harness_profile_id"] == profile.id
+            ):
+                # Children on the spent account would hit the same limit.
+                child_setting = (
+                    {**child_setting, "harness_profile_id": fallback.id}
+                    if child_setting["model"] in fallback.capabilities.models
+                    else None
+                )
+            turn, _ = await start(fallback, child_setting)
         else:
             request = ChatCompletionRequest(
                 engagement_id=case.engagement_id,
