@@ -1,8 +1,8 @@
 {
-  "change_digest": "370bb40a6181c9dfb1c73eb46c4c4c02d43af538fb6567f6f446abc66b5a4ee5",
+  "change_digest": "165e4f4adb9162f296d81ac80659bed85e079c9b49b3cdd48c6ac9e88d659215",
   "reviewed_by": "Claude: retry a Butler check on another account after a usage limit",
-  "reason": "Backend-only fix in butler_recovery.py. A background Butler check runs on the host project's Butler chat account; for Claude accounts nothing routed around a spent plan, so every Nebula-wide check hosted by a project whose Butler chat was on that account ended interrupted (live 2026-11-25..27). Now a check turn that fails on a usage or rate limit (is_rate_limit_failure) runs once more on another enabled same-kind account offering the model, with children moved off the spent account. Selected the Butler instructions suite (new regression test plus the Codex capacity-selection test that shares the refactored candidate filter), the global-check scope suite (roster privacy follows the running account) and the check-summary suite.",
-  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run. test_butler_global_check_scope.py hangs at interpreter exit after all tests pass, identically on origin/main.",
+  "reason": "Backend-only fix in butler_recovery.py. A background Butler check runs on the host project's Butler chat account; for Claude accounts nothing routed around a spent plan, so every Nebula-wide check hosted by a project whose Butler chat was on that account ended interrupted (live 2026-11-25..27). Now a check turn that fails on a usage or rate limit (is_rate_limit_failure) runs once more on another enabled same-kind account offering the model, with children moved off the spent account. Selected the Butler instructions suite (new regression test plus the Codex capacity-selection test that shares the refactored candidate filter), the global-check scope suite (roster privacy follows the running account) and the check-summary suite. Also closes test_butler_global_check_scope.py's SQLite stores with the shared close_database_handles fixture: eight aiosqlite worker threads kept pytest from exiting after every test passed, on main too, so CI's thread guard failed the job.",
+  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run.",
   "python_versions": [
     "3.12"
   ],

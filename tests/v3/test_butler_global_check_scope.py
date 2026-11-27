@@ -16,6 +16,9 @@ import pytest
 from sqlalchemy import select
 from fastapi import HTTPException
 
+from tests.v3.async_test_support import (
+    close_database_handles as close_database_handles,
+)
 from nebula.v3 import control_assistant_work
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
