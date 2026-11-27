@@ -807,6 +807,13 @@ def test_gateway_lists_supervisor_tools_only_while_enabled(
         tool.spec.name
         for tool in ButlerCapabilities._supervisor_actions(None, work, "p1", actor="t")
     }
+    # The Core API tool exists only in unrestricted mode.
+    assert names == SUPERVISOR_ACTIONS - {"nebula.supervisor.core_api"}
+    monkeypatch.setenv("NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED", "1")
+    names = {
+        tool.spec.name
+        for tool in ButlerCapabilities._supervisor_actions(None, work, "p1", actor="t")
+    }
     assert names == SUPERVISOR_ACTIONS
     assert SUPERVISOR_ACTIONS <= _BACKGROUND_CHANGES
 

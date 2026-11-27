@@ -182,9 +182,33 @@ SUPERVISOR_ACTIONS = frozenset(
         "nebula.supervisor.list_operator_actions",
         "nebula.supervisor.close_operator_action",
         "nebula.supervisor.route_goal_runtime",
+        "nebula.supervisor.core_api",
     }
 )
 _BACKGROUND_CHANGES = _BACKGROUND_CHANGES | SUPERVISOR_ACTIONS
+# Supervisor tools that act on the host or through Core's public API rather
+# than on the focus project's store. In unrestricted mode every Butler gets
+# them, including the home observer and every background case, and they run
+# where Butler is instead of being sent to the project's worker.
+HOST_SUPERVISOR_ACTIONS = frozenset(
+    {
+        "nebula.supervisor.shell",
+        "nebula.supervisor.signal",
+        "nebula.supervisor.core_api",
+    }
+)
+
+
+def _unrestricted() -> bool:
+    from .butler_supervisor_policy import load_policy
+
+    try:
+        return load_policy().unrestricted
+    except ValueError:
+        # diagnostic-expected: a malformed host allowlist keeps the tools off.
+        return False
+
+
 _CATEGORIES = (
     {
         "id": "inspect",
@@ -582,15 +606,22 @@ class ButlerCapabilities:
             supervisor_case = (
                 await store.get(ButlerRecoveryCase, background_case_id)
             ).signal == "butler.global_periodic_check"
+        actor = background_case_id or operator_turn_id or "butler"
         if not observer and (background_case_id is None or supervisor_case):
             self._actions.update(
                 {
                     plugin.spec.name: plugin
                     for plugin in self._supervisor_actions(
-                        store,
-                        work,
-                        project_id,
-                        actor=background_case_id or operator_turn_id or "butler",
+                        store, work, project_id, actor=actor
+                    )
+                }
+            )
+        elif _unrestricted():
+            self._actions.update(
+                {
+                    plugin.spec.name: plugin
+                    for plugin in self._host_supervisor_actions(
+                        store, project_id, actor=actor
                     )
                 }
             )
@@ -627,6 +658,29 @@ class ButlerCapabilities:
                 )
 
     @staticmethod
+    def _host_supervisor_actions(
+        store: NebulaStore, project_id: str, *, actor: str
+    ) -> list[AnalysisTool]:
+        """Unrestricted mode's host shell, signals and Core API, for any Butler."""
+
+        from .butler_core_api import ButlerCoreApi
+        from .butler_host_ops import ButlerHostOps
+
+        async def record_event(entry: dict[str, Any]) -> None:
+            await record_supervisor_event(store, project_id, entry)
+
+        return [
+            plugin
+            for plugin in (
+                *ButlerHostOps(
+                    project_id=project_id, actor=actor, event_sink=record_event
+                ).actions(),
+                *ButlerCoreApi(project_id=project_id, actor=actor).actions(),
+            )
+            if plugin.spec.name in HOST_SUPERVISOR_ACTIONS
+        ]
+
+    @staticmethod
     def _supervisor_actions(
         store: NebulaStore, work: Any, project_id: str, *, actor: str
     ) -> list[AnalysisTool]:
@@ -648,6 +702,7 @@ class ButlerCapabilities:
         async def record_event(entry: dict[str, Any]) -> None:
             await record_supervisor_event(store, project_id, entry)
 
+        from .butler_core_api import ButlerCoreApi
         from .butler_host_probes import ButlerHostProbes
         from .butler_note_release import ButlerNoteRelease
         from .butler_review_gating import ButlerMustDoResolver
@@ -666,6 +721,8 @@ class ButlerCapabilities:
             _log_writer_status_action(),
             *ButlerGoalRuntimeRouting(store, project_id, actor=actor).actions(),
         ]
+        if load_policy().unrestricted:
+            actions += ButlerCoreApi(project_id=project_id, actor=actor).actions()
         if work is not None:
             actions += ButlerIndependentReview(store, work, project_id).actions()
             actions += ButlerGoalHygiene(store, work).actions()
@@ -1220,10 +1277,13 @@ class ButlerCapabilities:
                         "nebula.memory.search",
                         "nebula.help.search",
                         "nebula.settings.catalog",
+                        "nebula.supervisor.core_api",
+                        "nebula.supervisor.shell",
                     )
                     if name in self._actions
                 ],
-                "hint": "Search for the requested action, then describe its exact fields.",
+                "hint": "Search for the requested action, then describe its exact fields."
+                + self._raw_access_hint(),
             }
         ranked: list[tuple[int, str, _ButlerAction]] = []
         for name, plugin in self._actions.items():
@@ -1251,8 +1311,19 @@ class ButlerCapabilities:
             ],
             "total_matches": len(ranked),
             "next_offset": offset + 12 if offset + 12 < len(ranked) else None,
-            "hint": "Describe a match for exact fields; refine the query or page when needed.",
+            "hint": "Describe a match for exact fields; refine the query or page when needed."
+            + self._raw_access_hint(),
         }
+
+    def _raw_access_hint(self) -> str:
+        if "nebula.supervisor.core_api" not in self._actions:
+            return ""
+        return (
+            " Unrestricted mode: when no typed action does it, "
+            "nebula.supervisor.core_api calls any Core API route as the operator "
+            "(method ROUTES finds routes) and nebula.supervisor.shell runs any "
+            "command; never report something impossible before trying them."
+        )
 
     async def describe(self, arguments: dict[str, Any]) -> dict[str, Any]:
         name = arguments.get("operation")
@@ -1290,9 +1361,11 @@ class ButlerCapabilities:
                 f"use nebula.capabilities.{route} for {name}",
                 reason=f"use_{route}",
             )
+        local = name in HOST_SUPERVISOR_ACTIONS
         if (
             self._observer
             and change
+            and not local
             and (self._butler_actions is None or name not in butler_work_changes())
         ):
             # Only Butler's work changes travel to another project's worker;
@@ -1398,7 +1471,7 @@ class ButlerCapabilities:
                     payload,
                     idempotency_key=f"recovery:{self._background_case_id}:{step_id}",
                 )
-            elif self._observer and change:
+            elif self._observer and change and not local:
                 result = await self._send_change(name, payload)
             elif self._observer:
                 with observer_reads():

@@ -44,13 +44,48 @@ All of these are reached through Butler's existing gateway
 | `nebula.supervisor.request_operator_action`, `list_operator_actions`, `close_operator_action` | Raise, list and close typed requests for things only the operator can do. |
 | `nebula.supervisor.route_goal_runtime` | Routes one goal's runtime under the operator's stage-based routing policy: a route name, `auto` or `release`, with `dry_run`. See [Stage-based runtime routing](#stage-based-runtime-routing). |
 
+| `nebula.supervisor.core_api` | Unrestricted mode only. Sends one request to Core's public API as the operator: any method and route, for any project. `method: ROUTES` lists the routes this release declares (filter by `path`). Writes get an `Idempotency-Key` unless one is passed. The operator token is read from Core's private token file per call and never returned. See [Unrestricted mode](#unrestricted-mode). |
+
 **Where the tools are available:**
 - Interactive project Butler.
 - The global periodic check.
-- Not on the home observer.
+- Not on the home observer, except in unrestricted mode (`shell`, `signal`, `core_api`).
 
 They run only when the switch is on, and each call re-reads the policy. Under the global
 periodic check, the hygiene tick runs in code before the model case starts.
+
+## Unrestricted mode
+
+`NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED=1` is the operator's decision that Butler
+must not be limited to the typed actions someone thought to wrap. It:
+
+- turns the supervisor tools on by itself;
+- removes every command guardrail: `shell` runs any bash command with no
+  screening. That includes sudo, any network target, `gh`, git worktrees and
+  pipes into a shell. Private strings are not refused or redacted, and the
+  production mirror is writable;
+- lets `shell` reach any SSH destination the Core user's ssh configuration
+  can reach. `core`, `local` and `localhost` run on the Core host;
+- passes the full service environment to commands;
+- adds `nebula.supervisor.core_api`;
+- registers `shell`, `signal` and `core_api` on every Butler: the home Butler
+  acting on another project (where they run on Butler's own worker, not the
+  project's) and every background case. Background changes still need the
+  project's Act authority;
+- tells Butler, in capability search hints, to use these when no typed action
+  fits, instead of reporting that something is impossible.
+
+Commands run as the Core service user. A goal transcript that Butler reads can
+carry instructions from analysed material. With this mode on, nothing in code
+stops Butler from acting on such instructions. The remaining controls are the
+kill switch (clear this variable and `NEBULA_BUTLER_SUPERVISOR_ENABLED`) and
+the audit log, which records every call, including each `core_api` method and
+path and its status.
+
+`core_api` finds Core through `NEBULA_BUTLER_CORE_API_URL` or, when that is
+unset, the endpoint in Core's private runtime discovery file
+(`$NEBULA_V3_DATA_DIR/runtime/connection.json`). It authenticates with
+`$NEBULA_V3_DATA_DIR/runtime/operator-token`.
 
 ## Configuration (operator)
 
@@ -59,6 +94,8 @@ All configuration is through environment variables in Core's service environment
 | Variable | Meaning |
 |---|---|
 | `NEBULA_BUTLER_SUPERVISOR_ENABLED` | `1` turns the tools on. Clearing it is the **kill switch**: tools refuse on their next call, with no restart. |
+| `NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED` | `1` turns the tools on with no guardrails and adds `core_api`; see [Unrestricted mode](#unrestricted-mode). Clear it too for the kill switch. |
+| `NEBULA_BUTLER_CORE_API_URL` | Core's API base URL for `core_api`, such as `https://127.0.0.1:8443`. Default: the runtime discovery file. |
 | `NEBULA_BUTLER_SUPERVISOR_HOSTS` | A JSON allowlist, for example `{"core":{"local":true},"responder":{"address":"…","user":"…","identity_file":"~/.ssh/…"}}`. Add `"rf_lab":true` only for hosts inside the shielded lab. |
 | `NEBULA_BUTLER_SUPERVISOR_ALLOW_SUDO` | `1` allows general `sudo` in `shell`. **On a host where the Core user has `NOPASSWD: ALL`, this is unrestricted root.** It is off by default, and `runner_control` does not need it. |
 | `NEBULA_BUTLER_SUPERVISOR_AUDIT_LOG` | The audit log path. Default: `$NEBULA_V3_DATA_DIR/butler-supervisor-audit.jsonl`, mode 0600. |
