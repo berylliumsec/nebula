@@ -44,13 +44,19 @@ from the Core commit the phone talks to, then bundle it before `xcodegen`:
 If the bundle is missing or the port cannot be opened, the app loads the server's
 own UI as before.
 
-The installed app has exactly two tabs:
+The installed app is Butler mode only: it opens Butler mode (`/butler?project=<id>`,
+the same page desktop shows) and every other link, including `/projects`, lands back
+there. There is no Projects tab, All projects link or Exit Butler mode.
 
-- **Butler** — the project's Butler conversation, full screen, with a project
-  switcher in its header (`/projects/<id>/butler`).
-- **Projects** — a read-only snapshot of projects Core marks active that hold at
-  least one ordinary chat: chat count, last activity, running/waiting chats,
-  pending actions, and the five most recent chats (`/projects`).
+Butler notifications (build 9+): on launch the app asks for notification permission,
+gets an APNs device token and hands it to the page through a one-way user script
+(`window.__nebulaShellPush`); the page registers it with Core through its pairing.
+Core sends one alert per new Butler incident (needs you, blocked, stuck, failed
+recovery…); tapping it opens that project's Oversight. The app is signed with the
+`aps-environment` entitlement in `Nebula/Nebula.entitlements`, so the signing team
+needs the Push Notifications capability (Xcode adds it with
+`-allowProvisioningUpdates`). Core needs an APNs `.p8` key; see
+`docs/PUSH-NOTIFICATIONS.md`.
 
 Project chats, Terminal, Missions, Activity, and other Workbench tools stay in full
 Nebula on desktop or mobile web; ask Butler to act on them from the phone.
@@ -71,7 +77,7 @@ The page is told it runs in the shell only through the user-agent token
 ## Verification
 
 ```sh
-xcrun swiftc Nebula/ServerAddress.swift Nebula/ProxyRewrite.swift Tests/main.swift -o /tmp/nebula-address-tests
+xcrun swiftc Nebula/ServerAddress.swift Nebula/ProxyRewrite.swift Nebula/PushPolicy.swift Tests/main.swift -o /tmp/nebula-address-tests
 /tmp/nebula-address-tests
 xcodebuild -project Nebula.xcodeproj -scheme Nebula -configuration Release \
   -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
