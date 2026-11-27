@@ -9,7 +9,7 @@ settings:
     TARGETED_DEVICE_FAMILY: '1'
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: '0.1.0'
-    CURRENT_PROJECT_VERSION: '6'
+    CURRENT_PROJECT_VERSION: '9'
 targets:
   Nebula:
     type: application
@@ -25,6 +25,7 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_BUNDLE_IDENTIFIER: com.berylliumsec.nebula.ios
         INFOPLIST_FILE: Nebula/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Nebula/Nebula.entitlements
 schemes:
   Nebula:
     build:

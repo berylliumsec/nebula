@@ -60,3 +60,16 @@ check(ProxyRewrite.staticFile("/assets/index-1.js?v=2") == "assets/index-1.js" &
 check(ProxyRewrite.staticFile("/../etc/passwd") == "index.html" && ProxyRewrite.staticFile("/assets/%2e%2e/x") == "index.html" && ProxyRewrite.staticFile("/.git/config") == "index.html" && ProxyRewrite.staticFile("/") == "index.html", "Reject traversal and hidden files")
 check(ProxyRewrite.contentType("assets/a.js").hasPrefix("text/javascript") && ProxyRewrite.contentType("index.html").hasPrefix("text/html"), "Content types")
 print("13 in-app UI server checks passed")
+check(PushPolicy.hex(Data([0x00, 0xab, 0x10, 0xff])) == "00ab10ff", "Device token is lowercase hex")
+check(PushPolicy.environment(provisioningProfile: nil) == "production", "No embedded profile means production APNs")
+check(PushPolicy.environment(provisioningProfile: Data("<dict><key>aps-environment</key>\n\t\t<string>development</string></dict>".utf8)) == "development", "Development profile uses the APNs sandbox")
+check(PushPolicy.environment(provisioningProfile: Data("<key>aps-environment</key><string>production</string>".utf8)) == "production", "Distribution profile uses production APNs")
+check(PushPolicy.butlerPath("/butler?project=p1&section=oversight") == "/butler?project=p1&section=oversight", "Tapped alert opens its Butler item")
+for bad: Any? in [nil, 7, "", "https://evil.test/butler", "//evil.test/butler", "/settings", "/butlerx", "nebula://settings", "javascript:alert(1)", String(repeating: "/butler", count: 100)] {
+    check(PushPolicy.butlerPath(bad) == "/", "Tapped alert cannot leave Butler mode: \(String(describing: bad))")
+}
+let pushScript = PushPolicy.pageScript(token: "00ab", environment: "development", authorization: "authorized", bundleId: "com.example\"</script>")
+check(pushScript.hasPrefix("window.__nebulaShellPush = {") && pushScript.contains("\"token\":\"00ab\"") && pushScript.contains("nebula-shell-push"), "Page learns the push state")
+check(pushScript.contains(#"com.example\""#), "Page script escapes quotes")
+check(PushPolicy.pageScript(token: nil, environment: "production", authorization: "denied", bundleId: "x").contains("\"token\":null"), "No token is null")
+print("17 Butler notification checks passed")

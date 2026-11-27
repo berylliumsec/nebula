@@ -1,13 +1,96 @@
 import UIKit
 import WebKit
 import SafariServices
+import UserNotifications
 
 @main
-final class AppDelegate: UIResponder, UIApplicationDelegate {
+final class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        UNUserNotificationCenter.current().delegate = self
+        ButlerPush.shared.start()
+        return true
+    }
+
     func application(_ application: UIApplication, configurationForConnecting session: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         let configuration = UISceneConfiguration(name: "Nebula", sessionRole: session.role)
         configuration.delegateClass = SceneDelegate.self
         return configuration
+    }
+
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        ButlerPush.shared.registered(token: PushPolicy.hex(deviceToken))
+    }
+
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        ButlerPush.shared.registrationFailed()
+    }
+
+    /// Butler alerts show even while the app is open: they are the "needs you" signal.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound, .badge])
+    }
+
+    /// A tapped alert opens its item in Butler mode.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        ButlerPush.shared.open(PushPolicy.butlerPath(response.notification.request.content.userInfo["nebula_path"]))
+        completionHandler()
+    }
+}
+
+/// Native half of Butler notifications: asks iOS for permission, gets the APNs
+/// device token, and hands both to the page, which registers the phone with
+/// Core. A tapped alert's Butler path is queued until the web view is ready.
+final class ButlerPush {
+    static let shared = ButlerPush()
+    private(set) var token: String?
+    private(set) var authorization = "notDetermined"
+    let environment = PushPolicy.environment(provisioningProfile: Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision").flatMap { try? Data(contentsOf: $0) })
+    var onChange: (() -> Void)?
+    var onOpen: ((String) -> Void)? { didSet { if let path = pendingPath, let onOpen { pendingPath = nil; onOpen(path) } } }
+    private var pendingPath: String?
+
+    var script: String {
+        PushPolicy.pageScript(token: token, environment: environment, authorization: authorization, bundleId: Bundle.main.bundleIdentifier ?? "")
+    }
+
+    func start() {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in self.refresh() }
+    }
+
+    /// Re-reads permission (the operator may change it in iOS Settings) and re-registers.
+    func refresh() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            DispatchQueue.main.async {
+                switch settings.authorizationStatus {
+                case .authorized: self.authorization = "authorized"
+                case .provisional: self.authorization = "provisional"
+                case .ephemeral: self.authorization = "ephemeral"
+                case .denied: self.authorization = "denied"
+                default: self.authorization = "notDetermined"
+                }
+                if ["authorized", "provisional", "ephemeral"].contains(self.authorization) {
+                    UIApplication.shared.registerForRemoteNotifications()
+                }
+                self.onChange?()
+            }
+        }
+    }
+
+    func registered(token: String) {
+        self.token = token
+        onChange?()
+    }
+
+    func registrationFailed() {
+        token = nil
+        onChange?()
+    }
+
+    func open(_ path: String) {
+        DispatchQueue.main.async {
+            if let onOpen = self.onOpen { onOpen(path) } else { self.pendingPath = path }
+        }
     }
 }
 
@@ -27,7 +110,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
         if let url = contexts.first?.url { browser.openLink(url) }
     }
-    func sceneWillEnterForeground(_ scene: UIScene) { browser.resume() }
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        browser.resume()
+        ButlerPush.shared.refresh()
+    }
 }
 
 /// Native colors for the few screens the shell draws itself (Nebula dark tokens).
@@ -59,6 +145,9 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private let defaults = UserDefaults.standard
     private let localUI = LocalUIServer()
     private var localReady = false
+    private var connecting = false
+    /// A tapped notification's Butler path, held while the first page load is pending.
+    private var pendingButlerPath: String?
 
     /// Where the page is loaded from: the bundled UI, or the server itself when the
     /// bundle is missing or the loopback port could not be opened.
@@ -79,6 +168,9 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.websiteDataStore = .default()
         // Lets the page offer shell-only rows (App connection) without any script bridge.
         config.applicationNameForUserAgent = "Mobile/15E148 NebulaShell/1.0"
+        // One-way: native tells the page this phone's push token; the page
+        // registers it with Core. Pages get no message handler into native code.
+        config.userContentController.addUserScript(pushScript())
         webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -129,6 +221,32 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
         ]
         let selected = defaults.string(forKey: "nebula.server").flatMap(ServerAddress.parse)
         if let saved = selected ?? history.first.flatMap(ServerAddress.parse) { connect(saved) }
+        ButlerPush.shared.onChange = { [weak self] in self?.publishPush() }
+        ButlerPush.shared.onOpen = { [weak self] path in self?.openButler(path) }
+    }
+
+    private func pushScript() -> WKUserScript {
+        WKUserScript(source: ButlerPush.shared.script, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
+    /// Updates the page now and every page loaded later with the current push state.
+    private func publishPush() {
+        let controller = webView.configuration.userContentController
+        controller.removeAllUserScripts()
+        controller.addUserScript(pushScript())
+        guard let current = webView.url, let origin = pageOrigin, ServerAddress.sameOrigin(current, origin) else { return }
+        webView.evaluateJavaScript(ButlerPush.shared.script, completionHandler: nil)
+    }
+
+    /// Opens a tapped notification's item. Only paths inside Butler mode reach here.
+    private func openButler(_ path: String) {
+        loadViewIfNeeded()
+        pendingButlerPath = path
+        // Still connecting (or never connected): the first page load picks it up.
+        guard !connecting, let origin = pageOrigin else { return }
+        if presentedViewController != nil, server != nil { dismiss(animated: false) }
+        offline.isHidden = true
+        load(landing(origin))
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -197,14 +315,28 @@ final class BrowserController: UIViewController, WKNavigationDelegate, WKUIDeleg
         // and last-connected time below only record completed loads.
         defaults.set(url.absoluteString, forKey: "nebula.server")
         offline.isHidden = true
-        guard let localUI else { load(url); return }
+        guard let localUI else { load(landing(url)); return }
         localUI.upstream = url
+        connecting = true
         localUI.start { [weak self] ready in
             guard let self, self.server == url else { return }
             self.localReady = ready
-            guard ready else { self.load(url); return }
-            self.copyPairing(from: url) { self.load(LocalUIServer.origin) }
+            guard ready else { self.connecting = false; self.load(self.landing(url)); return }
+            self.copyPairing(from: url) {
+                self.connecting = false
+                self.load(self.landing(LocalUIServer.origin))
+            }
         }
+    }
+
+    /// The page's root, or the Butler item a tapped notification asked for.
+    private func landing(_ origin: URL) -> URL {
+        guard let path = pendingButlerPath, var target = URLComponents(url: origin, resolvingAgainstBaseURL: false) else { return origin }
+        pendingButlerPath = nil
+        let parts = URLComponents(string: path)
+        target.path = parts?.path ?? "/"
+        target.percentEncodedQuery = parts?.percentEncodedQuery
+        return target.url ?? origin
     }
 
     private func load(_ url: URL) {
