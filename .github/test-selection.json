@@ -1,24 +1,23 @@
 {
-  "change_digest": "57dc75eed110d56bfdb34fb086aaadb021a9810effa740cc4c1fdc882b64138f",
-  "reviewed_by": "Claude: spawn harness CLIs in their own process group under uvloop",
-  "reason": "Backend-only fix in harnesses.py: the Codex app-server and Grok ACP spawns passed process_group=0, which uvloop (Core's loop) rejects before the child starts, so every Codex harness start failed. A new helper keeps process_group=0 on the stdlib loop and uses preexec_fn=os.setpgrp on uvloop, so the child still gets its own group in the worker's session and close still reaps its tree. Selected the new loop-parametrized spawn test, the process-tree reaping tests, and the Codex/Grok transport suites that spawn these CLIs.",
-  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run.",
+  "change_digest": "370bb40a6181c9dfb1c73eb46c4c4c02d43af538fb6567f6f446abc66b5a4ee5",
+  "reviewed_by": "Claude: retry a Butler check on another account after a usage limit",
+  "reason": "Backend-only fix in butler_recovery.py. A background Butler check runs on the host project's Butler chat account; for Claude accounts nothing routed around a spent plan, so every Nebula-wide check hosted by a project whose Butler chat was on that account ended interrupted (live 2026-11-25..27). Now a check turn that fails on a usage or rate limit (is_rate_limit_failure) runs once more on another enabled same-kind account offering the model, with children moved off the spent account. Selected the Butler instructions suite (new regression test plus the Codex capacity-selection test that shares the refactored candidate filter), the global-check scope suite (roster privacy follows the running account) and the check-summary suite.",
+  "exclusions": "No UI, frontend, Playwright or native change. Full suites not run. test_butler_global_check_scope.py hangs at interpreter exit after all tests pass, identically on origin/main.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 45,
+    "python": 50,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_process_group_spawn.py",
-    "tests/v3/test_turn_end_process_reaping.py",
-    "tests/v3/test_codex_transport.py",
-    "tests/v3/test_grok_acp_compliance.py"
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_butler_global_check_scope.py",
+    "tests/v3/test_butler_check_summary_post.py"
   ],
   "frontend": [],
   "native": [],

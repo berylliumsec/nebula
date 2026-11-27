@@ -42,6 +42,9 @@ from nebula.v3.domain import (
     HarnessProfile,
     HarnessRuntimeOption,
     HarnessSession,
+    HarnessTurn,
+    HarnessTurnOrigin,
+    HarnessTurnStatus,
     ProviderProfile,
     utc_now,
 )
@@ -500,6 +503,207 @@ async def test_global_check_uses_saved_butler_harness_effort(tmp_path):
             project.id, profile, "test-model", "max", "automatic"
         )
     ).id == profile.id
+
+
+async def test_global_check_retries_once_on_another_account_after_a_usage_limit(
+    tmp_path,
+):
+    """A Butler chat left on a spent Claude account no longer fails every check."""
+
+    store = NebulaStore(tmp_path / "core.db")
+    project = await store.create(Engagement(name="Selected"))
+    claude = HarnessCapabilities(models=["opus"])
+    spent, spare = [
+        await store.create(
+            HarnessProfile(
+                name=name,
+                kind=HarnessKind.CLAUDE_AGENT_SDK,
+                default_model="opus",
+                executable="/bin/true",
+                privacy={"local_only": True},
+                capabilities=claude,
+            )
+        )
+        for name in ("Spent account", "Spare account")
+    ]
+    butler_harness = await store.create(
+        HarnessSession(
+            engagement_id=project.id, harness_profile_id=spent.id, model="opus"
+        )
+    )
+    (
+        await store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Butler",
+                backend=ChatBackend.HARNESS,
+                harness_profile_id=spent.id,
+                harness_session_id=butler_harness.id,
+                model="opus",
+                metadata={
+                    "control_assistant": True,
+                    "assistant_config": {
+                        "backend": "harness",
+                        "profile_id": spent.id,
+                        "model": "opus",
+                        "allow_subagents": True,
+                        "subagent_harness_profile_id": spent.id,
+                        "subagent_model": "opus",
+                    },
+                },
+            )
+        )
+    )
+    (
+        await store.create(
+            ButlerAuthorityPolicy(
+                id=policy_id(project.id), engagement_id=project.id, authority="act"
+            )
+        )
+    )
+    worker_id = "worker-1"
+    (
+        await store.create(
+            ButlerProjectState(
+                id=project_state_id(project.id),
+                engagement_id=project.id,
+                lease_owner=worker_id,
+                lease_expires_at=utc_now() + timedelta(minutes=10),
+            )
+        )
+    )
+    _write(tmp_path)
+    recovery = ButlerRecoveryService(store, instructions_root=tmp_path)
+    assert await recovery.fire_global_periodic_check(project.id, worker_id)
+    assert (await recovery.capture_events(project.id, worker_id)) == 1
+    case = (
+        await store.find_entities(ButlerRecoveryCase, {}, engagement_id=project.id)
+    )[0]
+    starts: list[tuple[str, str | None]] = []
+    failure = {
+        "error": "Claude turn failed: You've hit your weekly limit",
+        "diagnostic": {
+            "reason_code": "rate_limited",
+            "vendor_error_info": {"api_error_status": 429},
+        },
+    }
+
+    class Runtime:
+        async def _validate_harness_privacy(self, *_args, **_kwargs):
+            pass
+
+        async def create_session(self, **kwargs):
+            return await store.create(
+                HarnessSession(
+                    engagement_id=project.id,
+                    harness_profile_id=kwargs["profile_id"],
+                    model=kwargs["model"],
+                )
+            )
+
+        async def prepare_chat(self, **request):
+            child = request["provider_subagent"]
+            starts.append(
+                (request["profile_id"], child["harness_profile_id"] if child else None)
+            )
+            limited = request["profile_id"] == spent.id
+            turn = await store.create(
+                ChatTurn(
+                    engagement_id=project.id,
+                    session_id=request["chat_session_id"],
+                    backend=ChatBackend.HARNESS,
+                    model=request["model"],
+                    status=(
+                        ChatTurnStatus.INTERRUPTED
+                        if limited
+                        else ChatTurnStatus.COMPLETE
+                    ),
+                    error=failure["error"] if limited else None,
+                    content="" if limited else "Checked Core state",
+                    request_snapshot={"harness_profile_id": request["profile_id"]},
+                )
+            )
+            harness_turn = await store.create(
+                HarnessTurn(
+                    engagement_id=project.id,
+                    harness_session_id="harness-session",
+                    origin=HarnessTurnOrigin.CHAT,
+                    chat_session_id=request["chat_session_id"],
+                    chat_turn_id=turn.id,
+                    prompt="check",
+                    status=(
+                        HarnessTurnStatus.INTERRUPTED
+                        if limited
+                        else HarnessTurnStatus.COMPLETE
+                    ),
+                    error=failure["error"] if limited else None,
+                    metadata=(
+                        {"diagnostic": failure["diagnostic"]}
+                        if limited and failure["diagnostic"]
+                        else {}
+                    ),
+                )
+            )
+            turn = await store.update(
+                ChatTurn,
+                turn.id,
+                {"harness_turn_id": harness_turn.id},
+                expected_revision=turn.revision,
+            )
+            return None, turn, harness_turn
+
+        async def stream_turn(self, _turn_id):
+            if False:
+                yield None
+
+    class Subagents:
+        async def for_session(self, _session_id):
+            return []
+
+    class Work:
+        chat = SimpleNamespace(subagents=Subagents())
+
+        async def harness_quota(self, _project_id, _arguments):
+            # Claude reports plan limits only inside turns: nothing is current.
+            return {"state": "unavailable", "snapshots": []}
+
+    agent = ButlerRecoveryAgent(
+        store,
+        provider_factory=lambda _: None,
+        harness_runtime=Runtime(),
+        artifact_store=None,
+        work=Work(),
+        memory=None,
+        instructions_root=tmp_path,
+    )
+    outcome, backend, profile_id, model, _turn_id = await agent.run(case)
+    assert (outcome, backend.value, profile_id, model) == (
+        "Checked Core state",
+        "harness",
+        spare.id,
+        "opus",
+    )
+    # One retry, with the children moved off the spent account too.
+    assert starts == [(spent.id, spent.id), (spare.id, spare.id)]
+    saved = await store.get(ButlerRecoveryCase, case.id)
+    assert saved.model_profile_id == spare.id
+    assert len(saved.model_turn_ids) == 2
+    # The operator's Butler chat keeps the runtime they chose.
+    assert (await agent._butler_session(project.id)).harness_profile_id == spent.id
+
+    # Any other failure is reported as before, without a second turn.
+    failure["error"] = "Claude turn failed: the vendor session closed"
+    failure["diagnostic"] = {}
+    starts.clear()
+    retry_case = await store.update(
+        ButlerRecoveryCase,
+        case.id,
+        {"investigation_session_id": None, "investigation_turn_ids": []},
+        expected_revision=saved.revision,
+    )
+    with pytest.raises(ValueError, match="vendor session closed"):
+        await agent.run(retry_case)
+    assert starts == [(spent.id, spent.id)]
 
 
 async def test_authenticated_oversight_reads_nebula_wide_file_status(tmp_path):
