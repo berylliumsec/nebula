@@ -1361,8 +1361,10 @@ def work_roster_components(
                 name="work_agents",
                 description=(
                     "List this project's live working and waiting agents, with their "
-                    "linked open Work item when recorded. Available even when Work "
-                    "posting and peer messaging are off."
+                    "linked open Work item when recorded. Blocked, idle and finished "
+                    "conversations are omitted, so absence here does not mean a chat "
+                    "does not exist. Available even when Work posting and peer "
+                    "messaging are off."
                 ),
                 input_schema={
                     "type": "object",

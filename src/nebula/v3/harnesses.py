@@ -674,8 +674,10 @@ _GATEWAY_AGENT_MESSAGE_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
 _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
     "work.agents": (
         "List live working and waiting conversations in this project and each "
-        "conversation's linked open Work item, if recorded. This read is available "
-        "even when Work posting or peer messaging is off.",
+        "conversation's linked open Work item, if recorded. Blocked, idle and "
+        "finished conversations are omitted, so absence here does not mean a "
+        "chat does not exist. This read is available even when Work posting or "
+        "peer messaging is off.",
         {"type": "object", "properties": {}, "additionalProperties": False},
     ),
     "work.list": (

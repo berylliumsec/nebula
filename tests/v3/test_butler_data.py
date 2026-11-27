@@ -158,6 +158,11 @@ async def test_butler_bookmarks_use_core_revisions_and_read_back_saved_state(tmp
         search = await invoke(capabilities, "search_chats", {"query": "document"})
         assert [row["message_id"] for row in search["items"]] == [message.id]
         assert "PRIVATE_FOREIGN" not in str(search)
+        assert "hint" not in search
+        missed = await invoke(
+            capabilities, "search_chats", {"query": "no message holds this phrase"}
+        )
+        assert missed["items"] == [] and "nebula.work.chats" in missed["hint"]
         assert (await invoke(capabilities, "bookmarks", {"session_id": session.id}))[
             "bookmarks"
         ] == []

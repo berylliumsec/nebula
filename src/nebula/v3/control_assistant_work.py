@@ -18,7 +18,7 @@ from uuid import uuid4
 import httpx
 from fastapi import FastAPI
 from jsonschema import Draft202012Validator, ValidationError
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from .chat import (
     ChatCompletionRequest,
@@ -557,6 +557,18 @@ PAGE_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
     "properties": {"offset": {"type": "integer", "minimum": 0}},
 }
+CHATS_PAGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "offset": {"type": "integer", "minimum": 0},
+        "query": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "Title words; a chat matches when its title contains any word, case-insensitive.",
+        },
+    },
+}
 WORK_ITEM_TARGET_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -945,6 +957,44 @@ def _work_item_url(project_id: str, item_id: str) -> str:
 
 def _mission_url(project_id: str, run_id: str) -> str:
     return f"/projects/{quote(project_id, safe='')}/workbench?view=missions&mission={quote(run_id, safe='')}"
+
+
+async def chats_titled(
+    store: NebulaStore,
+    project_id: str,
+    terms: Sequence[str],
+    *,
+    offset: int,
+    limit: int,
+) -> list[ChatSession]:
+    """Project chats whose title contains any of ``terms``, newest first.
+
+    Each term matches literally and case-insensitively; LIKE wildcards in a
+    term are escaped.
+    """
+
+    async with store.database.session() as database:
+        return readable_entities(
+            await database.scalars(
+                select(EntityRow)
+                .where(
+                    EntityRow.engagement_id == project_id,
+                    EntityRow.kind == ChatSession.entity_kind,
+                    or_(
+                        *(
+                            EntityRow.payload["title"]
+                            .as_string()
+                            .icontains(term, autoescape=True)
+                            for term in terms
+                        )
+                    ),
+                )
+                .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+                .offset(offset)
+                .limit(limit)
+            ),
+            ChatSession,
+        )
 
 
 def _chat_kind(session: ChatSession) -> str:
@@ -1563,20 +1613,35 @@ class ControlAssistantWork:
             "more_attention": len(attention) > 5,
         }
 
-    async def chats(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
-        """Page project conversations beyond the bounded overview roster."""
+    async def chats(
+        self, project_id: str, offset: Any = 0, query: Any = None
+    ) -> dict[str, Any]:
+        """Page project conversations beyond the bounded overview roster.
+
+        ``query`` narrows the page to chats whose title contains any of its
+        whitespace-separated words, so Butler can find several named chats in
+        one call whatever their status.
+        """
 
         (await self._project(project_id))
         if type(offset) is not int or offset < 0:
             raise ValueError("offset must be a nonnegative integer")
-        rows = await self.store.find_entities(
-            ChatSession,
-            {},
-            engagement_id=project_id,
-            newest_first=True,
-            offset=offset,
-            limit=31,
-        )
+        if query is not None and not isinstance(query, str):
+            raise ValueError("query must be text")
+        terms = list(dict.fromkeys((query or "").casefold().split()))[:16]
+        if terms:
+            rows = await chats_titled(
+                self.store, project_id, terms, offset=offset, limit=31
+            )
+        else:
+            rows = await self.store.find_entities(
+                ChatSession,
+                {},
+                engagement_id=project_id,
+                newest_first=True,
+                offset=offset,
+                limit=31,
+            )
         chats = [
             {
                 "id": item.id,
@@ -1594,11 +1659,14 @@ class ControlAssistantWork:
             and item.metadata.get("temporary_assistant") is not True
             and _chat_kind(item) == "main"
         ]
-        return {
+        result: dict[str, Any] = {
             "project_id": project_id,
             "chats": chats,
             "next_offset": offset + 30 if len(rows) > 30 else None,
         }
+        if terms:
+            result["query_terms"] = terms
+        return result
 
     async def work_items(self, project_id: str, offset: Any = 0) -> dict[str, Any]:
         """Page saved Work board items inside the selected project."""
@@ -4318,8 +4386,8 @@ _ALL_WORK_TOOLS: tuple[tuple[str, str, dict[str, Any], bool], ...] = (
     ),
     (
         "nebula.work.chats",
-        "Page this project's saved main conversations, including archived, pinned, and flagged chats. Use next_offset to continue past the first page before concluding a named chat is absent.",
-        PAGE_SCHEMA,
+        "Page this project's saved main conversations, including blocked, idle, archived, pinned, and flagged chats. To find chats by name, pass query with title words (any word matches, so several names fit in one call). Use next_offset to continue past the first page before concluding a named chat is absent.",
+        CHATS_PAGE_SCHEMA,
         True,
     ),
     (
@@ -4822,7 +4890,9 @@ async def dispatch_work_tool(
     if name == "nebula.work.browser_sessions":
         return await work.browser_sessions(project_id, arguments.get("offset", 0))
     if name == "nebula.work.chats":
-        return await work.chats(project_id, arguments.get("offset", 0))
+        return await work.chats(
+            project_id, arguments.get("offset", 0), arguments.get("query")
+        )
     if name == "nebula.work.chat_messages":
         return await work.chat_messages(project_id, arguments)
     if name == "nebula.work.work_items":

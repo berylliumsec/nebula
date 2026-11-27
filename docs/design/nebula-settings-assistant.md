@@ -1088,8 +1088,12 @@ uses Core's atomic revision guard, and requires exact absence before reporting
 removal and refreshing Results. A lost response is reconciled through Core;
 failed readback requires inspection before any retry.
 
-`nebula.data.search_chats` searches visible saved project messages, optionally
-one chat or bookmarks only. `nebula.data.bookmarks` pages saved bookmark states.
+`nebula.data.search_chats` searches visible saved project messages for one
+exact phrase, optionally one chat or bookmarks only; it does not search titles.
+To find chats by name, Butler passes title words to `nebula.work.chats` as
+`query`: a chat matches when its title contains any word, whatever its status.
+The live roster (`work.agents`) lists only working and waiting conversations, so
+a blocked chat's absence there is not evidence that it does not exist. `nebula.data.bookmarks` pages saved bookmark states.
 `nebula.data.set_bookmark` sets or clears one exact message bookmark using its
 current revision, or zero when no bookmark record exists. Core owns revisions
 and confirms the saved value; the requesting chat rereads its controls. Private

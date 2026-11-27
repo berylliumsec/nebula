@@ -166,10 +166,22 @@ class ButlerData:
         if session_id := arguments.get("session_id"):
             (await self._chat(session_id))
             params["session_id"] = session_id
-        return await self._request(
+        page = await self._request(
             "GET",
             f"/api/v1/chat/projects/{quote(self.project_id, safe='')}/search?{urlencode(params)}",
         )
+        if (
+            isinstance(page, dict)
+            and not page.get("items")
+            and str(params["q"]).strip()
+            and not params["offset"]
+        ):
+            page["hint"] = (
+                "No message contains this exact phrase. Titles are not searched; "
+                "find chats by name with nebula.work.chats and query, or search "
+                "one shorter phrase at a time."
+            )
+        return page
 
     async def bookmarks(self, arguments: dict[str, Any]) -> dict[str, Any]:
         session = await self._chat(arguments["session_id"])
@@ -277,7 +289,7 @@ class ButlerData:
             ),
             (
                 "nebula.data.search_chats",
-                "Search visible saved project conversation messages and bookmarks, page older matches, or narrow to one listed chat. Private Butler and side conversations are excluded.",
+                "Search visible saved project conversation messages and bookmarks for one exact phrase in message text, page older matches, or narrow to one listed chat. Chat titles are not searched: to find chats by name use nebula.work.chats with query. Private Butler and side conversations are excluded.",
                 _schema(
                     {
                         **chat_target,

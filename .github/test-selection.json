@@ -1,24 +1,23 @@
 {
-  "change_digest": "259198b4fe35b7af16e429380f2a28144e4295d188933ce4048a6adf09d63825",
-  "reviewed_by": "Claude: Nebula-wide Butler check rotated hosts across every Act project",
-  "reason": "Core change. A project worker reads only its own project, so every Act project's worker computed itself as the Nebula-wide check anchor and whichever tick first saw the shared clock due won (live: 10 hosts in 8 hours), flipping the check runtime, the shared '*' default runtime and the summary target, and letting a second check start beside a still-open one. ButlerGlobalState gains host_seen_at; a worker that cannot read the recorded host defers to it until it has been silent for three intervals, and the host refreshes host_seen_at once per interval while its check is open. Selected the Butler instructions suite (new scoped-worker rotation and full-read anchor tests), the home-host, global-check scope and check-summary suites that read the host fields.",
-  "exclusions": "test_execution_locks.py global-check concurrency is PostgreSQL-only and not wired to CI Postgres; run locally against Postgres 16 (2 passed). No UI or migration change; full suites not run.",
+  "change_digest": "8db8803d2888d5fdca1107f96c673edf2e153fc2b9bd75fa3541cd84bbb606ab",
+  "reviewed_by": "Claude: Butler could not find blocked chats by name",
+  "reason": "Butler told the operator three blocked chats could not be found: the live roster (work.agents) omits blocked chats and nebula.data.search_chats matches one literal phrase in message text, so a multi-name query returned nothing; it never paged nebula.work.chats. nebula.work.chats now takes a title query (any word, case-insensitive, LIKE wildcards escaped) through a new chats_titled helper; search_chats and work.agents descriptions say what they omit, and an empty search carries a hint. Selected the Butler chat paging test (title lookup added), the Butler data tests (empty-search hint) and the execution-scope suite (title lookup runs project-scoped on an execution worker).",
+  "exclusions": "Message search semantics for the web UI and terminal client are unchanged. No UI change, so no Playwright. test_butler_capabilities::test_scheduled_butler_can_edit_all_assistant_settings already fails on main 35d0be8 and is not selected. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 60,
+    "python": 166,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_butler_instructions.py",
-    "tests/v3/test_butler_home_host.py",
-    "tests/v3/test_butler_global_check_scope.py",
-    "tests/v3/test_butler_check_summary_post.py"
+    "tests/v3/test_butler_data.py",
+    "tests/v3/test_control_assistant_work.py",
+    "tests/v3/test_execution_scope.py"
   ],
   "frontend": [],
   "native": [],
