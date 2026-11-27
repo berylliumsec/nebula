@@ -55,6 +55,7 @@ SETTING_DESTINATIONS: tuple[tuple[str, str, str], ...] = (
     ("network-scope", "Project policy and network scope", "engagement-policy-settings"),
     ("operators", "Operator profiles", "operator-settings"),
     ("devices", "Paired devices", "device-pairing-settings"),
+    ("push-notifications", "Push notifications", "push-notification-settings"),
     ("release", "Release and updates", "release-settings-group"),
     ("diagnostics", "Diagnostics and logging", "diagnostics-settings"),
     ("host-pressure", "Host pressure admission", "setup-settings"),

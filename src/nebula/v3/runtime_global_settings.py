@@ -204,6 +204,12 @@ def mount_global_settings(
 
     auth = [Depends(authenticated)]
 
+    from .push_notifications import push_notifications_router
+
+    app.include_router(
+        push_notifications_router(store, actor), prefix="/api/v1", dependencies=auth
+    )
+
     @app.get("/api/v1/operator-profiles", dependencies=auth)
     async def list_operators() -> list[OperatorProfile]:
         return await operators.list_profiles()
