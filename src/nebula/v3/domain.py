@@ -3877,6 +3877,10 @@ class ButlerGlobalState(Entity):
     check_interval_minutes: int = Field(default=5, ge=1, le=1440)
     last_periodic_at: datetime | None = None
     last_project_id: str | None = Field(default=None, max_length=200)
+    # When the host (``last_project_id``) last showed it still runs the checks:
+    # a fired check, or a skipped one while its last check is still open. Other
+    # project workers cannot read the host, so they wait until it goes silent.
+    host_seen_at: datetime | None = None
     # The Butler chat that receives each finished check's summary; unset uses
     # the chat of the project hosting the Nebula-wide check. See
     # butler_check_summary.py.

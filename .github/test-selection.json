@@ -1,27 +1,27 @@
 {
-  "change_digest": "9855c9e3cd55451560560b7a0256e9f685d1e9f92e393486546a09cb6d9b59ab",
-  "reviewed_by": "Claude: Butler panels skewed in phone-width Butler mode; no code editor in the iPhone app",
-  "reason": "CSS and Butler mode page change. At phone width the floating Butler panel's placement (left: 50% plus translateX(-50%), NebulaControlAssistant.module.css media rule) still applied when the panel was lent into Butler mode, so project threads and Butler settings rendered half off-screen (validated in a browser: panel left -163/-195 vs host 16/0; transform none fixes it). .embeddedPanel now resets inset and transform and keeps a gutter for lent chats on phones. The iPhone app drops Code & files (section tabs, More sheet, section=code falls back to Board, brief file chips become plain names). Selected the Butler mode board unit suite (new shell test) and the iPhone shell Playwright area, whose mocked journey now asserts the lent settings and project-thread panels sit inside the screen and that Code & files is absent, plus the Butler mode real-Core journey at phone width.",
-  "exclusions": "No Core, Python or native change. Desktop layout is unchanged by the media-scoped rules; full suites not run.",
+  "change_digest": "259198b4fe35b7af16e429380f2a28144e4295d188933ce4048a6adf09d63825",
+  "reviewed_by": "Claude: Nebula-wide Butler check rotated hosts across every Act project",
+  "reason": "Core change. A project worker reads only its own project, so every Act project's worker computed itself as the Nebula-wide check anchor and whichever tick first saw the shared clock due won (live: 10 hosts in 8 hours), flipping the check runtime, the shared '*' default runtime and the summary target, and letting a second check start beside a still-open one. ButlerGlobalState gains host_seen_at; a worker that cannot read the recorded host defers to it until it has been silent for three intervals, and the host refreshes host_seen_at once per interval while its check is open. Selected the Butler instructions suite (new scoped-worker rotation and full-read anchor tests), the home-host, global-check scope and check-summary suites that read the host fields.",
+  "exclusions": "test_execution_locks.py global-check concurrency is PostgreSQL-only and not wired to CI Postgres; run locally against Postgres 16 (2 passed). No UI or migration change; full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 0,
-    "frontend": 24,
+    "python": 60,
+    "frontend": 0,
     "native": 0,
-    "playwright": 14
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/ButlerModePage.board.test.tsx"
+  "python": [
+    "tests/v3/test_butler_instructions.py",
+    "tests/v3/test_butler_home_host.py",
+    "tests/v3/test_butler_global_check_scope.py",
+    "tests/v3/test_butler_check_summary_post.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:ios-assistant-only",
-    "entry:butler-mode/assistant-real-chromium-390"
-  ],
+  "playwright": [],
   "checks": []
 }
