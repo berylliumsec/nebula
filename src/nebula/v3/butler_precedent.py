@@ -30,7 +30,14 @@ _QUERIES = {
     "storage.incident_reported": "storage volume full disk space cleanup host lesson",
     "agent.subagent_start_failed": "subagent start refusal harness provider runtime recovery parent lesson",
     "butler.periodic_check": "running goal stalled work blocker provider tools parent agent lesson",
+    "review.agent_requested": "agent review request blocker decision parent agent lesson",
+    "review.approval_requested": "approval request tool permission decision lesson",
+    "review.question_requested": "agent question answer decision parent agent lesson",
+    "review.queue_requested": "queued follow up review parent agent decision lesson",
 }
+# A check for a signal without its own query still gets relevant precedent
+# rather than failing before Butler starts.
+_DEFAULT_QUERY = "blocked work recovery parent agent decision lesson"
 
 
 class ButlerPrecedent(NebulaModel):
@@ -53,9 +60,7 @@ async def read_precedents(
 ) -> ButlerPrecedentSnapshot:
     """Read only selected-project memories; foreign source refs never enter packets."""
 
-    query = _QUERIES.get(event_type)
-    if query is None:
-        raise ValueError("unsupported Butler precedent event")
+    query = _QUERIES.get(event_type, _DEFAULT_QUERY)
     recent = await memory.list(project_id, limit=40)
     relevant = await memory.search(project_id, query, limit=3)
     selected = [item for item in recent.items if item.scope == "global_preference"][:2]
