@@ -1,100 +1,49 @@
-# Focused test policy
+# Local test policy
 
-Full suites should almost never run. A general request to test, release, or merge
-does not approve one. Failures, shared-file changes, absent baselines, and uncertain
-coverage require diagnosis or selection review, never automatic full expansion.
+Nebula has no CI test workflows. No pull request, push, tag, release, or deployment
+waits on a CI test run or a committed test-selection receipt. Tests run locally, at
+the discretion of the agent or human who makes the change, before they open and
+admin-merge the pull request.
 
-## Routine changes
+## Choosing what to run
 
-1. Identify affected operator journeys and integration boundaries. Select individual
-   Python/frontend files, exact Rust test names, and catalogued Playwright entries.
-   Keep required browser/device coverage for these journeys, not unrelated features.
-2. Collect/list those tests and tell the user the expected count, runtime boundary,
-   rationale, and exclusions before execution. List-only operations are not full runs.
-3. Stage new source/test files, then obtain a diff digest:
+Pick the tests that prove the changed journeys and integration boundaries: individual
+Python/frontend files, exact Rust test names, and the Playwright specs and projects for
+the affected journeys. Prefer focused runs. A full suite is rarely worth its cost, and
+a general request to "test it" or "merge it" does not by itself call for one.
 
-   ```sh
-   python scripts/test_selection.py --baseline origin/main --candidate WORKTREE --digest
-   ```
-
-   The digest binds that diff alone. It pins git's object-name abbreviation length,
-   which git otherwise scales to how many objects the local clone holds, so the same
-   baseline and candidate hash identically in a working clone and in CI's fresh one.
-
-4. Write `.github/test-selection.json` with `change_digest`, `reviewed_by`, `reason`,
-   `exclusions`, `expected_tests`, and the lists `python`, `frontend`, `native`,
-   `playwright`. Empty lists explicitly mean no relevant tests at that layer;
-   explain them in `exclusions`. Frontend paths start with `ui/src/`; Rust names
-   must be exact `module::test` names. Playwright selectors come from:
-
-   ```sh
-   python scripts/playwright_impact.py catalog --manifest ui/playwright-impact.json
-   ```
-
-   `expected_tests` records counts per layer. Python defaults to 3.12; opt into
-   other supported versions with `python_versions` only when needed. Set
-   `python_browser: true` only when the selected Python tests require Chromium.
-   `python_node: true` requests Node for cross-language guard/tool tests.
-
-5. Validate the plan, commit it with the change, and review CI's selection receipts.
-   Changing the diff or base invalidates the digest. Update and review the selection
-   again; do not merely refresh its digest without considering coverage.
-
-CI validates the plan before test jobs start. It does not run tests for omitted
-layers, and never defaults empty target arrays to whole suites. Failed selection
-validation blocks the PR rather than pretending that zero tests proves coverage.
-The plan is human/agent judgment, not cryptographic proof of adequate coverage.
-Normal code review must assess its rationale; an agent must not invent approval.
-Existing branch-protection Python check names remain present: unselected versions
-only report their omission without installing or executing tests. Invalid selection
-makes these checks fail, so skipped test layers cannot hide a missing review.
+In the pull request description, say what you ran, the outcome, and what you chose not
+to run. Do not describe an untested workflow as verified.
 
 Focused local examples:
 
 ```sh
-poetry run pytest -q tests/test_playwright_impact.py tests/test_test_selection.py
+poetry run pytest -q tests/test_daily_stable_release.py
 npm --prefix ui test -- src/api/runtimeDefaults.test.ts
 npm --prefix ui run test:e2e -- tests/interface.spec.ts --project=mobile-webkit --grep 'configured harness default'
 ```
 
-For selected setup tests, invoke pytest through
-`python scripts/run_pytest_thread_guard.py -- <selected pytest arguments>`.
-The opt-in setup thread check reports newly leaked non-daemon threads; the
-wrapper bounds interpreter shutdown after that report and preserves failure.
+For setup tests, you can invoke pytest through
+`python scripts/run_pytest_thread_guard.py -- <pytest arguments>`. The opt-in setup
+thread check reports newly leaked non-daemon threads; the wrapper bounds interpreter
+shutdown after that report and preserves failure.
 
-Pytest and the npm entry points reject unscoped runs; Playwright's configuration also guards
-direct `npx playwright test`. Real-Core no longer implicitly runs other projects.
-These guards prevent accidents, not a determined actor editing/bypassing the tools.
+The npm entry points reject unscoped runs, and Playwright's configuration also guards
+direct `npx playwright test`. For a deliberate local full UI run, set both
+`NEBULA_FULL_SUITE_APPROVAL=RUN_FULL_SUITE` and `NEBULA_FULL_SUITE_REASON` for that one
+command. Do not persist these variables in agent profiles. The guards prevent
+accidental full runs; they are not a security boundary.
 
-## Releases and the exceptional full run
+## Releases
 
-Release tags do not authorize full coverage. Preparation has exactly three jobs:
-validate the tagged commit, build the DEB and AppImage, and perform one Ubuntu 24.04
-clean install with one desktop Chromium case against the installed Core and embedded
-production UI. The case is collected as exactly one test before execution and has
-zero retries. Its passing receipt must match the tag, commit, and installed DEB hash
-before a draft can be created or a daily release published.
-
-The release-only Playwright impact matrix and baseline are gone. The PR Playwright
-selector and its diff-bound review remain in place, with the `gate` check required
-by main branch protection. Packaging unit tests, redundant
-compile checks, sandbox integration, crash cleanup, negative signature testing,
-and Debian/Kali installs are optional manual diagnostics in
-`nebula3-release-diagnostics.yml`; the existing manual Playwright selector remains
-available. The daily schedule remains disabled until separately authorized after
-a candidate run. This release gate claims only artifact integrity, installation,
-and the stated core journey; it does not claim broad UI coverage.
-
-Only after a fresh explicit user approval, manually dispatch Playwright with
-`scope=full`, `full_approval=RUN_FULL_SUITE`, and a nonempty `review_reason` recording
-who approved it and why focused coverage is insufficient. PRs and tag pushes cannot
-authorize this mode. Full selection via a union of project selectors is rejected.
-No scheduled, push-triggered, or retry-triggered full-suite execution is permitted.
-
-For an explicitly approved local full UI run, both `NEBULA_FULL_SUITE_APPROVAL`
-(`RUN_FULL_SUITE`) and `NEBULA_FULL_SUITE_REASON` must be set for that one command.
-Do not persist these variables in agent profiles or CI defaults. Backend full runs
-likewise need explicit user approval; ordinary CI only accepts individual files.
+Release preparation has three jobs: validate the tagged commit, build the DEB and
+AppImage, and perform one Ubuntu 24.04 clean install with one desktop Chromium case
+against the installed Core and embedded production UI. That installed-Core smoke is
+part of the release build, not a CI test gate. Its passing receipt must match the tag,
+commit, and installed DEB hash before a draft can be created or a daily release
+published. Packaging unit tests, sandbox integration, crash cleanup, negative
+signature checks, and Debian/Kali installs run locally when the release manager
+chooses to run them.
 
 ## Focused Core fixture journeys
 
@@ -104,7 +53,7 @@ and verifies refresh, durable deletion, duplicate close, main-chat protection,
 and preserved parent history without provider or harness traffic. Pair this
 journey with the activity and isolation guards in `tests/v3/test_execution_scope.py`.
 
-The following areas are catalogued in `ui/playwright-impact.json`. Each has one
+The following areas each have one
 case in each of the eight permanent `model-*` projects (desktop 1440/1024 and
 Chromium/WebKit mobile 320/390/430). Select only journeys affected by the change.
 
@@ -116,8 +65,7 @@ Chromium/WebKit mobile 320/390/430). Select only journeys affected by the change
 | `workspace-quota` | `playwright.workspace-quota.config.ts` |
 | `workspace-recovery` | `playwright.workspace-recovery.config.ts` |
 
-The guarded default configuration routes an exact spec filename to its fixture;
-CI and local commands use the same entry point. Incompatible fixture files in a
+The guarded default configuration routes an exact spec filename to its fixture. Incompatible fixture files in a
 single invocation are rejected instead of silently running against the wrong
 server. For example, collect before running:
 
@@ -134,7 +82,7 @@ rollover, knowledge navigation, large-workspace uploads, saved failure recovery,
 and read-only browser input/reconnect. This wiring does not add product features
 or claim live-provider, physical-device, or installed-desktop coverage.
 
-CI supplies the Poetry interpreter and stages managed Chromium for the browser
-viewer even when its viewing browser is WebKit. The quota configuration enables
+Supply the Poetry interpreter (`NEBULA_TEST_PYTHON`) and stage managed Chromium for
+the browser viewer even when its viewing browser is WebKit. The quota configuration enables
 the large-workspace fixture explicitly; host-mode uses its own port. Required
 results must distinguish collection from execution and report unavailable gates.

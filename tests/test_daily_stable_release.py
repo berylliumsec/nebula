@@ -42,28 +42,6 @@ def test_invalid_release_version_stops() -> None:
         daily.next_stable_version("nebula-v2.9.0")
 
 
-def test_main_requires_successful_push_ci() -> None:
-    with (
-        patch.object(daily, "MAIN_SHA", "a" * 40),
-        patch.object(
-            daily,
-            "gh_json",
-            return_value={
-                "workflow_runs": [
-                    {
-                        "event": "pull_request",
-                        "conclusion": "success",
-                        "head_sha": "a" * 40,
-                    },
-                    {"event": "push", "conclusion": "failure", "head_sha": "a" * 40},
-                ]
-            },
-        ),
-        pytest.raises(RuntimeError, match="CI has not passed"),
-    ):
-        daily.green_main()
-
-
 def test_transient_github_read_error_retries_without_repeating_mutations() -> None:
     with (
         patch.object(
@@ -77,7 +55,7 @@ def test_transient_github_read_error_retries_without_repeating_mutations() -> No
         ) as command,
         patch.object(daily.time, "sleep") as sleep,
     ):
-        assert daily.gh_json("repos/example/nebula/actions/workflows/ci.yml/runs") == {
+        assert daily.gh_json("repos/example/nebula/commits/main") == {
             "workflow_runs": []
         }
     assert command.call_count == 3
@@ -87,7 +65,9 @@ def test_transient_github_read_error_retries_without_repeating_mutations() -> No
 
 def test_nonretryable_github_read_error_stops_immediately() -> None:
     with (
-        patch.object(daily, "run", side_effect=RuntimeError("gh: Forbidden (HTTP 403)")) as command,
+        patch.object(
+            daily, "run", side_effect=RuntimeError("gh: Forbidden (HTTP 403)")
+        ) as command,
         patch.object(daily.time, "sleep") as sleep,
         pytest.raises(RuntimeError, match="HTTP 403"),
     ):
@@ -125,16 +105,20 @@ def test_core_smoke_receipt_blocks_failed_or_missing_result(result):
 def test_core_smoke_receipt_accepts_exact_installed_artifact():
     def download(*args, **_kwargs):
         directory = Path(args[args.index("--dir") + 1])
-        (directory / "release-core-smoke.json").write_text(json.dumps({
-            "schema_version": 1,
-            "tag": "nebula-v3.0.0",
-            "commit": "c" * 40,
-            "case": "release core smoke pairs, creates a project, and retains one answer",
-            "selected_test_count": 1,
-            "retries": 0,
-            "installed_deb_sha256": "d" * 64,
-            "result": "passed",
-        }))
+        (directory / "release-core-smoke.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "tag": "nebula-v3.0.0",
+                    "commit": "c" * 40,
+                    "case": "release core smoke pairs, creates a project, and retains one answer",
+                    "selected_test_count": 1,
+                    "retries": 0,
+                    "installed_deb_sha256": "d" * 64,
+                    "result": "passed",
+                }
+            )
+        )
         return ""
 
     with patch.object(daily, "run", side_effect=download):
@@ -211,7 +195,6 @@ def release_driver(tmp_path, monkeypatch):
     commands = []
     state = {
         "source": "a" * 40,
-        "ci": "success",
         "advanced": False,
         "app_error": None,
     }
@@ -256,16 +239,6 @@ def release_driver(tmp_path, monkeypatch):
         return ""
 
     def api(endpoint, **_kwargs):
-        if "ci.yml/runs" in endpoint:
-            return {
-                "workflow_runs": [
-                    {
-                        "event": "push",
-                        "head_sha": "b" * 40,
-                        "conclusion": state["ci"],
-                    }
-                ]
-            }
         return {"sha": ("d" if state["advanced"] else "b") * 40}
 
     @contextmanager
@@ -319,14 +292,6 @@ def assert_no_release_mutations(driver):
 def test_no_new_source_commits_skip_without_tests_or_tags(release_driver):
     release_driver.state["source"] = "b" * 40
     daily.main()
-    assert_no_release_mutations(release_driver)
-
-
-@pytest.mark.parametrize("ci", ["failure", "cancelled", None])
-def test_failed_or_incomplete_ci_stops_before_tagging(release_driver, ci):
-    release_driver.state["ci"] = ci
-    with pytest.raises(RuntimeError, match="CI has not passed"):
-        daily.main()
     assert_no_release_mutations(release_driver)
 
 
@@ -491,10 +456,15 @@ def test_default_children_exclude_key_and_privileged_children_get_only_lease(
 
 
 @pytest.mark.parametrize("existing", ["existing_tag", "existing_release"])
-def test_reserved_version_advances_without_reusing_immutable_tag(release_driver, existing):
+def test_reserved_version_advances_without_reusing_immutable_tag(
+    release_driver, existing
+):
     release_driver.state[existing] = True
     daily.main()
-    assert any(command[:4] == ("git", "tag", "-a", "nebula-v3.0.1") for command in release_driver.commands)
+    assert any(
+        command[:4] == ("git", "tag", "-a", "nebula-v3.0.1")
+        for command in release_driver.commands
+    )
     release_driver.assets.assert_called_once_with(101, "3.0.1")
 
 
@@ -507,8 +477,7 @@ def test_main_advancing_during_preparation_prevents_publication(release_driver):
     with pytest.raises(RuntimeError, match="leave this candidate unpublished"):
         daily.main()
     assert not any(
-        command[:3] == ("gh", "release", "edit")
-        for command in release_driver.commands
+        command[:3] == ("gh", "release", "edit") for command in release_driver.commands
     )
 
 
@@ -570,11 +539,15 @@ def test_release_only_workflow_changes_stop_before_tag_creation(release_driver):
 def test_daily_dispatch_uses_one_smoke_and_checks_exact_artifact(release_driver):
     daily.main()
     preparation = next(
-        command for command in release_driver.commands
+        command
+        for command in release_driver.commands
         if command[:4] == ("gh", "workflow", "run", "nebula3-release.yml")
     )
     assert "release_tag=nebula-v3.0.0" in preparation
-    assert not any("scope=" in arg or "selection=" in arg or "review_reason=" in arg for arg in preparation)
+    assert not any(
+        "scope=" in arg or "selection=" in arg or "review_reason=" in arg
+        for arg in preparation
+    )
     release_driver.assets.assert_called_once_with(101, "3.0.0")
     release_driver.receipt.assert_called_once_with(
         101, "nebula-v3.0.0", "c" * 40, "d" * 64

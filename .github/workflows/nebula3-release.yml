@@ -92,9 +92,6 @@ jobs:
           test "$source_commit" = "$(git rev-parse origin/main)" || {
             echo 'Release source is not the exact current main commit.' >&2; exit 1;
           }
-          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$source_commit&per_page=30" \
-            | jq -e --arg sha "$source_commit" \
-              '.workflow_runs | any(.event == "push" and .conclusion == "success" and .head_sha == $sha)' >/dev/null
           build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
             printf 'tag=%s\n' "$RELEASE_TAG"
