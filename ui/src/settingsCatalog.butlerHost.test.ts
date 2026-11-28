@@ -9,3 +9,10 @@ describe("Nebula-wide Butler host discovery", () => {
     expect(settingCatalog.filter((item) => item.keywords.includes("needs act")).map((item) => item.id)).toEqual(["settings.butler-instructions"]);
   });
 });
+
+describe("Butler check instructions discovery", () => {
+  it("finds Butler's instructions when the operator asks what event checks are told", () => {
+    const text = settingCatalogText(settingCatalogEntry("settings.butler-instructions")).toLowerCase();
+    for (const term of ["event checks", "check instructions"]) expect(text).toContain(term);
+  });
+});
