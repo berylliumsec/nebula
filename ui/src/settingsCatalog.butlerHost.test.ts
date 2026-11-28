@@ -16,3 +16,10 @@ describe("Butler check instructions discovery", () => {
     for (const term of ["event checks", "check instructions"]) expect(text).toContain(term);
   });
 });
+
+describe("Butler harness subagents discovery", () => {
+  it("finds Butler subagents when the operator asks for harness subagents", () => {
+    const text = settingCatalogText(settingCatalogEntry("settings.butler-subagents")).toLowerCase();
+    for (const term of ["harness subagents", "subagent runtime", "harness"]) expect(text).toContain(term);
+  });
+});

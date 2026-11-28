@@ -626,8 +626,9 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
     setSubagentsDraft(config ? config.allowSubagents : runtime?.kind === "provider");
     setSubagentLimitDraft(config?.maxActiveSubagents ?? undefined);
     setHarnessSubagentDraft({
-      enabled: Boolean(config?.allowSubagents && config.subagentProviderId),
+      enabled: Boolean(config?.allowSubagents && (config.subagentProviderId || config.subagentHarnessProfileId)),
       providerId: config?.subagentProviderId ?? "",
+      harnessId: config?.subagentHarnessProfileId,
       model: config?.subagentModel ?? "",
       limit: config?.maxActiveSubagents ?? undefined,
       reasoningEffort: config?.subagentReasoningEffort,
@@ -725,12 +726,15 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
       const current = settingsRevision === undefined || !sessionId
         ? await api.getChatAssistantConfig(targetSessionId)
         : { revision: settingsRevision };
-      // This panel picks a provider child for a harness Butler; a harness child
-      // (Butler mode, no native shell) is chosen through the assistant-config API.
+      // A harness Butler delegates to one provider model or one harness
+      // (Butler-mode children); Core clears the runtime that was not chosen.
+      const childRuntime = harnessSubagentDraft.harnessId
+        ? { subagentHarnessProfileId: harnessSubagentDraft.harnessId }
+        : { subagentProviderId: harnessSubagentDraft.providerId };
       const subagents = selectedSettingsRuntime.kind === "provider"
         ? { allowSubagents: subagentsDraft, maxActiveSubagents: subagentsDraft ? subagentLimitDraft ?? null : null }
         : harnessSubagentDraft.enabled
-          ? { allowSubagents: true, subagentProviderId: harnessSubagentDraft.providerId, subagentModel: harnessSubagentDraft.model, maxActiveSubagents: harnessSubagentDraft.limit ?? null, subagentReasoningEffort: harnessSubagentDraft.reasoningEffort ?? null }
+          ? { allowSubagents: true, ...childRuntime, subagentModel: harnessSubagentDraft.model, maxActiveSubagents: harnessSubagentDraft.limit ?? null, subagentReasoningEffort: harnessSubagentDraft.reasoningEffort ?? null }
           : { allowSubagents: false };
       const model = runtimeChanged ? { backend: selectedSettingsRuntime.kind, profileId: selectedSettingsRuntime.id, model: selectedSettingsRuntime.model } : {};
       const patch = selectedSettingsRuntime.kind === "provider"
@@ -2876,8 +2880,8 @@ export function NebulaControlAssistant({ children, onOpenSetting, onNavigate, on
             <label className={styles.subagentToggle}><input type="checkbox" checked={subagentsDraft} disabled={settingsBusy || Boolean(settingsError)} onChange={(event) => setSubagentsDraft(event.target.checked)} /><span><strong>Delegate longer work to subagents</strong><small>Butler replies right away and posts each report here when it finishes. Subagents use this model and Butler’s Core tools.</small></span></label>
             {subagentsDraft && <SubagentLimitField limit={subagentLimitDraft} delegator="Butler" disabled={settingsBusy || Boolean(settingsError)} onChange={setSubagentLimitDraft} />}
           </>}
-          {selectedSettingsRuntime?.kind === "harness" && <HarnessSubagentSettings providers={providers} choice={harnessSubagentDraft} harnessName={selectedHarness?.name ?? "Butler"} disabled={settingsBusy || Boolean(settingsError)} onChange={setHarnessSubagentDraft} />}
-          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy || (selectedSettingsRuntime?.kind === "harness" && harnessSubagentDraft.enabled && !(harnessSubagentDraft.providerId && harnessSubagentDraft.model))}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}&assistantSettings=open`); }}>Full Assistant settings</button>}</div>
+          {selectedSettingsRuntime?.kind === "harness" && <HarnessSubagentSettings providers={providers} harnesses={harnesses} choice={harnessSubagentDraft} harnessName={selectedHarness?.name ?? "Butler"} disabled={settingsBusy || Boolean(settingsError)} onChange={setHarnessSubagentDraft} />}
+          <div className={styles.settingsActions}><button className="button quiet" type="submit" disabled={settingsBusy || Boolean(settingsError) || busy || (selectedSettingsRuntime?.kind === "harness" && harnessSubagentDraft.enabled && !((harnessSubagentDraft.providerId || harnessSubagentDraft.harnessId) && harnessSubagentDraft.model))}>Save</button>{sessionId && engagement && <button className="button quiet" type="button" onClick={() => { setHidden(true); onNavigate(`/projects/${encodeURIComponent(engagement.id)}/workbench?view=chat&session=${encodeURIComponent(sessionId)}&assistantSettings=open`); }}>Full Assistant settings</button>}</div>
           {settingsBusy && <p role="status">{!api ? "Connect to Core to load Butler settings." : !engagement ? "Choose a project to load Butler settings." : "Loading Butler settings…"}</p>}
           {settingsStatus && <p role="status">{settingsStatus}</p>}
           {settingsError && <p role="alert">{settingsError}</p>}

@@ -81,11 +81,11 @@ export const settingCatalog: SettingCatalogEntry[] = [
   {
     id: "settings.butler-subagents",
     label: "Butler subagents",
-    description: "Let Butler hand longer or independent work to subagents and reply right away; set how many run at once",
+    description: "Let Butler hand longer or independent work to subagents on a provider model or a harness and reply right away; set how many run at once",
     category: "Models",
     scope: "Project",
     target: "butler-settings",
-    keywords: ["butler", "subagents", "delegate", "delegation", "parallel", "multithreaded", "concurrent", "background", "busy", "queue", "one at a time", "running at once", "limit"],
+    keywords: ["butler", "subagents", "delegate", "delegation", "parallel", "multithreaded", "concurrent", "background", "busy", "queue", "one at a time", "running at once", "limit", "subagent runtime", "harness subagents", "codex subagents", "claude subagents"],
   },
   {
     id: "settings.usage",
