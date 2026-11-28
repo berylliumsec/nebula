@@ -330,7 +330,7 @@ async def test_global_check_prompt_lists_every_act_projects_goals(nebula):
         assert rows[name]["authority_revision"] == nebula.policies[name].revision
 
 
-def test_roster_shrinks_to_fit_the_prompt_and_says_so():
+def test_roster_pages_instead_of_dropping_goals():
     goal = {"goal_id": "g", "objective": "x" * 150, "title": "t", "status": "running"}
     packet = {
         "act_projects": [
@@ -338,15 +338,45 @@ def test_roster_shrinks_to_fit_the_prompt_and_says_so():
             | {"goals_omitted": 0}
             for index in range(10)
         ],
+        "roster_page": {"cursor": 0, "limit": 80, "next_cursor": None},
         "truncated": False,
     }
     rendered = _fit_roster(packet, json.dumps(packet), 4_000)
     assert len(rendered) <= 4_000
-    assert packet["truncated"] is True
     rows = packet["act_projects"]
-    assert all("objective" not in item for row in rows for item in row["goals"])
-    assert sum(row["goals_omitted"] for row in rows) > 0
+    shown = sum(len(row["goals"]) for row in rows)
+    assert packet["truncated"] is True and 0 < shown < 80
+    # Objectives stay; the rest of the roster is the next page, not dropped.
+    assert all(item["objective"] for row in rows for item in row["goals"])
+    assert packet["roster_page"]["next_cursor"] == shown
     assert sum(len(row["goals"]) + row["goals_omitted"] for row in rows) == 80
+    # Roster order is kept: earlier projects keep their goals first.
+    counts = [len(row["goals"]) for row in rows]
+    assert counts == sorted(counts, reverse=True)
+
+
+async def test_roster_pages_cover_every_open_goal_once(nebula):
+    from nebula.v3.butler_global_capabilities import ButlerGlobalActions
+
+    actions = ButlerGlobalActions(
+        nebula.store, nebula.work, nebula.root, nebula.case.id, runtime_local=True
+    )
+    seen: list[str] = []
+    cursor: int | None = 0
+    while cursor is not None:
+        page = await actions.roster_page({"cursor": cursor, "limit": 1})
+        seen.extend(
+            goal["goal_id"] for row in page["act_projects"] for goal in row["goals"]
+        )
+        assert {row["project_id"] for row in page["act_projects"]} == {
+            "anchor",
+            "steered",
+        }
+        cursor = page["roster_page"]["next_cursor"]
+    assert sorted(seen) == sorted(
+        nebula.goals[name].id for name in ("anchor", "steered")
+    )
+    assert page["roster_page"]["goals_total"] == len(seen) == 2
 
 
 class _Remote:
