@@ -76,6 +76,37 @@ describe("Butler subagents", () => {
     await waitFor(() => expect(screen.getByRole("checkbox", { name: /Delegate longer work to subagents/ })).not.toBeChecked());
   });
 
+  it("offers harnesses as subagents for a harness Butler and saves the choice", async () => {
+    const user = userEvent.setup();
+    const harnessButler = { ...butler, backend: "harness" as const, providerId: undefined, harnessProfileId: "claude", model: "sonnet" };
+    const harnesses = [
+      { id: "claude", name: "Claude", kind: "claude_agent_sdk", enabled: true, localOnly: false, permitsSensitiveData: true, models: ["sonnet"], defaultModel: "sonnet", permissionMode: "unrestricted", nativeCapabilities: {}, capabilities: {} },
+      { id: "codex", name: "Codex", kind: "codex_app_server", enabled: true, localOnly: false, permitsSensitiveData: true, models: ["gpt-6-sol"], defaultModel: "gpt-6-sol", permissionMode: "unrestricted", nativeCapabilities: {}, capabilities: {} },
+    ];
+    let saved: Record<string, unknown> = { backend: "harness", profileId: "claude", model: "sonnet", allowSubagents: false };
+    const getChatAssistantConfig = vi.fn().mockImplementation(async () => ({ sessionId: "control", revision: 2, settings: saved }));
+    const updateChatAssistantConfig = vi.fn().mockImplementation(async (_id: string, _revision: number, patch: Record<string, unknown>) => {
+      saved = { ...saved, ...patch };
+    });
+    vi.mocked(useWorkspace).mockReturnValue({
+      api: { getOrCreateControlAssistantSession: vi.fn().mockResolvedValue(harnessButler), getControlAssistantSession: vi.fn().mockResolvedValue(harnessButler),
+        getChatAssistantConfig, updateChatAssistantConfig, listChatMessages: vi.fn().mockResolvedValue([]), listChatSubagentsIfChanged: vi.fn().mockResolvedValue({ items: [] }) },
+      engagement: { id: "project", name: "Project" }, providers, harnesses,
+    } as unknown as ReturnType<typeof useWorkspace>);
+    render(<DialogProvider><ThemeProvider><NebulaControlAssistant onNavigate={vi.fn()} onOpenSetting={vi.fn()} /></ThemeProvider></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Open Butler" }));
+    await user.click(screen.getByRole("button", { name: "Butler settings" }));
+    await user.click(await screen.findByRole("checkbox", { name: /^Subagents/ }));
+    const runtime = screen.getByRole("combobox", { name: "Subagent runtime" });
+    expect(within(runtime).getByRole("option", { name: "Codex · harness" })).toBeInTheDocument();
+    await user.selectOptions(runtime, "harness:codex");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateChatAssistantConfig).toHaveBeenLastCalledWith("control", 2, expect.objectContaining({
+      allowSubagents: true, subagentHarnessProfileId: "codex", subagentModel: "gpt-6-sol",
+    })));
+    expect(updateChatAssistantConfig.mock.lastCall?.[2]).not.toHaveProperty("subagentProviderId");
+  });
+
   it("shows Core's default delegation before Butler's first conversation exists", async () => {
     const user = userEvent.setup();
     vi.mocked(useWorkspace).mockReturnValue({
