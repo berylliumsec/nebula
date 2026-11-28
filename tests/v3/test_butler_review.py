@@ -82,6 +82,39 @@ async def test_completed_turn_has_precedent_query_before_semantic_review():
     assert snapshot.index_state == "lexical_fallback" and snapshot.items == []
 
 
+@pytest.mark.parametrize(
+    "signal",
+    [
+        "review.agent_requested",
+        "review.approval_requested",
+        "review.question_requested",
+        "review.queue_requested",
+        "a.signal_without_its_own_query",
+    ],
+)
+async def test_every_butler_check_signal_reads_precedent(signal):
+    from nebula.v3.butler_recovery import IMMEDIATE_EVENTS, PERIODIC_EVENTS
+
+    queries = []
+
+    class Memory:
+        async def list(self, project_id, *, limit):
+            return SimpleNamespace(items=[])
+
+        async def search(self, project_id, query, *, limit):
+            queries.append(query)
+            return SimpleNamespace(
+                items=[], index_status=SimpleNamespace(state="lexical_fallback")
+            )
+
+    snapshot = await read_precedents(Memory(), "project", signal)
+    assert snapshot.items == [] and queries and queries[0].strip()
+    for event in (IMMEDIATE_EVENTS | PERIODIC_EVENTS) - {
+        "butler.global_periodic_check"
+    }:
+        await read_precedents(Memory(), "project", event)
+
+
 async def _setup(tmp_path, *, child_budget=None):
     path = tmp_path / "semantic-review.db"
     store = NebulaStore(path)
