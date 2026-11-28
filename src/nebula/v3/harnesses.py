@@ -20707,6 +20707,28 @@ class HarnessRuntimeService:
         if gateway is not None:
             await gateway.close()
 
+    async def _profile_permission_mode(
+        self, session: HarnessSession
+    ) -> Literal["managed", "unrestricted"] | None:
+        """The profile's current permission choice for an ordinary session.
+
+        Butler and analysis sessions never run unrestricted, so they keep what
+        they were created with.
+        """
+
+        if (
+            session.metadata.get("control_assistant") is True
+            or session.metadata.get("analysis_only") is True
+            or "harness_permission_mode" not in session.metadata
+        ):
+            return None
+        try:
+            profile = await self.store.get(HarnessProfile, session.harness_profile_id)
+        except NotFoundError:
+            # diagnostic-expected: a deleted profile fails later with its own error.
+            return None
+        return profile.permission_mode
+
     async def _connection(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
@@ -20734,6 +20756,30 @@ class HarnessRuntimeService:
                         **session.metadata,
                         "scope_snapshot": scope.model_dump(mode="json"),
                         "approval_policy": approval_policy,
+                    }
+                },
+                expected_revision=session.revision,
+            )
+        permission_mode = await self._profile_permission_mode(session)
+        if (
+            permission_mode is not None
+            and session.metadata.get("harness_permission_mode") != permission_mode
+        ):
+            # The profile's permission choice applies at the next turn boundary,
+            # like project permissions above: reopen the saved external thread
+            # with the new vendor approval and sandbox options.
+            existing = self._connections.get(session.id)
+            if existing is not None:
+                await self._discard_connection(
+                    session.id, existing, reason="harness_permissions_changed"
+                )
+            session = await self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "harness_permission_mode": permission_mode,
                     }
                 },
                 expected_revision=session.revision,
