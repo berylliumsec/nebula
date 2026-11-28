@@ -1051,7 +1051,10 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
     return (
         _session_execution_mode(session) == "host"
         and session.metadata.get("harness_permission_mode") == "unrestricted"
-        and session.metadata.get("control_assistant") is not True
+        and (
+            session.metadata.get("control_assistant") is not True
+            or _butler_unrestricted()
+        )
         and isinstance(scope, dict)
         and scope.get("bypass_permissions") is True
         and session.metadata.get("analysis_only") is not True
@@ -1070,6 +1073,18 @@ def _claude_unrestricted_session(session: HarnessSession) -> bool:
         and session.metadata.get("planning_enforced") is not True
         and not isinstance(session.metadata.get("planning_target_turn_id"), str)
     )
+
+
+def _butler_unrestricted() -> bool:
+    """Whether the operator turned off Butler's guardrails for this Core.
+
+    With ``NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED`` set, Butler sessions get the
+    same native shell and unrestricted harness mode as other sessions.
+    """
+
+    from .butler_supervisor_policy import load_policy
+
+    return load_policy().unrestricted
 
 
 def _without_native_shell(
@@ -1094,10 +1109,16 @@ def _session_native_capabilities(
     if session.metadata.get("core_guarded_tools"):
         return HarnessNativeCapabilities()
     if session.metadata.get("control_assistant") is True:
-        # Butler (and its Butler-mode children) never get the vendor's native
-        # shell: the Core OS user may hold host privileges. Butler reaches
-        # projects through Core's gateway, where every action is checked.
-        capabilities = _without_native_shell(capabilities)
+        if not _butler_unrestricted():
+            # Butler (and its Butler-mode children) never get the vendor's
+            # native shell: the Core OS user may hold host privileges. Butler
+            # reaches projects through Core's gateway, where every action is
+            # checked.
+            capabilities = _without_native_shell(capabilities)
+        elif _session_execution_mode(session) == "host":
+            # The operator turned Butler's guardrails off: give Butler sessions
+            # created before that the same Host grant as every other session.
+            capabilities = _native_capabilities_for_execution_mode(capabilities, "host")
     if _session_execution_mode(session) == "host":
         return capabilities
     # Only host sessions run in the linked project workspace, so a session that
@@ -11237,8 +11258,9 @@ class HarnessRuntimeService:
             if tools_enabled
             else HarnessNativeCapabilities()
         )
-        if control_assistant:
-            # Host mode grants every session a native shell; Butler's never is.
+        if control_assistant and not _butler_unrestricted():
+            # Host mode grants every session a native shell; Butler's never is,
+            # unless the operator turned Butler's guardrails off.
             native_capabilities = _without_native_shell(native_capabilities)
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
@@ -11486,7 +11508,10 @@ class HarnessRuntimeService:
         frozen_scope = session.metadata.get("scope_snapshot")
         needs_fresh_authorization = (
             execution_mode == "host"
-            and session.metadata.get("control_assistant") is not True
+            and (
+                session.metadata.get("control_assistant") is not True
+                or _butler_unrestricted()
+            )
             and session.metadata.get("harness_permission_mode") == "unrestricted"
             and not (
                 isinstance(frozen_scope, dict)
@@ -20712,12 +20737,16 @@ class HarnessRuntimeService:
     ) -> Literal["managed", "unrestricted"] | None:
         """The profile's current permission choice for an ordinary session.
 
-        Butler and analysis sessions never run unrestricted, so they keep what
-        they were created with.
+        Analysis sessions, and Butler's unless the operator turned its
+        guardrails off, never run unrestricted, so they keep what they were
+        created with.
         """
 
         if (
-            session.metadata.get("control_assistant") is True
+            (
+                session.metadata.get("control_assistant") is True
+                and not _butler_unrestricted()
+            )
             or session.metadata.get("analysis_only") is True
             or "harness_permission_mode" not in session.metadata
         ):
