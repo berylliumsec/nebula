@@ -51,9 +51,10 @@ from .tools import AnalysisTool, IdempotencyBehavior, ToolSpec
 
 _ID = {"type": "string", "minLength": 1, "maxLength": 200}
 # The scheduled check's prompt roster: every Act project, open main goals.
-ROSTER_PROJECT_LIMIT = 30
-ROSTER_GOALS_PER_PROJECT = 8
-ROSTER_GOAL_LIMIT = 60
+# Goals per roster page: the scheduled check's prompt carries the first page
+# and Butler reads the rest with nebula.global.roster.
+ROSTER_PAGE_GOALS = 40
+ROSTER_MAX_PAGE_GOALS = 100
 ROSTER_GOAL_STATUSES = (
     ChatGoalStatus.RUNNING.value,
     ChatGoalStatus.PAUSED.value,
@@ -341,37 +342,52 @@ class ButlerGlobalActions:
         )
         return projects, policies
 
-    async def roster(self) -> dict[str, Any]:
-        """Every Act project and its open main goals, bounded for the prompt.
+    async def roster(
+        self, cursor: int = 0, limit: int = ROSTER_PAGE_GOALS
+    ) -> dict[str, Any]:
+        """One page of every Act project's open main goals.
 
-        A scheduled check's summary must cover every Act project, so its
-        prompt lists them all, not just the project hosting the check. Counts
-        are capped; ``truncated`` and per-project ``goals_omitted`` say what
-        was left out, and nebula.global.projects / project read the rest.
+        A scheduled check's summary must cover every Act project, so every
+        project is listed with its open-goal count, and goals are read in one
+        stable order (projects in roster order, each project's newest goal
+        first) a page at a time. Nothing is dropped: ``roster_page.next_cursor``
+        names the next page, read with nebula.global.roster.
         """
 
         from .chat_work_stage import work_stages_for_chats
 
+        cursor = max(0, int(cursor))
+        limit = max(1, min(int(limit), ROSTER_MAX_PAGE_GOALS))
+        end = cursor + limit
         with global_check_reads():
             projects, policies = await self._act_projects()
             rows: list[dict[str, Any]] = []
-            goals_left = ROSTER_GOAL_LIMIT
-            for project in projects[:ROSTER_PROJECT_LIMIT]:
+            position = 0
+            for project in projects:
                 policy = policies[project.id]
-                goals = await self.store.find_entities(
-                    ChatGoal,
-                    {"status": list(ROSTER_GOAL_STATUSES), "parent_goal_id": None},
-                    engagement_id=project.id,
-                    newest_first=True,
-                    limit=ROSTER_GOALS_PER_PROJECT + 1,
-                )
                 total = await self.store.count_entities(
                     ChatGoal,
                     {"status": list(ROSTER_GOAL_STATUSES), "parent_goal_id": None},
                     engagement_id=project.id,
                 )
-                shown = goals[: min(ROSTER_GOALS_PER_PROJECT, goals_left)]
-                goals_left -= len(shown)
+                first = max(0, cursor - position)
+                stop = max(0, min(total, end - position))
+                shown = (
+                    await self.store.find_entities(
+                        ChatGoal,
+                        {
+                            "status": list(ROSTER_GOAL_STATUSES),
+                            "parent_goal_id": None,
+                        },
+                        engagement_id=project.id,
+                        newest_first=True,
+                        offset=first,
+                        limit=stop - first,
+                    )
+                    if stop > first
+                    else []
+                )
+                position += total
                 titles = (
                     {
                         session.id: session.title
@@ -384,10 +400,12 @@ class ButlerGlobalActions:
                     if shown
                     else {}
                 )
-                async with self.store.database.session() as database:
-                    stages = await work_stages_for_chats(
-                        database, [goal.session_id for goal in shown], [project.id]
-                    )
+                stages: dict[str, Any] = {}
+                if shown:
+                    async with self.store.database.session() as database:
+                        stages = await work_stages_for_chats(
+                            database, [goal.session_id for goal in shown], [project.id]
+                        )
                 rows.append(
                     {
                         "project_id": project.id,
@@ -410,15 +428,28 @@ class ButlerGlobalActions:
                             }
                             for goal in shown
                         ],
-                        "goals_omitted": max(0, total - len(shown)),
+                        "goals_omitted": total - len(shown),
                     }
                 )
+        next_cursor = end if end < position else None
         return {
             "act_projects": rows,
             "act_project_count": len(projects),
-            "truncated": len(projects) > ROSTER_PROJECT_LIMIT
-            or any(row["goals_omitted"] for row in rows),
+            "roster_page": {
+                "cursor": cursor,
+                "limit": limit,
+                "goals_total": position,
+                "next_cursor": next_cursor,
+                "read_next_with": "nebula.global.roster",
+            },
+            "truncated": next_cursor is not None,
         }
+
+    async def roster_page(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        (await self._case())
+        return await self.roster(
+            arguments.get("cursor", 0), arguments.get("limit", ROSTER_PAGE_GOALS)
+        )
 
     async def project(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._project_read(arguments)
@@ -1244,6 +1275,24 @@ class ButlerGlobalActions:
                 },
                 RiskClass.LOCAL_READ,
                 self.projects,
+            ),
+            (
+                "nebula.global.roster",
+                "Read one page of every Act project's open main goals (id, chat, title, objective, status, stage, step) in the scheduled check's roster order. Start at the packet's roster_page.next_cursor and keep reading until next_cursor is null, so every open goal is judged.",
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "cursor": {"type": "integer", "minimum": 0, "maximum": 100000},
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": ROSTER_MAX_PAGE_GOALS,
+                        },
+                    },
+                },
+                RiskClass.LOCAL_READ,
+                self.roster_page,
             ),
             (
                 "nebula.global.project",

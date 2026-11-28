@@ -206,8 +206,10 @@ _GLOBAL_INSTRUCTIONS = (
     "You are Butler performing one Nebula-wide scheduled check under the "
     "operator-owned BUTLER.md mandate. The packet's act_projects lists every "
     "Act project with its open main goals (running, paused, blocked); cover "
-    "each one in your summary, not only the project hosting this check, and "
-    "read nebula.global.projects or project for anything marked truncated. "
+    "each one in your summary, not only the project hosting this check. The "
+    "roster is paged: when roster_page.next_cursor is set, read every "
+    "remaining page with nebula.global.roster (cursor=next_cursor) until it "
+    "is null, and judge every open goal. "
     "Read the live project roster, choose "
     "which projects need work, and follow the mandate within Core's controls. "
     "A project must have current Act authority before you change its state; "
@@ -279,8 +281,10 @@ CHECK_INSTRUCTIONS_ENV = "NEBULA_BUTLER_CHECK_INSTRUCTIONS"
 _SCHEDULED_FRAME = (
     "You are Butler performing one Nebula-wide scheduled check. The packet's "
     "act_projects lists every Act project with its open main goals (running, "
-    "paused, blocked); cover each one, and read nebula.global.projects or "
-    "project for anything marked truncated. A change to another project runs "
+    "paused, blocked); cover each one. The roster is paged: when "
+    "roster_page.next_cursor is set, read every remaining page with "
+    "nebula.global.roster (cursor=next_cursor) until it is null, and judge "
+    "every open goal. A change to another project runs "
     "on that project's worker: state=accepted means it is queued, so read the "
     "project again before reporting it. Use nebula.capabilities.search and "
     "describe before invoking tools, and read live state and revisions before "
@@ -315,26 +319,29 @@ GLOBAL_STATE_ID = "butler-global-periodic-state"
 
 
 def _fit_roster(packet: dict[str, Any], rendered: str, limit: int) -> str:
-    """Shrink a scheduled check's Act-project roster until the packet fits.
+    """Keep a scheduled check's packet in bounds by paging its roster.
 
-    Objectives go first, then the newest-listed goals from the end; each
-    project keeps its open-goal count and says how many it omitted.
+    Goals that do not fit move to later roster pages: the last goals in roster
+    order leave the packet and ``roster_page.next_cursor`` points at the first
+    of them, so Butler reads them with nebula.global.roster. No goal is lost.
     """
 
     rows = packet.get("act_projects")
-    if len(rendered) <= limit or not isinstance(rows, list):
+    page = packet.get("roster_page")
+    if (
+        len(rendered) <= limit
+        or not isinstance(rows, list)
+        or not isinstance(page, dict)
+    ):
         return rendered
-    for row in rows:
-        for goal in row["goals"]:
-            goal.pop("objective", None)
-    packet["truncated"] = True
-    rendered = json.dumps(packet, ensure_ascii=False)
-    while len(rendered) > limit:
-        row = max(rows, key=lambda item: len(item["goals"]), default=None)
-        if row is None or not row["goals"]:
-            break
+    shown = sum(len(row["goals"]) for row in rows)
+    while len(rendered) > limit and shown:
+        row = next(item for item in reversed(rows) if item["goals"])
         row["goals"].pop()
         row["goals_omitted"] += 1
+        shown -= 1
+        page["next_cursor"] = page["cursor"] + shown
+        packet["truncated"] = True
         rendered = json.dumps(packet, ensure_ascii=False)
     return rendered
 
