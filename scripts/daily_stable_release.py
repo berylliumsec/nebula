@@ -142,20 +142,6 @@ def require_current_main() -> None:
         )
 
 
-def green_main() -> None:
-    runs = gh_json(
-        f"repos/{REPOSITORY}/actions/workflows/ci.yml/runs"
-        f"?head_sha={MAIN_SHA}&per_page=30"
-    )["workflow_runs"]
-    if not any(
-        item["event"] == "push"
-        and item["conclusion"] == "success"
-        and item["head_sha"] == MAIN_SHA
-        for item in runs
-    ):
-        raise RuntimeError(f"CI has not passed for main {MAIN_SHA}")
-
-
 def wait_for_workflow(name: str, ref: str, commit: str, since: datetime) -> int:
     deadline = time.monotonic() + WAIT_SECONDS
     while time.monotonic() < deadline:
@@ -265,7 +251,6 @@ def main() -> None:
         print(f"No new changes since {previous_tag}; skipping release")
         return
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
-    green_main()
     require_release_app()
     run("gh", "attestation", "verify", "--help")
 

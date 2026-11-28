@@ -69,13 +69,10 @@ Core and UI must identify the tagged commit. A receipt binds that passing case t
 the tag, commit, and installed DEB SHA-256. Draft creation and daily publication
 both reject a missing, failed, or mismatched receipt.
 
-Packaging unit tests, redundant compile checks, sandbox integration, crash cleanup,
-negative signature checks, and Debian/Kali installs are available in the optional
-`nebula3-release-diagnostics.yml` manual workflow. The existing manually selected
-Playwright workflow retains its explicit full-suite approval guard. Focused PR
-selection remains separate; the release gate claims only this install and core
-journey. Main branch protection requires the PR Playwright `gate` check. The exact
-release smoke is an independent browser check before publication.
+Nebula has no CI test workflows. Packaging unit tests, sandbox integration, crash
+cleanup, negative signature checks, and Debian/Kali installs run locally when the
+release manager chooses to run them. The release gate claims only this install and
+core journey; it does not require a passing CI run for the source commit.
 
 Any failed check before publication stops publication. An existing release tag or draft is a
 recovery case for a release manager; the daily job never moves a tag or replaces

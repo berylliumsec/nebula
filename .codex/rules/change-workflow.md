@@ -22,8 +22,8 @@ the test LAN.
 Exercise the changed journey through its actual entry point and visible result.
 For UI changes, serve the candidate production bundle from that instance and
 verify its build identity. Check the relevant success, failure, retry, refresh,
-and reconnect steps with the synthetic data. Use the focused test selection and
-the product-quality skill for the required test layers and browser/device
+and reconnect steps with the synthetic data. Use the local test selection rule and
+the product-quality skill to choose the test layers and browser/device
 profiles. Record the LAN origin, build, fixture, exact commands, outcomes, and
 any unavailable gate. Stop and remove the temporary instance and data after
 capturing evidence. A mocked browser response alone does not validate the
@@ -34,16 +34,18 @@ record why this validation does not apply. Do not invent a passing LAN result.
 
 ## Pull request and merge
 
-Review the final diff and selected-test receipt, then commit and push the task
-branch. Open a pull request describing the operator journey, test selection,
-LAN evidence, and remaining limitations. Check which workflows the push and PR
-will trigger so they cannot broaden testing beyond the reviewed selection.
+Nebula has no CI test workflows. The flow is branch, pull request, admin merge:
 
-Review the PR diff and required CI results. Resolve failures and review feedback
-on the branch. Merge the PR when required checks and repository rules permit it
-and all applicable acceptance gates have evidence. If a required gate cannot be
-run, keep the PR unmerged, report the precise missing evidence, and continue when
-the gate becomes available. Do not present PR creation or merge as proof that an
+1. Run the tests you judge necessary locally (see the
+   [local test selection rule](test-selection.md)).
+2. Review the final diff, then commit and push the task branch.
+3. Open a pull request that describes the operator journey, the tests you ran and
+   their outcomes, the LAN evidence where it applies, and the remaining limitations.
+4. Admin-merge it: `gh pr merge <number> --squash --admin`.
+
+Do not wait for, or describe, CI test results; none run. If a gate you judge
+necessary (a LAN journey, a device or a browser profile) cannot be run, say so in
+the PR and in your report. Do not present PR creation or merge as proof that an
 untested feature works.
 
 ## Public commit review unavailable

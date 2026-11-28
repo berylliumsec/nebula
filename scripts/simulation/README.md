@@ -65,8 +65,7 @@ an unreachable Core refuse the swap.
 `python3 -m nebula_deployer prebuild` does what `prepare` does, so that a later
 `promote` or `cycle` finds the immutable release already built and only
 verifies it. It is meant for a timer, so waiting states are results rather than
-failures: it reports `waiting_for_ci` while main CI evidence is still running,
-missing or failed, `skipped` while a deployment journal is unfinished or another
+failures: it reports `skipped` while a deployment journal is unfinished or another
 deployer run holds the lock, and `current` when main is already live. It never
 promotes, never runs local tests and leaves Core untouched. A `promote` or
 `cycle` that starts while a prebuild holds the deploy lock waits for it, up to
@@ -139,59 +138,13 @@ python3 -m nebula_deployer promote
 `--commit` accepts only a hexadecimal ID on `origin/main`'s first-parent
 history; it never builds a pull request's own branch commit.
 
-`nebula_deployer.py prepare` accepts CI evidence only; it never runs tests
-on this host. For every first-parent commit from the live release to
-`origin/main` it finds the newest successful `main` push run of
-`.github/workflows/ci.yml` and verifies it as below. A commit with no successful
-run (none yet, failed, or still running) stops preparation with the commit and
-reason. Each commit's selection is still validated against its own diff, and the
-union is recorded; selections repeated by later commits need no extra review,
-because CI already ran each commit's own selection. To name runs explicitly, pass
-`--ci-run-id <run-id>` once per commit, oldest to newest, such as
-`prepare --ci-run-id <first-run> --ci-run-id <head-run>`. The deployer
-requires exactly one distinct successful `main` push run from the active
-`.github/workflows/ci.yml` for every commit in the complete
-live-baseline-to-head chain. Each run must match that exact commit and its first
-parent. The deployer verifies each run's selection artifact SHA-256, validates
-the committed selection against that commit's diff, and requires all selected
-jobs to have completed successfully. Each required job is a job family: the
-exact job name, or GitHub's matrix instances named `<job> (<matrix values>)`.
-A family needs at least one job, and every job in it must have completed with
-`success`; a failed, cancelled, or unfinished instance fails closed. A bare
-prefix never matches, so `python (3.12)` stays separate from `python (3.11)`.
-A selected terminal client test therefore requires every `terminal-client`
-matrix job, whatever runners and Python versions the matrix lists. Acceptance
-records key the family as `terminal-client`; records written earlier with the
-six exact Ubuntu/macOS and Python 3.11–3.13 job names still validate, and no
-other substitute does. The immutable acceptance record retains
-the ordered per-commit receipts and selected-job conclusions; the reviewed
-selection union must cover the entire first-parent range. Missing, repeated,
-reordered, or mismatched runs fail closed. Dependency setup, lint/diagnostic checks, builds,
-release hashes, and existing staging/promotion guards still run. Push CI does
-not run Playwright entries, so a commit whose selection names them is accepted
-only with its merged pull request's successful `ci.yml` and
-`playwright-impact.yml` runs, which `prepare` discovers on the PR head. For a
-merge commit the head is its second parent. For a squash merge it is the head of
-the one PR GitHub records as merged into that commit, fetched from
-`refs/pull/<n>/head` if needed; that head must contain the squash commit's
-parent and have the identical tree, so it tested exactly what main received.
-Matrix jobs are matched to selected entries by GitHub's displayed job name, which
-is cut at 100 characters; entries that truncate to the same name each still need
-their own successful job. If that PR's own runs did not both succeed (for
-example, its CI refused a stale selection), the commit is proven instead by a
-successful `playwright-impact.yml` run dispatched on exactly that commit (push a
-branch at the commit and dispatch with the commit's selectors and a review
-reason). Its plan must equal the trusted selector's plan for the commit's
-committed selection, with no baseline, and every entry needs its own successful
-job; the receipt records it as `commit_playwright_evidence`, never as PR
-evidence. A Playwright-selected commit with neither stops preparation. Other pull
-request or workflow dispatch runs are not accepted.
-
-CI-only acceptance also requires the workflow files, local action definitions,
-and `scripts/test_selection.py` to match the original live baseline for every
-commit in the chain. This prevents a candidate from changing the checks or the
-validator used to accept itself. Readback compares the stored ordered receipt
-commits with the release's actual Git first-parent chain.
+`nebula_deployer.py prepare` never runs tests on this host, and it requires no
+CI evidence or test-selection receipt: Nebula has no CI test workflows, and
+tests run locally at the discretion of the agent or operator who makes each
+change. Preparation still runs dependency setup, lint and diagnostic checks,
+builds, release hashes, and the existing staging and promotion guards. Releases
+accepted before this change keep their recorded selection hashes, which
+readback still verifies.
 
 After the one-time coordinated transition to the supervisor architecture, run
 `python3 -m nebula_deployer adopt-supervisor`. Adoption requires an authenticated

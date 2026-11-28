@@ -56,35 +56,20 @@ def test_prepare_reports_the_step_it_stopped_in(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(deployer, "state", lambda: {})
     monkeypatch.setattr(deployer, "RELEASES", tmp_path / "releases")
     monkeypatch.setattr(deployer, "candidate", lambda sha: tmp_path / "candidate")
-    monkeypatch.setattr(
-        deployer,
-        "run",
-        lambda *args, capture=False, **_kwargs: NEW if "rev-parse" in args else "",
-    )
 
-    def missing(directory, *, previous, sha):
-        raise deployer.CiEvidenceUnavailable("CI is still running")
+    def run(*args, capture=False, **_kwargs):
+        if "check" in args:
+            raise RuntimeError("poetry check failed")
+        return NEW if "rev-parse" in args else ""
 
-    monkeypatch.setattr(deployer, "discover_ci_run_ids", missing)
-    with pytest.raises(deployer.CiEvidenceUnavailable):
-        deployer.prepare(require_ci_evidence=True)
+    monkeypatch.setattr(deployer, "run", run)
+    monkeypatch.setattr(deployer, "commit_at", lambda directory: NEW)
+    with pytest.raises(RuntimeError, match="poetry check failed"):
+        deployer.prepare()
     err = capsys.readouterr().err
     assert "prepare: fetch took" in err
     assert "prepare: checkout took" in err
-    assert "prepare: ci_evidence failed after" in err
-
-
-def test_prebuild_waits_for_ci_instead_of_failing(monkeypatch):
-    monkeypatch.setattr(deployer, "state", lambda: {})
-
-    def waiting():
-        raise deployer.CiEvidenceUnavailable(f"{NEW}: CI run is still in progress")
-
-    monkeypatch.setattr(deployer, "prepare", waiting)
-    assert deployer.prebuild() == {
-        "status": "waiting_for_ci",
-        "reason": f"{NEW}: CI run is still in progress",
-    }
+    assert "prepare: python_dependencies failed after" in err
 
 
 def test_prebuild_leaves_an_unfinished_deployment_alone(monkeypatch):
