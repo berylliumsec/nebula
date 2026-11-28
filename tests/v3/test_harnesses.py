@@ -2167,6 +2167,65 @@ async def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_
     assert next_session.metadata["harness_permission_mode"] == "managed"
 
 
+async def test_unrestricted_claude_requires_allow_all_in_host_project(tmp_path):
+    store, engagement, _, _, _, runtime = await _runtime(tmp_path)
+
+    class HostCommands:
+        def __init__(self) -> None:
+            self.store = store
+
+        async def project_execution_mode(
+            self, engagement_id: str, *, transaction=None
+        ) -> str:
+            del engagement_id
+            return "host"
+
+        async def chat_components(self, *, engagement_id: str):
+            del engagement_id
+            raise AutomationRuntimeUnavailable("command runtime is optional")
+
+        async def command_runtime_unavailable_detail(self, engagement_id, error=None):
+            del engagement_id
+            return f"Command tools are unavailable in this session: {error}."
+
+    runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+    claude = await store.create(
+        HarnessProfile(
+            name="Claude unrestricted",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            permission_mode="unrestricted",
+            default_model="claude-test",
+            capabilities=HarnessCapabilities(models=["claude-test"]),
+            privacy={"local_only": True, "permits_sensitive_data": True},
+        )
+    )
+    # No silent fallback to managed approvals: the operator turns on Allow all.
+    with pytest.raises(
+        HarnessConfigurationError, match="requires project authorization Allow all"
+    ):
+        await runtime.create_session(
+            engagement_id=engagement.id, profile_id=claude.id, model=None
+        )
+
+    scope = await store.create(
+        ScopePolicy(
+            id=f"scope:{engagement.id}",
+            engagement_id=engagement.id,
+            bypass_permissions=True,
+        )
+    )
+    await store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    allowed = await runtime.create_session(
+        engagement_id=engagement.id, profile_id=claude.id, model=None
+    )
+    assert allowed.metadata["harness_permission_mode"] == "unrestricted"
+
+
 async def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = await _runtime(tmp_path)
