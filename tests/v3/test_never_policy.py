@@ -373,3 +373,73 @@ async def test_harness_existing_connection_refreshes_when_project_policy_changes
         "bypass_permissions"
     ]
     assert not (await store.get(ScopePolicy, scope.id)).bypass_permissions
+
+
+async def test_harness_connection_reopens_when_profile_permission_mode_changes(
+    tmp_path,
+):
+    from nebula.v3.domain import HarnessProfile, HarnessSession
+    from tests.v3.test_harnesses import _runtime
+
+    store, project, profile, _mcp, adapter, runtime = await _runtime(tmp_path)
+    _chat, _chat_turn, turn = await runtime.prepare_chat(
+        engagement_id=project.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Synthetic profile permission transition",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    session = await store.get(HarnessSession, turn.harness_session_id)
+    assert session.metadata["harness_permission_mode"] == "managed"
+    first = await runtime._connection(session, turn)
+    assert await runtime._connection(session, turn) is first
+
+    profile = await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    second = await runtime._connection(session, turn)
+    assert second is not first
+    assert first.closed
+    assert (await store.get(HarnessSession, session.id)).metadata[
+        "harness_permission_mode"
+    ] == "unrestricted"
+    assert adapter.opens[-1].session.metadata["harness_permission_mode"] == (
+        "unrestricted"
+    )
+
+    await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "managed"},
+        expected_revision=profile.revision,
+    )
+    third = await runtime._connection(session, turn)
+    assert third is not second
+    assert adapter.opens[-1].session.metadata["harness_permission_mode"] == "managed"
+
+
+async def test_butler_session_keeps_its_permission_mode_when_profile_changes(
+    tmp_path,
+):
+    from nebula.v3.domain import HarnessProfile, HarnessSession
+    from tests.v3.test_harnesses import _runtime
+
+    store, _project, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    butler = HarnessSession(
+        engagement_id=_project.id,
+        harness_profile_id=profile.id,
+        model="m",
+        metadata={"control_assistant": True, "harness_permission_mode": "managed"},
+    )
+    await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    assert await runtime._profile_permission_mode(butler) is None

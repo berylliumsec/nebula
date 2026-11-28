@@ -240,7 +240,7 @@ project with authorization Allow all (not Butler), Claude starts in
 `bypassPermissions` with its SDK sandbox off, so native tools run without a
 per-tool Core approval. Core-planned turns and analysis sessions keep managed
 approvals. Like Codex and Grok, an unrestricted Claude profile refuses a Host
-session in a project without Allow all instead of silently running managed. Unrestricted permission mode remains operator-owned.
+session in a project without Allow all instead of silently running managed. A changed permission choice applies to open sessions at their next turn: Core reopens the saved vendor thread with the new options (Butler and analysis sessions keep theirs). Unrestricted permission mode remains operator-owned.
 
 Follow-up preferences use `body.expected_revision` from the current project
 settings. Butler may preserve an existing cloud confirmation for the same backend

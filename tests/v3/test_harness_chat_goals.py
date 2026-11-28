@@ -706,8 +706,11 @@ async def test_reviewed_follow_up_releases_completed_harness_goal_handoff(tmp_pa
         assert (
             len((await store.list_session_entities(ChatTurn, created.session.id))) == 2
         )
-        assert len(adapter.connections[0].prompts) == 2
-        assert "Queued operator follow-up" not in adapter.connections[0].prompts[1]
+        # The permission change reopens the vendor thread at the next turn.
+        assert len(adapter.connections) == 2
+        assert len(adapter.connections[0].prompts) == 1
+        assert len(adapter.connections[1].prompts) == 1
+        assert "Queued operator follow-up" not in adapter.connections[1].prompts[0]
         assert (await queue_service.get(created.session.id)).items[0][
             "status"
         ] == "needs_review"
