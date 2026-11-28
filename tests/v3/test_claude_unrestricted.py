@@ -160,3 +160,33 @@ async def test_managed_claude_profile_keeps_sandbox_and_core_approval(
     assert options["permission_mode"] == "default"
     assert options["sandbox"]["enabled"] is True
     assert await _hook_decision(options, "Bash") == "ask"
+
+
+async def test_butler_stays_managed_without_operator_unrestricted_switch(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED", raising=False)
+    profile = _claude_harness(permission_mode="unrestricted")
+    options = await _open(
+        tmp_path, monkeypatch, _session(profile, control_assistant=True), profile
+    )
+
+    assert options["permission_mode"] == "default"
+    assert "Bash" not in options["tools"]
+    assert options["sandbox"]["enabled"] is True
+
+
+async def test_butler_runs_unrestricted_with_operator_unrestricted_switch(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED", "1")
+    profile = _claude_harness(permission_mode="unrestricted")
+    # A Butler session created before the switch stored its shell as off.
+    stored = SHELL.model_copy(update={"shell": False}).model_dump(mode="json")
+    session = _session(profile, control_assistant=True, native_capabilities=stored)
+    options = await _open(tmp_path, monkeypatch, session, profile)
+
+    assert options["permission_mode"] == "bypassPermissions"
+    assert options["sandbox"] == {"enabled": False}
+    assert "Bash" in options["tools"]
+    assert await _hook_decision(options, "Bash") == "allow"

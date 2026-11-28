@@ -424,8 +424,9 @@ async def test_harness_connection_reopens_when_profile_permission_mode_changes(
 
 
 async def test_butler_session_keeps_its_permission_mode_when_profile_changes(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
+    monkeypatch.delenv("NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED", raising=False)
     from nebula.v3.domain import HarnessProfile, HarnessSession
     from tests.v3.test_harnesses import _runtime
 
@@ -443,3 +444,26 @@ async def test_butler_session_keeps_its_permission_mode_when_profile_changes(
         expected_revision=profile.revision,
     )
     assert await runtime._profile_permission_mode(butler) is None
+
+
+async def test_butler_session_follows_profile_with_operator_unrestricted_switch(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.domain import HarnessProfile, HarnessSession
+    from tests.v3.test_harnesses import _runtime
+
+    monkeypatch.setenv("NEBULA_BUTLER_SUPERVISOR_UNRESTRICTED", "1")
+    store, _project, profile, _mcp, _adapter, runtime = await _runtime(tmp_path)
+    butler = HarnessSession(
+        engagement_id=_project.id,
+        harness_profile_id=profile.id,
+        model="m",
+        metadata={"control_assistant": True, "harness_permission_mode": "managed"},
+    )
+    await store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    assert await runtime._profile_permission_mode(butler) == "unrestricted"
