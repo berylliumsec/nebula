@@ -20,6 +20,7 @@ import os
 import re
 import time
 import uuid
+import weakref
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
@@ -123,9 +124,45 @@ def _connection(data_root: Path) -> tuple[str, str]:
     return endpoint, token
 
 
-@lru_cache(maxsize=1)
+# The execution kernel this process serves, registered once its routes are
+# complete. A frozen release has no .py sources to scan, so its live route
+# table is the authoritative list there.
+_KERNEL_APP: "weakref.ReferenceType[Any] | None" = None
+
+
+def register_kernel_routes(app: Any) -> None:
+    """Let ROUTES read the route table of the kernel this worker serves."""
+
+    global _KERNEL_APP
+    _KERNEL_APP = weakref.ref(app)
+
+
+def _kernel_routes() -> set[tuple[str, str]]:
+    app = _KERNEL_APP() if _KERNEL_APP is not None else None
+    if app is None:
+        return set()
+    found: set[tuple[str, str]] = set()
+    for route in getattr(app, "routes", ()):
+        path = getattr(route, "path", "")
+        methods = getattr(route, "methods", None) or ()
+        if not isinstance(path, str) or not path.startswith(("/api/", "/health")):
+            continue
+        for method in methods:
+            if method in _METHODS:
+                found.add((method, path))
+    return found
+
+
 def declared_routes() -> tuple[tuple[str, str], ...]:
-    """(method, path) for every route this release's source declares."""
+    """(method, path) for every route this worker serves or its source declares."""
+
+    found = set(_source_routes()) | _kernel_routes()
+    return tuple(sorted(found, key=lambda item: (item[1], item[0])))
+
+
+@lru_cache(maxsize=1)
+def _source_routes() -> tuple[tuple[str, str], ...]:
+    """Routes declared in this release's .py sources, plus the generic CRUD."""
 
     found: set[tuple[str, str]] = set()
     for source in Path(__file__).parent.glob("*.py"):
@@ -142,7 +179,7 @@ def declared_routes() -> tuple[tuple[str, str], ...]:
             if path.startswith("/"):
                 found.add((method.upper(), _api_path(path)))
     found |= _crud_routes()
-    return tuple(sorted(found, key=lambda item: (item[1], item[0])))
+    return tuple(found)
 
 
 def _crud_routes() -> set[tuple[str, str]]:
@@ -216,7 +253,7 @@ class ButlerCoreApi:
             return {
                 "routes": routes[:400],
                 "total": len(routes),
-                "note": "Read from this release's source; a filter narrows it.",
+                "note": "Routes this worker serves plus its release source; a filter narrows it.",
             }
         if not arguments.get("path"):
             raise ValueError("path is required")

@@ -322,3 +322,30 @@ async def test_home_observer_gets_host_tools_and_runs_them_locally(
     finally:
         await store.event_history.close()
         await store.database.dispose()
+
+
+@pytest.mark.anyio
+async def test_routes_come_from_the_served_kernel_in_a_frozen_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebula.v3 import butler_core_api
+    from nebula.v3.api import create_app
+
+    # A frozen release has no .py sources to scan.
+    monkeypatch.setattr(butler_core_api, "_source_routes", lambda: ())
+    monkeypatch.setattr(butler_core_api, "_KERNEL_APP", None)
+    assert declared_routes() == ()
+    store = NebulaStore(tmp_path / "core.db")
+    try:
+        app = create_app(store, auth_token="operator-token")
+        routes = set(declared_routes())
+        assert (
+            "DELETE",
+            "/api/v1/chat/sessions/{session_id}/goal/notes/{note_id}",
+        ) in routes
+        assert ("GET", "/api/v1/chat/sessions/{session_id}/goal") in routes
+        assert ("POST", "/api/v1/engagements") in routes
+        del app
+    finally:
+        await store.event_history.close()
+        await store.database.dispose()
