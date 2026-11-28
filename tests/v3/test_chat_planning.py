@@ -1018,44 +1018,6 @@ async def test_linked_retry_of_blocked_plan_uses_saved_harness_choice(
     assert (await plans.for_turn(replacement_chat_turn.id)) is None
 
 
-async def test_unrestricted_claude_configuration_blocks_before_connection(tmp_path):
-    store, app, _ = _app(tmp_path)
-    project = await store.create(Engagement(name="Selected"))
-    profile = await store.create(
-        HarnessProfile(
-            name="Claude unrestricted",
-            kind=HarnessKind.CLAUDE_AGENT_SDK,
-            executable="/bin/true",
-            default_model="m",
-            capabilities=HarnessCapabilities(models=["m"]),
-            native_capabilities=HarnessNativeCapabilities(shell=True),
-            privacy={"local_only": True, "permits_sensitive_data": True},
-        )
-    )
-    harness = app.state.harness_runtime_service
-    _, _, harness_turn = await harness.prepare_chat(
-        engagement_id=project.id,
-        profile_id=profile.id,
-        model="m",
-        prompt="inspect",
-        chat_session_id=None,
-        harness_session_id=None,
-        mcp_server_ids=[],
-        planning_enabled=True,
-    )
-    (await _mark_historical_enforced_turn(store, harness_turn))
-    session = await store.get(HarnessSession, harness_turn.harness_session_id)
-    session = await store.update(
-        HarnessSession,
-        session.id,
-        {"metadata": {**session.metadata, "harness_permission_mode": "unrestricted"}},
-        expected_revision=session.revision,
-    )
-    with pytest.raises(PlanningBlocked, match="cannot enforce restricted discovery"):
-        (await harness._ensure_harness_plan(harness_turn, session))
-    assert session.id not in harness._connections
-
-
 async def test_managed_claude_uses_same_model_restricted_gateway_and_saved_plan(
     tmp_path, monkeypatch
 ):

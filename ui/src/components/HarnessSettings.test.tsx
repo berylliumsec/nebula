@@ -69,7 +69,7 @@ describe("Claude harness profiles", () => {
     const dialog = screen.getByRole("dialog", {name: "Add Claude"});
     expect(within(dialog).getByRole("textbox", {name: "Account home folder"})).toHaveValue("");
     expect(dialog.querySelector("pre")).toBeNull();
-    expect(within(dialog).queryByRole("option", {name: "Unrestricted host access"})).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("combobox", {name: "Harness permissions"})).toHaveValue("managed");
     expect(within(dialog).getByText("/login")).toBeVisible();
     await user.type(within(dialog).getByRole("textbox", {name: "Name"}), claude.name);
     await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
@@ -185,6 +185,28 @@ it("shows harnesses while the MCP catalog is still pending", async () => {
   api.listMcpServers.mockReturnValue(new Promise(() => {}));
   render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
   expect(await screen.findByRole("heading", {name: profile.name})).toBeVisible();
+});
+
+it("saves and displays unrestricted Claude permission mode", async () => {
+  let saved: HarnessProfile | undefined;
+  api.listHarnesses.mockImplementation(async () => saved ? [saved] : []);
+  api.listMcpServers.mockResolvedValue([]);
+  api.createHarness.mockImplementation(async (body: {permission_mode: HarnessProfile["permissionMode"]}) => (saved = {
+    ...profile, id: "claude-unrestricted", name: "Claude unrestricted", kind: "claude_agent_sdk", executable: undefined, permissionMode: body.permission_mode,
+  }));
+  api.checkHarness.mockResolvedValue({healthy: true});
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("button", {name: "Add Claude"}));
+  const dialog = screen.getByRole("dialog", {name: "Add Claude"});
+  await user.type(within(dialog).getByRole("textbox", {name: "Name"}), "Claude unrestricted");
+  await user.selectOptions(within(dialog).getByRole("combobox", {name: "Harness permissions"}), "unrestricted");
+  expect(dialog).toHaveTextContent(/Claude uses bypass permissions with its sandbox off/);
+  await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+  await waitFor(() => expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({kind: "claude_agent_sdk", permission_mode: "unrestricted"})));
+  expect(await screen.findByText("Unrestricted · Host mode only")).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Edit Claude unrestricted"}));
+  expect(within(screen.getByRole("dialog")).getByRole("combobox", {name: "Harness permissions"})).toHaveValue("unrestricted");
 });
 
 for (const vendor of ["Grok", "Codex"] as const) {

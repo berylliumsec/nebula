@@ -1058,6 +1058,20 @@ def _unrestricted_harness_session(session: HarnessSession) -> bool:
     )
 
 
+def _claude_unrestricted_session(session: HarnessSession) -> bool:
+    """Whether a Claude session skips per-tool approval and the SDK sandbox.
+
+    Core-planned turns keep the managed callback, which validates each native
+    call against the saved plan.
+    """
+
+    return (
+        _unrestricted_harness_session(session)
+        and session.metadata.get("planning_enforced") is not True
+        and not isinstance(session.metadata.get("planning_target_turn_id"), str)
+    )
+
+
 def _without_native_shell(
     capabilities: HarnessNativeCapabilities,
 ) -> HarnessNativeCapabilities:
@@ -9430,6 +9444,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             request.session, request.profile
         )
         native_tools = _claude_native_tools(native_capabilities)
+        unrestricted = _claude_unrestricted_session(request.session)
         ask_user = request.ask_user_handler
         if ask_user is not None:
             # Offered so Core sees the question; it is always answered by Core
@@ -9530,6 +9545,11 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             elif server:
                 decision = "ask"
                 reason = "Nebula approval is required for this configured MCP tool"
+            elif unrestricted and _claude_native_tool_enabled(
+                native_capabilities, tool_name
+            ):
+                decision = "allow"
+                reason = "Operator-enabled unrestricted Host access"
             elif _claude_native_tool_enabled(native_capabilities, tool_name):
                 decision = "ask"
                 reason = (
@@ -9577,8 +9597,10 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             ),
             "setting_sources": ["user"] if native_capabilities.skills else [],
             "skills": "all" if native_capabilities.skills else [],
-            "permission_mode": "default",
-            "can_use_tool": can_use_tool,
+            "permission_mode": "bypassPermissions" if unrestricted else "default",
+            # The SDK never consults can_use_tool in bypass mode; the PreToolUse
+            # hook still answers AskUserQuestion and denies disabled tools.
+            "can_use_tool": None if unrestricted else can_use_tool,
             "hooks": hooks,
             "env": _scrubbed_claude_environment(profile=request.profile),
             "include_partial_messages": True,
@@ -9591,7 +9613,11 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                 native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
             ),
             "disallowed_tools": sorted(_CLAUDE_NATIVE_TOOLS - set(native_tools)),
-            "sandbox": {
+            # Unrestricted Host sessions run like the operator's own shell, as
+            # Codex's danger-full-access does; every other session is sandboxed.
+            "sandbox": {"enabled": False}
+            if unrestricted
+            else {
                 "enabled": True,
                 "autoAllowBashIfSandboxed": False,
                 "allowUnsandboxedCommands": False,
@@ -14569,11 +14595,9 @@ class HarnessRuntimeService:
             raise PlanningBlocked(plan.reason or "task planning is blocked")
         if plan.phase != "execution":
             profile = await self.store.get(HarnessProfile, session.harness_profile_id)
-            managed_claude = (
-                profile.kind == HarnessKind.CLAUDE_AGENT_SDK
-                and profile.permission_mode == "managed"
-                and session.metadata.get("harness_permission_mode") != "unrestricted"
-            )
+            # Core-planned Claude turns keep the managed per-tool callback even
+            # on an unrestricted profile (see _claude_unrestricted_session).
+            managed_claude = profile.kind == HarnessKind.CLAUDE_AGENT_SDK
             contained_codex = (
                 profile.kind == HarnessKind.CODEX_APP_SERVER
                 and profile.capabilities.mcp

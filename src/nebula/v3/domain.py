@@ -2729,8 +2729,11 @@ class HarnessProfile(Entity):
         if self.permission_mode == "unrestricted" and self.kind not in {
             HarnessKind.CODEX_APP_SERVER,
             HarnessKind.GROK_ACP,
+            HarnessKind.CLAUDE_AGENT_SDK,
         }:
-            raise ValueError("unrestricted permission mode requires Codex or Grok")
+            raise ValueError(
+                "unrestricted permission mode requires Codex, Grok or Claude"
+            )
         if self.home_directory and (
             self.connection_mode != HarnessConnectionMode.SPAWN
             or self.kind

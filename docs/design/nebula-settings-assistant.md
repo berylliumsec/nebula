@@ -233,9 +233,14 @@ managed Claude Agent SDK process; the CLI path is optional because the SDK
 bundles one. It signs in with the host's existing `claude` login (`/login`) or
 an API key credential. An optional account folder runs that profile's Claude
 CLI with `CLAUDE_CONFIG_DIR` set to the folder; sign it in on the host with
-`CLAUDE_CONFIG_DIR=<folder> claude login`. Claude profiles use
-managed approvals only and do not offer browser, computer-use or image
-generation capabilities.
+`CLAUDE_CONFIG_DIR=<folder> claude login`. Claude profiles do not offer
+browser, computer-use or image generation capabilities. A Claude profile may use
+**Unrestricted host access** like Codex and Grok: in a Host-mode session of a
+project with authorization Allow all (not Butler), Claude starts in
+`bypassPermissions` with its SDK sandbox off, so native tools run without a
+per-tool Core approval. Core-planned turns and analysis sessions keep managed
+approvals. Like Codex and Grok, an unrestricted Claude profile refuses a Host
+session in a project without Allow all instead of silently running managed. Unrestricted permission mode remains operator-owned.
 
 Follow-up preferences use `body.expected_revision` from the current project
 settings. Butler may preserve an existing cloud confirmation for the same backend
