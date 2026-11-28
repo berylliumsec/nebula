@@ -849,7 +849,9 @@ class ButlerMemoryService:
         if (
             decision.engagement_id != project_id
             or decision.status != "reviewed"
-            or decision.choice not in {"steer", "escalate"}
+            # An escalation is not guidance to repeat: saving it as a precedent
+            # teaches later checks to hand work back instead of acting.
+            or decision.choice != "steer"
             or decision.source_verification_state != "core_observed"
             or decision.source_event_type not in {"goal.blocked", "goal.plan_changed"}
         ):

@@ -262,9 +262,11 @@ async def test_pivotal_capture_is_selective_scoped_and_replay_safe(tmp_path):
 
     assert (await memory.capture_pivotal_project_events(store, project.id)) == 3
     own = (await memory.list(project.id)).items
-    assert {item.scope for item in own} == {"project_lesson", "global_lesson"}
-    assert {item.source_ref for item in own} == {decision.id, action.id}
-    assert any(_USEFUL_LESSON in item.content for item in own)
+    # An escalation is never saved as a precedent, however useful its wording.
+    assert {item.scope for item in own} == {"global_lesson"}
+    assert {item.source_ref for item in own} == {action.id}
+    assert decision.id not in {item.source_ref for item in own}
+    assert not any(_USEFUL_LESSON in item.content for item in own)
     assert all("sk-test-secret" not in item.content for item in own)
     assert all(
         "machine condition was not independently verified" in item.content
@@ -282,7 +284,7 @@ async def test_pivotal_capture_is_selective_scoped_and_replay_safe(tmp_path):
     assert (await memory.capture_pivotal_project_events(store, project.id)) == 0
     restarted = ButlerMemoryService(tmp_path / "butler-memory.sqlite3")
     assert (await restarted.capture_pivotal_project_events(store, project.id)) == 0
-    assert len((await restarted.list(project.id)).items) == 2
+    assert len((await restarted.list(project.id)).items) == 1
 
 
 async def test_pivotal_capture_does_not_store_unverified_or_routine_review(tmp_path):
@@ -304,7 +306,9 @@ async def test_pivotal_capture_does_not_store_unverified_or_routine_review(tmp_p
 
 async def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path):
     store, memory, project, other, session, goal = await _setup(tmp_path)
-    first, _ = await _decision_event(store, project, session, goal)
+    first, first_source = await _decision_event(
+        store, project, session, goal, choice="steer", event_key="first"
+    )
     near, near_source = await _decision_event(
         store,
         project,
@@ -339,13 +343,14 @@ async def test_review_lesson_keeps_distinct_cited_process_insights_only(tmp_path
             "before retrying because the result may need comparison."
         ),
     )
+    (await _dispatched_status_event(store, project, session, goal, first, first_source))
     (await _dispatched_status_event(store, project, session, goal, near, near_source))
     (
         await _dispatched_status_event(
             store, project, session, goal, distinct, distinct_source
         )
     )
-    assert (await memory.capture_pivotal_project_events(store, project.id)) == 6
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 7
     own = (await memory.list(project.id)).items
     assert {item.source_ref for item in own} == {first.id, distinct.id}
     assert near.id not in {item.source_ref for item in own}
@@ -457,7 +462,10 @@ async def test_oversight_worker_captures_committed_pivotal_events_automatically(
     tmp_path,
 ):
     store, memory, project, _, session, goal = await _setup(tmp_path)
-    decision, _ = await _decision_event(store, project, session, goal)
+    decision, source = await _decision_event(
+        store, project, session, goal, choice="steer"
+    )
+    (await _dispatched_status_event(store, project, session, goal, decision, source))
     state = await store.get(ButlerProjectState, project_state_id(project.id))
     (
         await store.update(
@@ -480,6 +488,13 @@ async def test_oversight_worker_captures_committed_pivotal_events_automatically(
         item.source_ref == decision.id
         for item in (await memory.list("not-selected")).items
     )
+
+
+async def test_escalation_is_never_saved_as_a_lesson(tmp_path):
+    store, memory, project, _, session, goal = await _setup(tmp_path)
+    (await _decision_event(store, project, session, goal, choice="escalate"))
+    assert (await memory.capture_pivotal_project_events(store, project.id)) == 1
+    assert (await memory.list(project.id)).items == []
 
 
 pytestmark = pytest.mark.anyio
