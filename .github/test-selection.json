@@ -1,23 +1,21 @@
 {
-  "change_digest": "2c9b1394ae999955b74b3e4544f330d89875ab296b1a5214f05b894db30c85f0",
-  "reviewed_by": "Claude: storage incidents raise immediate Butler signals",
-  "reason": "A storage incident that opens or worsens now also records a Core-written Butler incident and an immediate storage.incident_reported event in the source's project, which opens a Butler recovery case with storage-specific instructions; a healthy report resolves it. Selected the storage integration suite (ingest, dispatch, new Butler signal test), the Butler attention suite (recovery case capture) and the goal completion review suite (precedent query table).",
-  "exclusions": "Docs-only edit to docs/storage-integrations.md; the product knowledge index is generated at build. No UI changes. Full suites not run.",
+  "change_digest": "04bd822eee43873d54101ba51272e55adb478effd38652721b19bdab0aa6a1dd",
+  "reviewed_by": "Claude: core_api ROUTES reads the served kernel's route table",
+  "reason": "nebula.supervisor.core_api ROUTES scanned .py sources, which a frozen release does not ship, so live Butler saw only generic CRUD routes. The execution kernel now registers its finished app with butler_core_api, and ROUTES merges that live table with the source scan. Selected the unrestricted Butler suite, which has a frozen-release test built on create_app.",
+  "exclusions": "No UI changes. Full suites not run.",
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
   "expected_tests": {
-    "python": 29,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_storage_integrations.py",
-    "tests/v3/test_butler_attention.py",
-    "tests/v3/test_goal_completion_review.py"
+    "tests/v3/test_butler_unrestricted.py"
   ],
   "frontend": [],
   "native": [],

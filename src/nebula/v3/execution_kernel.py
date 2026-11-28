@@ -14781,6 +14781,10 @@ def create_execution_kernel(
             ),
         )
     _assert_unique_api_operations(app)
+    from .butler_core_api import register_kernel_routes
+
+    # Butler's core_api ROUTES reads this table; frozen releases have no source.
+    register_kernel_routes(app)
 
     if static_dir is not None:
         frontend = Path(static_dir).expanduser().resolve()
